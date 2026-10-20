@@ -9,7 +9,7 @@ You are the **lead** working through the backlog of ybenzine/ineedtofocus. Follo
 
 ## Collect
 1. Open issues: `gh issue list --state open --limit 500 --json number,title,labels,milestone` (REST fallback: `gh api --paginate "repos/ybenzine/ineedtofocus/issues?state=open&per_page=100"`, then drop entries that have a `pull_request` key — those are PRs).
-2. **Closed but not accepted:** closed issues in scope, closed as completed, without the `accepted` label (`gh issue list --state closed --json number,labels,milestone,stateReason`). They still need acceptance.
+2. **Closed but not accepted:** closed issues in scope, closed as completed, without the `accepted` label: `gh issue list --state closed --limit 500 --json number,labels,milestone,stateReason` (REST fallback: `gh api --paginate "repos/ybenzine/ineedtofocus/issues?state=closed&per_page=100"`, drop entries with a `pull_request` key, keep `state_reason == "completed"`). They still need acceptance.
 3. **Needs triage:** open issues with no milestone or no `agent:*`/`owner:human` label. Ask the **product-manager** subagent to triage them before continuing.
 4. Order everything by milestone, then `P0` before `P1`, then issue number.
 
@@ -21,7 +21,7 @@ You are the **lead** working through the backlog of ybenzine/ineedtofocus. Follo
 2. Run the full `/work-issue` procedure on it (`.claude/commands/work-issue.md`). It resumes an existing PR instead of starting over, and handles closed-but-not-accepted issues by going straight to acceptance.
 3. If it hits a human gate, make sure the issue has the `⛔ Needs Yacine:` comment and the `needs-yacine` label, then **move on** to the next runnable issue — don't wait.
 4. Repeat. Each issue is attempted **at most once per run**: an issue that ends this run still open, unaccepted or labeled goes into the report, not back into the queue. Stop when no runnable issue is left.
-5. When every user-facing issue of a milestone is `accepted` on dev: if the prod deploy workflow exists (#29), ask Yacine to approve a prod deploy (human gate, `needs-yacine` on the milestone's last issue); before #29, just note "ready for prod" in the report. Then continue with the next milestone.
+5. When every user-facing issue of a milestone is `accepted` on dev: if the prod deploy workflow exists (#29), ask Yacine **once** to approve a prod deploy (human gate, `needs-yacine` on the milestone's last issue) — skip if a prod-deploy ask for that milestone already exists, answered or not; before #29, just note "ready for prod" in the report. Then continue with the next milestone.
 
 Independent issues owned by different agents may run in parallel; keep dependent ones in order.
 

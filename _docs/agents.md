@@ -61,7 +61,7 @@ sequenceDiagram
 | On-call → Backend/Frontend | Regression found in production that a rollback didn't settle | Incident issue + fix PR or follow-up issue |
 | Anyone → Product manager | A missing, wrong or ambiguous acceptance criterion | Comment on the issue; the product manager decides (within scope) or escalates, and updates the doc and the issue |
 | QA → Product manager | Feature verified on dev | `🧪 verified` comment; then the product manager runs final acceptance |
-| Anyone → Yacine | A step only a human can do | `⛔ Needs Yacine:` comment with exact instructions |
+| Anyone → Yacine | A human gate (see process.md) | `⛔ Needs Yacine:` comment with exact instructions + `needs-yacine` label; Yacine answers and removes the label |
 
 **Contract-first rule:** when a frontend issue depends on an endpoint, the backend PR that defines it merges first. If the frontend must start earlier, the backend agent posts the planned schema on the frontend issue and both build against that.
 
@@ -89,7 +89,7 @@ A main Claude Code session acts as the **lead**. The `/work-issue <n>` command (
 4. The lead runs the **reviewer** subagent on the PR; on `Verdict: Request changes` the findings go back to the author, until `Verdict: Approve`.
 5. With CI green, the lead re-invokes the author to squash-merge, tick the issue's checkboxes and post the done comment.
 6. For `type:feature` issues, the lead invokes **QA** to verify the feature on dev.
-7. The lead invokes the **product manager** for final acceptance: `accepted` label, or the issue is reopened with gaps.
+7. The lead invokes the **product manager** for final acceptance (or **QA** for the product manager's own issues): `accepted` label, or the issue is reopened with gaps.
 
 `/work-backlog [milestone]` ([`.claude/commands/work-backlog.md`](../.claude/commands/work-backlog.md)) runs this loop over every open issue in milestone and priority order. When an issue hits a [human gate](process.md#human-gates), the lead posts the ask and moves on to the next runnable issue, so the team only stops when nothing runnable is left.
 
@@ -107,6 +107,6 @@ Every step leaves a trace on the issue and the board, so the board is the record
 | Verified | `🧪 qa agent — verified on dev` comment, or a `bug` issue | `gh issue comment` / `gh issue create` (QA subagent) |
 | Accepted | `accepted` label + `🟢 product manager agent — accepted` comment, or issue reopened with `🔴 not accepted` | `gh issue edit --add-label accepted` (product manager subagent) |
 | Done | Issue checkboxes ticked; `✅ <agent> agent — done` comment; card → Done | `gh issue edit`; board workflow on close |
-| Blocked | `⛔ Blocked by #<n>` / `⛔ Needs Yacine:` comment | `gh issue comment` |
+| Blocked | `⛔ Blocked by #<n>` comment, or `⛔ Needs Yacine:` comment + `needs-yacine` label | `gh issue comment`; `gh issue edit --add-label needs-yacine` |
 
 Board workflows (project settings) also move cards automatically: added → Todo, closed or merged → Done. The script needs a `gh` token with the `project` scope: `gh auth refresh -s project`.

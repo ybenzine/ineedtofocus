@@ -26,7 +26,7 @@ Columns (the project's Status field): **Todo → In progress → In review → D
 | In review | PR open, waiting for the reviewer agent | Agent when the PR is opened |
 | Done | PR merged, issue closed | Board workflow on close/merge |
 
-After Done, the product manager's final acceptance adds the **`accepted`** label (or reopens the issue). An issue is finished only when it is Done **and** `accepted`.
+After Done, final acceptance — by the product manager, or by QA for issues the product manager owns — adds the **`accepted`** label (or reopens the issue). An issue is finished only when it is Done **and** `accepted`.
 
 Milestones (`M1`–`M5`) are the schedule; work the current milestone first, `P0` before `P1`. `post-mvp` issues are not touched before submission.
 
@@ -71,7 +71,7 @@ Milestones (`M1`–`M5`) are the schedule; work the current milestone first, `P0
 - For `type:feature` issues the QA agent runs the feature's flow and comments `🧪 qa agent — verified on dev` (or `verified locally`), or files a `bug` issue.
 
 ### 7. Accept
-- The **product manager agent** checks the delivered work against the running app and the issue's ACs, then either adds the `accepted` label with a `🟢 accepted` comment, or reopens the issue (`🔴 not accepted` with numbered gaps) or files a follow-up issue. See [.claude/agents/product-manager.md](../.claude/agents/product-manager.md).
+- The **product manager agent** (or the **QA agent** for issues the product manager owns, so nobody accepts their own work) checks the delivered work against the running app and the issue's ACs, then either adds the `accepted` label with a `🟢 accepted` comment, or reopens the issue (`🔴 not accepted` with numbered gaps) or files a follow-up issue. See [.claude/agents/product-manager.md](../.claude/agents/product-manager.md).
 
 ### 8. Release to prod
 - Prod is a manual workflow run that **Yacine approves** (a human gate). The lead asks for it when a milestone's user-facing work is accepted on dev. See [deployment.md](deployment.md).
@@ -89,7 +89,7 @@ Agents stop and ask Yacine **only** for these: they comment `⛔ Needs Yacine: <
 | **Irreversible actions** | Deleting data, servers or repos; force-pushing; rewriting history; destroying volumes |
 | **Repeated failure** | The same PR fails review three rounds in a row, or CI is still red after three fix attempts — stop and report instead of looping |
 
-**Why agents can merge workflow changes safely:** prod credentials (the prod SSH deploy key and prod secrets) exist **only** as secrets of the GitHub `production` environment, which requires Yacine's approval for every job that uses it. The dev deploy key is restricted on the server (SSH forced command) to deploying and rolling back dev, and the rollback key to rolling back to a recorded known-good tag. A workflow edit merged by an agent therefore can't reach prod without that approval. Set up in #28–#30.
+**Why agents can merge workflow changes safely:** prod credentials (the prod SSH deploy key and prod secrets) exist **only** as secrets of the GitHub `production` environment, which requires Yacine's approval for every job that uses it. The dev deploy key lives in a `dev` environment and is restricted on the server (SSH forced command) to deploying and rolling back dev. The prod **rollback** key lives in a separate `rollback` environment (no reviewer, so on-call can use it at any hour; limited to the `main` branch) and is restricted by forced command to restoring a recorded known-good tag — it can't deploy anything new. No credential is stored at repo level. A workflow edit merged by an agent therefore can't put new code on prod without Yacine's approval. Set up in #28–#30.
 
 ## Definition of done
 
@@ -98,7 +98,7 @@ An issue is done when **all** of these hold:
 - [ ] Every acceptance criterion is met and checked off in the issue
 - [ ] Tests added or updated; `make test` passes locally and in CI (docs-only changes: N/A, say so)
 - [ ] PR says `Closes #<n>` and the reviewer agent's verdict is **Approve**
-- [ ] Product manager accepted it (`accepted` label)
+- [ ] Product manager accepted it (`accepted` label; QA accepts the product manager's own issues)
 - [ ] Docs updated if behavior, setup or commands changed
 - [ ] No secrets or customer data added to code, logs or telemetry
 

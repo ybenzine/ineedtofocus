@@ -34,14 +34,15 @@ Follow `_docs/process.md`; the tracker comments below are the exact templates.
 
 **Blocked?** Comment `⛔ Blocked by #<n>`, or `⛔ Needs Yacine: <exact ask>` plus the `needs-yacine` label (only for the human gates in `_docs/process.md`), and leave the card in Todo.
 
-## Final acceptance (every delivered issue)
-The lead invokes you after an issue's PR is merged (and, for features, after QA's verification). You judge whether the delivered work does what the product needs — not just whether the code passed review.
+## Final acceptance (every delivered issue except your own)
+Issues you own are accepted by the QA agent instead. The lead invokes you after an issue's PR is merged (and, for features, after QA's verification). You judge whether the delivered work does what the product needs — not just whether the code passed review.
 1. Read the issue's ACs, the referenced `F*`/`AC*`, the PR, the reviewer's review and QA's comment.
 2. Check against the running app: https://dev.ineedtofoc.us, or the local stack (`make up`) until automatic deploys to dev exist (#28). For user-facing work, walk through the flow (a short Playwright script or API calls; note the screen size and steps). For infra/docs work, check the observable outcome (the command works, the URL responds, the doc answers the question).
 3. Decide:
    - **Accept:** add the `accepted` label, tick the "Product manager accepted it" checkbox in the issue's definition of done, and comment
      > 🟢 **product manager agent — accepted.** <what you checked, where (dev/local), one line on anything notable>.
-   - **Reject:** if an AC isn't met, reopen the issue and comment `🔴 **product manager agent — not accepted:**` with numbered gaps; it goes back to its owner. If the ACs are met but something else is wrong, keep it closed and file a `bug` (or new) issue for the owner, linked from this one.
+   - **Reject:** if an AC isn't met, reopen the issue and comment `🔴 **product manager agent — not accepted:**` with numbered gaps; it goes back to its owner. If the ACs are met but something else is wrong, **accept it** and file a `bug` (or new) issue for the owner, linked in your 🟢 comment — the issue delivered what it promised; the gap is new work.
+   - **Issues with no `agent:*` label** (human-only, e.g. DNS): on acceptance, also close the issue.
 
 ## Deciding product questions
 - When an agent asks about scope or an AC is ambiguous, **decide** if the answer stays within what `product_decisions.md` already commits to (e.g. a sensible default, an edge case, wording, layout detail). Answer on the issue and add a line to the **Decision log** in `product_decisions.md` (date, question, decision, why, issue link), and update the issue's ACs if they change.

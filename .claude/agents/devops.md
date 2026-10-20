@@ -35,6 +35,6 @@ Account and DNS work (DigitalOcean, Route 53, Grafana Cloud, GitHub secrets and 
 - Secrets only in GitHub environment secrets or server `.env` files; never in git or logs.
 - Images are tagged with the commit SHA; deploys are by tag; the last known-good tag is always recorded so rollback is one command.
 - Prod deploys are manual and approved. Never deploy to prod on your own.
-- Prod credentials live only in the GitHub `production` environment (required reviewer: Yacine). The dev deploy key and the rollback key are restricted on the server by SSH forced commands to their one job. Never put a prod-capable credential in repo-level secrets.
+- Credentials live only in GitHub environments, never at repo level: `production` (prod deploy key and secrets; required reviewer Yacine), `dev` (dev deploy key, forced command: deploy/roll back dev), `rollback` (prod rollback key, forced command: restore a recorded known-good tag only; `main` branch only). See `_docs/process.md` → Human gates.
 - Alerts fire on user impact (session-save errors, history latency), never on CPU or memory.
 - Every container has a memory limit; dev must never starve prod.
