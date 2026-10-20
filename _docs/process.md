@@ -50,18 +50,20 @@ Milestones (`M1`–`M5`) are the schedule; work the current milestone first, `P0
   > 🔵 **\<agent\> agent — PR open:** #\<pr\>. All ACs addressed; `make test` green.
 
 ### 4. Review
-- The **reviewer agent** reads the issue and the PR and posts a review with one line per AC: ✅ met / ❌ not met (why) / ➖ not applicable (why), plus the definition-of-done checks.
-- Verdict: **Approve** or **Request changes**. On changes, the author fixes and re-requests review; loop until approved.
-- CI must be green (enforced by branch protection once #5 lands).
+- The **reviewer agent** reads the issue and the PR and posts a review with one line per AC: ✅ met / ❌ not met (why) / ➖ not applicable (why), plus the definition-of-done checks and numbered findings.
+- The review ends with `**Verdict: Approve**` or `**Verdict: Request changes**`. **That line is the merge signal.** All agents act through one GitHub account, which also authors the PRs, and GitHub doesn't let an author approve their own PR — so reviews are posted as comments and the verdict line decides.
+- On Request changes, the author fixes each numbered point and the reviewer reviews again; loop until Approve.
+- CI must be green. Branch protection (#5) requires passing status checks, not an approving review, for the same reason.
 
 ### 5. Merge
-- After approval and green CI, the authoring agent **squash-merges**. Exceptions that need Yacine's approval first: PRs that change `.github/workflows/`, `infra/` used in production, or anything deployed to prod.
+- After `**Verdict: Approve**` and green CI, the authoring agent **squash-merges**. Exceptions — **Yacine merges these himself** after reading the review: PRs that change `.github/workflows/`, change production `infra/`, deploy anything to prod, or fix a production incident.
 - On merge: the issue closes (`Closes #n`), the board moves it to Done, the branch is auto-deleted.
 - The author ticks the satisfied checkboxes in the issue body and posts the closing comment:
 
   > ✅ **\<agent\> agent — done** in #\<pr\>. \<one line on anything notable or follow-ups (#n)\>.
 
-### 6. Deploy
+### 6. Verify and deploy
+- For `type:feature` issues the QA agent verifies the feature on dev after merge and comments the result (`🧪 qa agent — verified on dev`) or files a `bug` issue.
 - Merge to `main` deploys to **dev** automatically. **Prod** is a manual, approved workflow run. See [deployment.md](deployment.md).
 
 ## Definition of done
@@ -70,7 +72,7 @@ An issue is done when **all** of these hold:
 
 - [ ] Every acceptance criterion is met and checked off in the issue
 - [ ] Tests added or updated; `make test` passes locally and in CI (docs-only changes: N/A, say so)
-- [ ] PR says `Closes #<n>` and the reviewer agent approved it against the criteria
+- [ ] PR says `Closes #<n>` and the reviewer agent's verdict is **Approve**
 - [ ] Docs updated if behavior, setup or commands changed
 - [ ] No secrets or customer data added to code, logs or telemetry
 

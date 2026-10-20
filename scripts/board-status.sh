@@ -9,6 +9,8 @@
 # first if it isn't there yet.
 #
 # Needs: gh with the `project` scope (gh auth refresh -s project) and jq.
+# All `gh project` commands use GitHub's GraphQL API, so this only works
+# where GraphQL is reachable (e.g. a local gh login, not a proxied session).
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
@@ -17,6 +19,10 @@ if [[ $# -ne 2 ]]; then
 fi
 
 number="$1"
+if ! [[ "$number" =~ ^[0-9]+$ ]]; then
+  echo "issue or PR number must be numeric, got: $number" >&2
+  exit 2
+fi
 status="$2"
 owner="${BOARD_OWNER:-ybenzine}"
 project="${BOARD_NUMBER:-2}"

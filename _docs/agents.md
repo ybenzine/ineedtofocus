@@ -13,10 +13,10 @@ Ownership is visible on the board: every issue carries the `agent:*` label of th
 | **Frontend** | `agent:frontend` | React app: timers, audio, offline sync, history, settings, installable app | product_decisions, architecture, testing | `frontend/` code + Vitest tests, Playwright tests for its screens | Change the API contract unilaterally |
 | **QA** | `agent:qa` | Cross-cutting test strategy, end-to-end journeys, accessibility, final submission check | product_decisions, testing | Playwright suites, test fixtures, bug issues with repro steps | Fix product code (files a bug issue instead) |
 | **DevOps** | `agent:devops` | Docker/Compose, CI/CD, Droplet, Caddy, deploy and rollback, Grafana wiring and alerts | tech_stack, deployment, observability | `infra/`, `.github/workflows/`, `Makefile`, deploy scripts | Deploy to prod without Yacine's approval |
-| **Reviewer** | — (reviews every PR) | Quality gate: ACs, definition of done, conventions, security and telemetry privacy | the PR's issue, product_decisions, process | A PR review with a per-AC verdict | Write or push code; approve its own work |
-| **On-call** | `agent:oncall` | Responding to production alerts | runbooks, observability, deployment | Incident issue, rollback run or fix PR, incident summary | Push to `main`; deploy anything except a known-good tag |
+| **Reviewer** | — (reviews every PR) | Quality gate: ACs, definition of done, conventions, security and telemetry privacy | the PR's issue, product_decisions, process | A PR review with a per-AC table and a `Verdict:` line | Edit, commit, push or merge; review work it wrote |
+| **On-call** | `agent:oncall` | Responding to production alerts | runbooks, AGENTS.md, process, observability, deployment | Incident issue, rollback run or fix PR (`oncall/<n>-<slug>`), incident summary | Push to `main`; merge; deploy anything except a known-good tag |
 
-**Yacine (product owner):** agrees scope changes, does `owner:human` tasks (DigitalOcean, Route 53, Grafana Cloud, secrets), approves production deploys and infra PRs.
+**Yacine (product owner):** agrees scope changes, does `owner:human` tasks (DigitalOcean, Route 53, Grafana Cloud, secrets), approves production deploys, and merges workflow, production-infra, prod-deploy and incident-fix PRs himself.
 
 ## How a piece of work flows through the team
 
@@ -74,7 +74,7 @@ Each agent is a Claude Code subagent: a role prompt, the tools it may use, and t
 | Frontend | [`.claude/agents/frontend.md`](../.claude/agents/frontend.md) | Read, Write, Edit, Glob, Grep, Bash |
 | QA | [`.claude/agents/qa.md`](../.claude/agents/qa.md) | Read, Write, Edit, Glob, Grep, Bash |
 | DevOps | [`.claude/agents/devops.md`](../.claude/agents/devops.md) | Read, Write, Edit, Glob, Grep, Bash |
-| Reviewer | [`.claude/agents/reviewer.md`](../.claude/agents/reviewer.md) | Read, Glob, Grep, Bash — **no Write/Edit**, so it cannot change the code it reviews |
+| Reviewer | [`.claude/agents/reviewer.md`](../.claude/agents/reviewer.md) | Read, Glob, Grep, Bash — no Write/Edit tools; Bash is for running tests and `gh`, and its role forbids editing, committing, pushing or merging |
 | On-call | [`.claude/agents/oncall.md`](../.claude/agents/oncall.md) | Read, Write, Edit, Glob, Grep, Bash — run headless by the alert workflow (#35) |
 
 ## Orchestration
@@ -83,9 +83,10 @@ A main Claude Code session acts as the **lead**. The `/work-issue <n>` command (
 
 1. Read the issue; check its dependencies and whether it needs Yacine (`owner:human`).
 2. Delegate it to the subagent named by its `agent:*` label.
-3. That subagent posts the start comment, moves the card, branches, implements, tests and opens the PR.
-4. The lead runs the **reviewer** subagent on the PR; changes go back to the author until the reviewer approves.
-5. Merge (Yacine approves first for workflow and production-infra PRs); the author ticks the issue's checkboxes and posts the done comment.
+3. That subagent posts the start comment, moves the card, branches, implements, tests, opens the PR, posts the PR-open comment, and stops.
+4. The lead runs the **reviewer** subagent on the PR; on `Verdict: Request changes` the findings go back to the author, until `Verdict: Approve`.
+5. Workflow, production-infra, prod-deploy and incident-fix PRs: Yacine merges. Otherwise the lead re-invokes the author to squash-merge, tick the issue's checkboxes and post the done comment.
+6. For `type:feature` issues, the lead invokes **QA** to verify the feature on dev.
 
 Independent issues (e.g. a backend API and an unrelated DevOps task) can run in parallel; dependent ones run in order.
 
@@ -97,7 +98,8 @@ Every step leaves a trace on the issue and the board, so the board is the record
 |---|---|---|
 | Start | `🟡 <agent> agent — started` comment; card → In progress | `gh issue comment`; `scripts/board-status.sh <n> "In progress"` |
 | PR opened | `🔵 <agent> agent — PR open: #<pr>` comment; card → In review | `gh pr create`; `scripts/board-status.sh <n> "In review"` |
-| Review | PR review with a per-AC verdict | `gh pr review` (reviewer subagent) |
+| Review | PR review with a per-AC table ending in `Verdict: Approve` / `Verdict: Request changes` | `gh pr review --comment` (reviewer subagent) |
+| Verified | `🧪 qa agent — verified on dev` comment, or a `bug` issue | `gh issue comment` / `gh issue create` (QA subagent) |
 | Done | Issue checkboxes ticked; `✅ <agent> agent — done` comment; card → Done | `gh issue edit`; board workflow on close |
 | Blocked | `⛔ Blocked by #<n>` / `⛔ Needs Yacine:` comment | `gh issue comment` |
 

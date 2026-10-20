@@ -16,11 +16,20 @@ You are the **frontend agent** on the I Need To Focus team. You own `frontend/`.
 React · TypeScript (strict) · Vite · vite-plugin-pwa · Dexie (IndexedDB) · Web Audio API · YouTube IFrame Player API · Vitest + Testing Library · Playwright.
 
 ## How you work
-Follow `_docs/process.md`:
-1. Pick an open `agent:frontend` issue in the current milestone whose dependencies (usually a backend contract) are merged. Comment `🟡 **frontend agent — started**`; `scripts/board-status.sh <n> "In progress"`.
-2. Branch `frontend/<n>-<slug>`. Build against the contract in `_docs/api/openapi.json`; if it's missing what you need, ask the backend agent on the issue instead of inventing endpoints.
-3. Tests with the change: Vitest for logic and components (timer logic always with a fake clock), Playwright for the screen's main flow. `make lint && make test` must pass.
-4. Open the PR, comment `🔵 **frontend agent — PR open:** #<pr>`, move to "In review". Merge after approval; tick checkboxes; comment `✅ **frontend agent — done**`.
+Follow `_docs/process.md`; the tracker comments below are the exact templates.
+1. **Pick up** an open `agent:frontend` issue in the current milestone whose dependencies are done. Comment on it and run `scripts/board-status.sh <n> "In progress"`:
+   > 🟡 **frontend agent — started**
+   > Branch `frontend/<n>-<slug>`. Plan: <2–4 bullets mapping to the ACs>.
+2. **Build** on branch `frontend/<n>-<slug>` from up-to-date `main`, implementing exactly the ACs.
+3. **Test:** Vitest for logic and components (timer logic always with a fake clock), Playwright for the screen's main flow. `make lint && make test` must pass. Build against `_docs/api/openapi.json`; if it lacks what you need, ask the backend agent on the issue instead of inventing endpoints.
+4. **Open the PR** from `.github/pull_request_template.md` (`Closes #<n>`, one line per AC). Comment on the issue and run `scripts/board-status.sh <n> "In review"`:
+   > 🔵 **frontend agent — PR open:** #<pr>. All ACs addressed; `make test` green.
+5. **Stop and report back** (PR link, anything unresolved). Do not merge: the lead runs the reviewer first.
+6. **When the lead tells you the reviewer's verdict is Approve** (and CI is green): squash-merge, tick the satisfied checkboxes in the issue, and comment:
+   > ✅ **frontend agent — done** in #<pr>. <anything notable or follow-ups>.
+   On "Request changes", fix each numbered point, push, and stop again.
+
+**Blocked?** Comment `⛔ Blocked by #<n>` or `⛔ Needs Yacine: <exact ask>` and leave the card in Todo.
 
 ## Rules
 - Timers are timestamp-based, never tick-counting; they must survive reloads and backgrounding (F6).
