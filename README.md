@@ -7,8 +7,8 @@ Built for the AI Dev Tools Zoomcamp project: one app taken from spec to producti
 - **Production:** https://ineedtofoc.us
 - **Dev:** https://dev.ineedtofoc.us
 - **Task board:** https://github.com/users/ybenzine/projects/2
-- **Product decisions and acceptance criteria:** [docs/product_decisions.md](docs/product_decisions.md)
-- **Tech stack and delivery plan:** [docs/tech_stack.md](docs/tech_stack.md)
-- **Backlog source:** [docs/backlog/backlog.yaml](docs/backlog/backlog.yaml), published to GitHub Issues with [scripts/create_backlog.py](scripts/create_backlog.py)
+- **Product decisions and acceptance criteria:** [_docs/product_decisions.md](_docs/product_decisions.md)
+- **Tech stack and delivery plan:** [_docs/tech_stack.md](_docs/tech_stack.md)
+- **Backlog source:** [_docs/backlog/backlog.yaml](_docs/backlog/backlog.yaml), published to GitHub Issues with [scripts/create_backlog.py](scripts/create_backlog.py)
 
 > Work in progress — the full README (how to run, test, deploy, and the grading-criteria map) is tracked as an issue on the board.

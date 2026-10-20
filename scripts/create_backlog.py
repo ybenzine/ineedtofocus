@@ -6,7 +6,7 @@ import json, subprocess, sys, yaml
 
 repo = sys.argv[1]
 dry = "--dry-run" in sys.argv
-data = yaml.safe_load(open(__import__("pathlib").Path(__file__).resolve().parent.parent / "docs/backlog/backlog.yaml"))
+data = yaml.safe_load(open(__import__("pathlib").Path(__file__).resolve().parent.parent / "_docs/backlog/backlog.yaml"))
 
 DOD = """## Definition of done
 - [ ] Every acceptance criterion above is met and checked off
