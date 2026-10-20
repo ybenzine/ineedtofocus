@@ -1,0 +1,493 @@
+labels:
+  - {name: "agent:spec", color: "5319e7", description: "Owned by the product/spec agent"}
+  - {name: "agent:backend", color: "1d76db", description: "Owned by the backend agent"}
+  - {name: "agent:frontend", color: "0e8a16", description: "Owned by the frontend agent"}
+  - {name: "agent:qa", color: "fbca04", description: "Owned by the QA/test agent"}
+  - {name: "agent:devops", color: "d93f0b", description: "Owned by the DevOps agent"}
+  - {name: "agent:oncall", color: "b60205", description: "Owned by / used by the on-call agent"}
+  - {name: "owner:human", color: "c5def5", description: "Needs Yacine (accounts, DNS, secrets)"}
+  - {name: "type:feature", color: "a2eeef", description: "User-facing functionality"}
+  - {name: "type:infra", color: "bfdadc", description: "Infrastructure, CI/CD, hosting"}
+  - {name: "type:docs", color: "0075ca", description: "Documentation and specs"}
+  - {name: "type:test", color: "f9d0c4", description: "Tests and test tooling"}
+  - {name: "type:observability", color: "d4c5f9", description: "Metrics, traces, logs, alerting"}
+  - {name: "type:incident", color: "e11d21", description: "Production incident handled by the on-call agent"}
+  - {name: "P0", color: "b60205", description: "Must have for submission"}
+  - {name: "P1", color: "ff9f1c", description: "Should have; first to cut if late"}
+  - {name: "post-mvp", color: "ededed", description: "After the course submission"}
+
+milestones:
+  - {key: M1, title: "M1 · Foundations", due_on: "2026-10-21T23:00:00Z", description: "Repo, agent team and docs, local stack, CI skeleton, schema."}
+  - {key: M2, title: "M2 · MVP app", due_on: "2026-10-23T23:00:00Z", description: "All MVP features from product_decisions.md §4, tested."}
+  - {key: M3, title: "M3 · Ship", due_on: "2026-10-24T23:00:00Z", description: "Droplet, DNS, CD to dev, manual prod deploy, rollback."}
+  - {key: M4, title: "M4 · Operate", due_on: "2026-10-25T23:00:00Z", description: "Observability, user-impact alerting, alert trigger, on-call agent."}
+  - {key: M5, title: "M5 · Submission", due_on: "2026-10-26T20:00:00Z", description: "README, demo evidence, final check against grading criteria. Hard deadline 23:00 UTC."}
+  - {key: PM, title: "Post-MVP", description: "Backlog after the course submission."}
+
+issues:
+  # ---------------- M1 Foundations ----------------
+  - title: "Scaffold the monorepo and Makefile"
+    milestone: M1
+    labels: [agent:devops, type:infra, P0]
+    context: |
+      Set up the repository layout every agent works in. Single-command entry points are a grading requirement.
+    ac:
+      - "Layout: `backend/`, `frontend/`, `infra/`, `docs/`, `.github/workflows/`, `.claude/agents/`"
+      - "`make up` starts the full local stack; `make test` runs every test suite; `make lint` runs all linters"
+      - "`.gitignore`, `.editorconfig`, license and pre-commit hooks (ruff, eslint/prettier) in place"
+      - "`.env.example` documents every environment variable; no secrets committed"
+    refs: ["docs/tech_stack.md §1"]
+
+  - title: "Write AGENTS.md and the modular docs it points to"
+    milestone: M1
+    labels: [agent:spec, type:docs, P0]
+    context: |
+      AGENTS.md is the entry point for every coding agent. It must stay short and point to modular docs instead of inlining everything.
+    ac:
+      - "`AGENTS.md` at the repo root: project summary, commands, conventions, and links to the docs below"
+      - "`docs/product_decisions.md` and `docs/tech_stack.md` committed (source of truth for scope and stack)"
+      - "`docs/process.md`: issue → branch → PR → review → merge workflow, definition of done, how agents update the tracker"
+      - "`docs/agents.md`: the agent team, each role's responsibilities, inputs/outputs and hand-offs"
+      - "`docs/architecture.md`, `docs/testing.md`, `docs/deployment.md`, `docs/observability.md` and `docs/runbooks/` exist (stubs allowed, filled by later issues)"
+    refs: ["docs/tech_stack.md §5"]
+
+  - title: "Define the agent team as Claude Code subagents"
+    milestone: M1
+    labels: [agent:spec, type:docs, P0]
+    context: |
+      The build team is a set of Claude Code subagents with clear ownership, matching the `agent:*` labels on this board.
+    ac:
+      - "`.claude/agents/` contains spec, backend, frontend, qa, devops and reviewer subagents, each with a role prompt, allowed tools and the docs it must read"
+      - "Each agent picks up issues by its `agent:*` label, comments on the issue when it starts and when it opens a PR, and moves the card on the board"
+      - "The reviewer agent checks every PR against the issue's acceptance criteria before merge"
+      - "`docs/agents.md` describes how the agents hand work to each other (e.g. backend publishes the API contract, frontend consumes it)"
+    refs: ["docs/tech_stack.md §5", "docs/agents.md"]
+
+  - title: "Local Docker Compose stack with a single command"
+    milestone: M1
+    labels: [agent:devops, type:infra, P0]
+    context: |
+      The whole system, including the database and the local observability stack, must start with one command.
+    ac:
+      - "`docker compose up` (wrapped by `make up`) starts app, Postgres and `grafana/otel-lgtm`"
+      - "Postgres data persists in a named volume across restarts"
+      - "App waits for a healthy database; health checks defined for app and db"
+      - "Grafana is reachable locally and receives traces, metrics and logs from the app"
+      - "README section explains how to run it"
+    refs: ["docs/tech_stack.md §1–2"]
+
+  - title: "CI workflow: lint, type-check and all tests on every PR"
+    milestone: M1
+    labels: [agent:devops, type:infra, P0]
+    context: |
+      CI must run the tests; this is the base of the CI/CD criterion.
+    ac:
+      - "GitHub Actions workflow runs on pull requests and pushes to `main`"
+      - "Jobs: lint + type-check, backend unit, backend integration (Postgres service), frontend unit, Playwright end-to-end against the Compose stack"
+      - "Branch protection on `main` requires CI to pass"
+      - "Test reports uploaded as workflow artifacts"
+    refs: ["docs/tech_stack.md §3"]
+
+  - title: "Database schema and migrations"
+    milestone: M1
+    labels: [agent:backend, type:feature, P0]
+    context: |
+      Data model for users, settings and focus sessions, managed with Alembic.
+    ac:
+      - "Tables: `users`, `user_settings`, `focus_sessions`, `youtube_recent_links`"
+      - "`focus_sessions` stores a client-generated UUID primary key, mode, tag, goal, started_at, ended_at, focus_seconds, paused_seconds, status, mode config (JSON), blocks_completed, archived_at"
+      - "Tag and status are constrained to the allowed values; goal ≤ 120 chars"
+      - "Indexes support history queries by user and start time"
+      - "Migrations run automatically on deploy and are backward-compatible"
+    refs: ["docs/product_decisions.md AC6.3, F7, F11"]
+
+  - title: "Backend skeleton: FastAPI app, health checks, JSON logging"
+    milestone: M1
+    labels: [agent:backend, type:feature, P0]
+    context: |
+      Base application every backend issue builds on.
+    ac:
+      - "FastAPI app with settings from environment variables"
+      - "`/healthz` (process up) and `/readyz` (database reachable) endpoints"
+      - "Consistent JSON error format; request validation errors return 422 with field details"
+      - "Structured JSON logs to stdout"
+      - "Serves the built frontend so app and API share one origin"
+    refs: ["docs/tech_stack.md §1"]
+
+  # ---------------- M2 MVP app ----------------
+  - title: "F1 · Accounts API: sign up, sign in, sign out"
+    milestone: M2
+    labels: [agent:backend, type:feature, P0]
+    context: |
+      Email + password accounts with a secure session cookie.
+    ac:
+      - "AC1.1 Sign up with email and password ≥ 8 chars; duplicate email rejected with a clear message"
+      - "AC1.2 Sign in and sign out; signed-out requests to data endpoints return 401"
+      - "AC1.3 Every query is scoped to the signed-in user (tested with two users)"
+      - "AC1.5 Passwords hashed with argon2; never logged or returned"
+      - "Session cookie is HTTP-only, Secure (in deployed envs), SameSite=Lax"
+      - "Basic rate limiting on sign-in attempts"
+    refs: ["docs/product_decisions.md F1"]
+
+  - title: "F1 · Accounts UI: sign up, sign in, sign out"
+    milestone: M2
+    labels: [agent:frontend, type:feature, P0]
+    ac:
+      - "Sign-up and sign-in screens with inline validation and server error messages"
+      - "Signed-out users are redirected to sign in; signed-in users land on the timer"
+      - "Sign out clears local user data from the device"
+      - "AC1.4 Signing in on a second device shows the same history and settings (covered by an e2e test)"
+    refs: ["docs/product_decisions.md F1"]
+
+  - title: "Sessions API: save, sync, edit, archive, restore, delete archived"
+    milestone: M2
+    labels: [agent:backend, type:feature, P0]
+    context: |
+      The critical write path of the key user journey. Saving must be idempotent so offline retries never duplicate sessions.
+    ac:
+      - "Save one session or a batch (sync) by client UUID; repeating a request never creates duplicates (AC13.4)"
+      - "Rejects sessions with < 1 minute of focus time (AC6.2) and invalid modes/tags/durations"
+      - "Edit tag and goal of non-archived sessions only (AC11.1); archived sessions are read-only (AC11.4)"
+      - "Archive, restore (AC11.5), list archived (AC11.3)"
+      - "Delete all archived sessions in one call that returns the count deleted (AC11.6); no endpoint deletes a non-archived session (AC11.7)"
+    refs: ["docs/product_decisions.md F6, F7, F11, F13"]
+
+  - title: "History API: totals, tag breakdown and chart buckets"
+    milestone: M2
+    labels: [agent:backend, type:feature, P0]
+    context: |
+      Powers every history view. Grouping happens in the user's time zone with their week-start setting.
+    ac:
+      - "Accepts view (day/week/month/all/custom), anchor date or start/end dates, time zone, and a list of tags (any-of filter)"
+      - "Returns total focus time, session count, per-tag totals, chart buckets (by day, or by month for all-time and ranges > ~2 months) and the session list, newest first"
+      - "AC10.5 Days follow the user's time zone; sessions crossing midnight count on their start day"
+      - "AC10.6 Week boundaries follow the user's week-start setting (default Sunday)"
+      - "AC10.7 Archived sessions are excluded"
+      - "Integration tests cover DST changes, midnight-crossing sessions and both week starts"
+    refs: ["docs/product_decisions.md F10"]
+
+  - title: "Settings API and recent YouTube links"
+    milestone: M2
+    labels: [agent:backend, type:feature, P0]
+    ac:
+      - "Get/update settings: week start, alert volume, background volume, keep-screen-awake default, default reminder interval, last Pomodoro config, last tag (AC12.1–12.5)"
+      - "Store and return the 5 most recent YouTube links per user (AC8.6)"
+      - "Defaults applied for new users"
+    refs: ["docs/product_decisions.md F8, F12"]
+
+  - title: "Timer engine: countdown, Pomodoro and unlimited state machine"
+    milestone: M2
+    labels: [agent:frontend, type:feature, P0]
+    context: |
+      Pure, unit-tested timer logic based on timestamps (not ticking counters) so time stays correct after the app is backgrounded or reloaded.
+    ac:
+      - "Countdown 1–240 whole minutes (AC2.1–2.5)"
+      - "Pomodoro with defaults 25/5/4, ranges focus 5–90, break 1–30, blocks 1–8, optional long break 5–60 after every 4th block, no break after the last block, skip break (AC3.1–3.7)"
+      - "Unlimited count-up with reminders Off/15/30/45/60/90/120 based on focus time, auto-stop at 12 h (AC4.1–4.5)"
+      - "Pause/resume everywhere; paused time excluded"
+      - "Only one active session (AC6.1); < 1 min sessions discarded with a notice (AC6.2)"
+      - "Active session persisted on the device and restored after reload/reopen (AC6.4); countdown/Pomodoro that ended while closed recorded as Completed at the scheduled end (AC6.5)"
+      - "Unit tests with a fake clock cover every rule above"
+    refs: ["docs/product_decisions.md F2, F3, F4, F6"]
+
+  - title: "Session setup screen: mode, settings, tag and goal"
+    milestone: M2
+    labels: [agent:frontend, type:feature, P0]
+    ac:
+      - "Pick Countdown, Pomodoro or Unlimited with their settings and range validation"
+      - "Pick one of Work, Study, Nap, Read, Meditation, Exercise; defaults to last used (AC7.1–7.2)"
+      - "Optional goal up to 120 chars (AC7.3)"
+      - "Pick background audio: None, Rain or YouTube (AC8.1)"
+      - "Last-used Pomodoro config and tag are remembered (AC12.5)"
+    refs: ["docs/product_decisions.md F2–F4, F7, F8"]
+
+  - title: "Full-screen timer screen"
+    milestone: M2
+    labels: [agent:frontend, type:feature, P0]
+    ac:
+      - "AC9.1 Dark, distraction-free view: time, mode/phase, Pomodoro progress ('Block 2 of 4'), tag, goal, audio controls"
+      - "Pause, resume, stop, and skip break (Pomodoro) controls"
+      - "AC9.2 'Keep screen awake' toggle using the Wake Lock API where supported"
+      - "AC9.3 Works from 360 px wide up to desktop"
+      - "End-of-session summary that links to history"
+    refs: ["docs/product_decisions.md F9"]
+
+  - title: "Sounds: interval chime and end bell"
+    milestone: M2
+    labels: [agent:frontend, type:feature, P0]
+    ac:
+      - "AC5.1 Two distinct gentle sounds (no voice), royalty-free, small files, cached offline"
+      - "Chime on unlimited-timer reminders; bell at every phase change and session end"
+      - "AC5.2 Alert volume control separate from background volume"
+      - "AC5.3 Preview buttons in Settings"
+    refs: ["docs/product_decisions.md F5"]
+
+  - title: "Background audio: seamless offline rain loop"
+    milestone: M2
+    labels: [agent:frontend, type:feature, P0]
+    ac:
+      - "AC8.3 CC0 rain recording, 30–60 s seamless loop, ≤ 600 KB; source and license recorded in `docs/assets.md`"
+      - "Gapless playback with the Web Audio API; available offline (AC13.1)"
+      - "AC8.2 Starts with the session, pauses with the timer, continues through breaks, stops at session end"
+      - "AC8.7 When offline and YouTube is chosen, the app suggests Rain"
+    refs: ["docs/product_decisions.md F8"]
+
+  - title: "Background audio: looping YouTube player"
+    milestone: M2
+    labels: [agent:frontend, type:feature, P1]
+    context: |
+      First feature to cut if we run late. Must use a visible embedded player (YouTube terms).
+    ac:
+      - "AC8.4 Paste a YouTube link; it plays in a small visible embedded player (IFrame Player API) and loops for the whole session"
+      - "AC8.5 Invalid, unavailable or non-embeddable videos show a clear message; the session is unaffected"
+      - "AC8.6 One-tap reuse of the 5 most recent links"
+      - "Follows the same pause/stop rules as Rain (AC8.2)"
+      - "YouTube links never sent to telemetry"
+    refs: ["docs/product_decisions.md F8"]
+
+  - title: "Offline storage, sync and installable web app"
+    milestone: M2
+    labels: [agent:frontend, type:feature, P0]
+    context: |
+      'A finished session is never lost' is the reliability promise of the key user journey.
+    ac:
+      - "AC13.2 Finished sessions are written to IndexedDB before any network call"
+      - "AC13.3 Unsynced sessions and edits are sent automatically when the connection returns (with backoff)"
+      - "AC13.4/13.5 Retries are idempotent; network and server errors never lose a session"
+      - "AC10.9 Unsynced sessions appear in history with a 'not synced yet' indicator"
+      - "AC13.1 Service worker caches the app shell, sounds and rain; the app installs to the home screen"
+      - "E2e test: finish a session offline, go online, session appears on the server exactly once"
+    refs: ["docs/product_decisions.md F13"]
+
+  - title: "History screen: views, navigation, tag filter, chart and list"
+    milestone: M2
+    labels: [agent:frontend, type:feature, P0]
+    ac:
+      - "AC10.1 Day, Week, Month, All time and Custom range views; previous/next navigation for Day/Week/Month"
+      - "AC10.2 Multi-select tag filter (any-of), default all"
+      - "AC10.3 Total focus time, session count, per-tag breakdown, bar chart and session list newest first"
+      - "AC10.4 Each row shows date, start time, mode, tag, focus time, status and goal"
+      - "AC10.8 Empty state"
+    refs: ["docs/product_decisions.md F10"]
+
+  - title: "Edit and archive sessions UI"
+    milestone: M2
+    labels: [agent:frontend, type:feature, P0]
+    ac:
+      - "AC11.1 Edit tag and goal of a session"
+      - "AC11.2 Archive removes it from history immediately with an Undo option"
+      - "AC11.3 Archive view lists archived sessions; AC11.4 they are read-only"
+      - "AC11.5 Restore returns a session to history unchanged"
+      - "AC11.6 'Delete all archived sessions' asks for confirmation stating the count; permanent"
+    refs: ["docs/product_decisions.md F11"]
+
+  - title: "Settings screen"
+    milestone: M2
+    labels: [agent:frontend, type:feature, P0]
+    ac:
+      - "AC12.1–12.4 Week start, alert and background volume, keep-screen-awake default, default reminder interval"
+      - "Settings sync across devices through the Settings API"
+      - "Sound previews (AC5.3)"
+    refs: ["docs/product_decisions.md F12"]
+
+  - title: "End-to-end tests for the key user journey"
+    milestone: M2
+    labels: [agent:qa, type:test, P0]
+    context: |
+      Playwright suite proving the full stack works end to end: frontend → backend → database.
+    ac:
+      - "Sign up → start a 1-minute countdown (fake clock) → finish → session appears in history with correct totals"
+      - "Pomodoro run with breaks recorded as one entry with focus time only"
+      - "Archive → restore → delete all archived"
+      - "Offline finish then sync (see offline issue)"
+      - "History tag filter and week-start setting"
+      - "Runs in CI and via `make test`"
+    refs: ["docs/product_decisions.md §3", "docs/testing.md"]
+
+  - title: "Accessibility and responsive pass"
+    milestone: M2
+    labels: [agent:qa, type:test, P1]
+    ac:
+      - "Keyboard navigation and screen-reader labels on all controls"
+      - "Respects reduced-motion; time readable at a glance"
+      - "Layouts verified at 360 px, tablet and desktop widths"
+      - "Automated axe check in the Playwright suite with no serious violations"
+    refs: ["docs/product_decisions.md §5, AC9.3"]
+
+  # ---------------- M3 Ship ----------------
+  - title: "Provision the DigitalOcean Droplet"
+    milestone: M3
+    labels: [agent:devops, owner:human, type:infra, P0]
+    context: |
+      Yacine creates the Droplet and SSH key in the DigitalOcean account; the DevOps agent scripts the rest.
+    ac:
+      - "Basic 2 GiB / 1 vCPU Droplet, Ubuntu 24.04 LTS, NYC region"
+      - "Cloud Firewall allows only 22 (key-only SSH), 80 and 443"
+      - "Non-root deploy user, Docker Engine + Compose plugin, unattended security upgrades"
+      - "Directory layout `/opt/focus/{prod,dev}` with per-environment `.env` files (not in git)"
+      - "Setup steps scripted in `infra/` and documented in `docs/deployment.md`"
+    refs: ["docs/tech_stack.md §2"]
+
+  - title: "DNS for ineedtofoc.us and dev.ineedtofoc.us in Route 53"
+    milestone: M3
+    labels: [owner:human, type:infra, P0]
+    ac:
+      - "Gandi nameservers point to the Route 53 hosted zone's four nameservers"
+      - "A records for `ineedtofoc.us` and `dev.ineedtofoc.us` → Droplet IPv4, TTL 300"
+      - "Optional CAA record `0 issue \"letsencrypt.org\"`"
+      - "`dig` resolves both names to the Droplet"
+    refs: ["docs/tech_stack.md §2"]
+
+  - title: "Production Compose, Caddy and image build to GHCR"
+    milestone: M3
+    labels: [agent:devops, type:infra, P0]
+    ac:
+      - "Multi-stage Dockerfile builds frontend and backend into one image"
+      - "CI pushes images to GHCR tagged with the commit SHA"
+      - "`infra/compose.prod.yml` runs `focus-prod` and `focus-dev` projects, each with app + Postgres + volume, with memory limits"
+      - "Shared Caddy routes `ineedtofoc.us` → prod and `dev.ineedtofoc.us` → dev with automatic HTTPS"
+      - "OpenTelemetry Collector container forwards telemetry to Grafana Cloud"
+    refs: ["docs/tech_stack.md §2–3"]
+
+  - title: "CD: automatic deploy to dev on merge to main"
+    milestone: M3
+    labels: [agent:devops, type:infra, P0]
+    ac:
+      - "On merge to `main`: build, push, deploy the SHA-tagged image to `focus-dev` over SSH"
+      - "Runs migrations, then smoke tests against https://dev.ineedtofoc.us"
+      - "Deployed tag and time recorded on the server and in the workflow summary"
+    refs: ["docs/tech_stack.md §3"]
+
+  - title: "Manual production deploy with approval"
+    milestone: M3
+    labels: [agent:devops, type:infra, P0]
+    ac:
+      - "`workflow_dispatch` workflow takes an image tag (default: tag currently on dev)"
+      - "Uses the GitHub `production` environment with required reviewer approval"
+      - "Smoke tests against https://ineedtofoc.us after deploy"
+    refs: ["docs/tech_stack.md §3"]
+
+  - title: "Deploy script with health-check auto-revert and rollback workflow"
+    milestone: M3
+    labels: [agent:devops, type:infra, P0]
+    ac:
+      - "Deploy script records the current tag, pulls the new one, migrates, restarts, checks `/healthz` and `/readyz`"
+      - "Failed checks automatically redeploy the previous tag and fail the workflow"
+      - "Manual `rollback` workflow redeploys the last known-good tag for dev or prod; usable by the on-call agent"
+      - "Rollback demonstrated once with a deliberately broken build; documented in `docs/deployment.md`"
+    refs: ["docs/tech_stack.md §3"]
+
+  # ---------------- M4 Operate ----------------
+  - title: "Instrument the key user journey: traces, metrics, logs with trace ID"
+    milestone: M4
+    labels: [agent:backend, type:observability, P0]
+    ac:
+      - "OpenTelemetry traces for all requests (FastAPI + SQLAlchemy instrumentation)"
+      - "Metrics: session saves (count by outcome, latency), history loads (count by outcome, latency), sync batch size"
+      - "Every log line is JSON with `trace_id` and `span_id`; logs, traces and metrics link up in Grafana"
+      - "Frontend sends a `traceparent` header so a save from the browser shares one trace ID"
+      - "No customer data in telemetry: emails, passwords, cookies, goals and YouTube links never exported; users referenced by opaque ID only; enforced by an attribute allowlist and a test"
+    refs: ["docs/tech_stack.md §4"]
+
+  - title: "Grafana Cloud wiring and key-journey dashboards"
+    milestone: M4
+    labels: [agent:devops, owner:human, type:observability, P0]
+    context: |
+      Yacine creates the Grafana Cloud stack and tokens; the DevOps agent wires the collector and dashboards.
+    ac:
+      - "Collector on the Droplet exports traces, metrics and logs to Grafana Cloud for dev and prod (separated by `deployment.environment`)"
+      - "Dashboard per environment: save success rate, save latency, history latency, error logs, links to traces"
+      - "Dashboards exported as JSON in `infra/grafana/`"
+      - "Screenshots and how-to in `docs/observability.md`"
+    refs: ["docs/tech_stack.md §4"]
+
+  - title: "User-impact alert rules and the alert trigger"
+    milestone: M4
+    labels: [agent:devops, type:observability, P0]
+    ac:
+      - "Alert: session-save error rate > 5% over 5 min with a minimum request count"
+      - "Alert: history load p95 latency > 2 s over 5 min"
+      - "No alerts on CPU or memory"
+      - "Alert trigger: operator-only fault-injection setting (off by default) that fails a chosen percentage of session saves"
+      - "Traffic script that generates realistic saves and history loads against dev to fire the alert on demand"
+      - "Alert rules exported to `infra/grafana/` and documented"
+    refs: ["docs/tech_stack.md §4"]
+
+  - title: "Route alerts to GitHub to wake the on-call agent"
+    milestone: M4
+    labels: [agent:devops, agent:oncall, type:observability, P0]
+    ac:
+      - "Grafana contact point sends firing and resolved alerts to a webhook"
+      - "Webhook reaches GitHub `repository_dispatch` (directly or via a small relay endpoint) with alert name, environment, and links to dashboard and traces"
+      - "Only authenticated requests can trigger the dispatch"
+    refs: ["docs/tech_stack.md §4–5"]
+
+  - title: "On-call responder agent"
+    milestone: M4
+    labels: [agent:oncall, type:observability, P0]
+    context: |
+      Headless Claude Code in GitHub Actions that wakes up on an alert and fixes the issue.
+    ac:
+      - "Workflow triggered by the alert dispatch; opens or updates a `type:incident` issue"
+      - "Reads metrics, traces and logs via a read-only Grafana token, plus recent deploys and commits"
+      - "Follows `docs/runbooks/session-save-errors.md` and `docs/runbooks/history-latency.md`"
+      - "If a recent deploy is the cause: runs the `rollback` workflow. Otherwise: opens a fix PR with a regression test"
+      - "Confirms the alert resolves and posts an incident summary (timeline, cause, action) on the issue"
+      - "Guardrails: cannot push to `main` or deploy arbitrary code to prod"
+      - "End-to-end drill on dev: trigger fault → alert → agent acts → alert resolves; evidence linked in README"
+    refs: ["docs/tech_stack.md §5"]
+
+  # ---------------- M5 Submission ----------------
+  - title: "README: problem, functionality, expected behavior, how to run"
+    milestone: M5
+    labels: [agent:spec, type:docs, P0]
+    ac:
+      - "Problem statement, features and expected behavior (summarized from product_decisions.md)"
+      - "Architecture diagram and stack summary"
+      - "Run locally (`make up`), test (`make test`), deploy, rollback"
+      - "Links: live app, dev app, task board, docs, AGENTS.md, Grafana screenshots, incident drill"
+      - "Table mapping each grading criterion to where it is satisfied"
+    refs: ["docs/product_decisions.md", "docs/tech_stack.md"]
+
+  - title: "Final submission check against the grading criteria"
+    milestone: M5
+    labels: [agent:qa, type:docs, P0]
+    ac:
+      - "Fresh clone: `make up` and `make test` succeed"
+      - "Prod and dev reachable over HTTPS; latest prod deploy approved manually"
+      - "Board shows every closed issue linked to its PR; agents' comments visible"
+      - "Observability and on-call drill evidence present"
+      - "Submitted before 2026-10-26 23:00 UTC"
+
+  # ---------------- Post-MVP ----------------
+  - title: "Export history as CSV"
+    milestone: PM
+    labels: [post-mvp, type:feature]
+    ac: ["Export the current history view (with filters) as CSV"]
+  - title: "Daily focus goal and streaks"
+    milestone: PM
+    labels: [post-mvp, type:feature]
+    ac: ["Set a daily focus target; see progress and a gentle streak count (no shaming)"]
+  - title: "Custom tags with colors"
+    milestone: PM
+    labels: [post-mvp, type:feature]
+    ac: ["Create, rename and color custom tags in addition to the six defaults"]
+  - title: "Add a session manually and edit session times"
+    milestone: PM
+    labels: [post-mvp, type:feature]
+    ac: ["Add a past session by hand", "Edit start/end times of an existing session"]
+  - title: "Session-end notifications"
+    milestone: PM
+    labels: [post-mvp, type:feature]
+    ac: ["Notify the user when a session or phase ends while the app is in the background"]
+  - title: "Password reset, Google sign-in and account deletion"
+    milestone: PM
+    labels: [post-mvp, type:feature]
+    ac: ["Password reset by email", "Sign in with Google", "Delete account and export data"]
+  - title: "Native iOS and Android apps with Capacitor (stretch)"
+    milestone: PM
+    labels: [post-mvp, type:feature]
+    ac:
+      - "Wrap the React app with Capacitor"
+      - "Background audio and local notifications work with the screen locked"
+      - "Builds submitted to TestFlight and Google Play internal testing"
