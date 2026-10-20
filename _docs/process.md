@@ -47,7 +47,7 @@ Milestones (`M1`–`M5`) are the schedule; work the current milestone first, `P0
 - Title: Conventional Commit style. Body from the PR template: `Closes #<n>`, each AC with how it's met, test evidence.
 - Comment on the issue with the PR link and move the card to **In review**:
 
-  > 🔵 **\<agent\> agent — PR open:** #\<pr\>. All ACs addressed; `make test` green.
+  > 🔵 **\<agent\> agent — PR open:** #\<pr\>. All ACs addressed; `make test` green (or N/A: docs only).
 
 ### 4. Review
 - The **reviewer agent** reads the issue and the PR and posts a review with one line per AC: ✅ met / ❌ not met (why) / ➖ not applicable (why), plus the definition-of-done checks and numbered findings.
@@ -56,7 +56,7 @@ Milestones (`M1`–`M5`) are the schedule; work the current milestone first, `P0
 - CI must be green. Branch protection (#5) requires passing status checks, not an approving review, for the same reason.
 
 ### 5. Merge
-- After `**Verdict: Approve**` and green CI, the authoring agent **squash-merges**. Exceptions — **Yacine merges these himself** after reading the review: PRs that change `.github/workflows/`, change production `infra/`, deploy anything to prod, or fix a production incident.
+- After `**Verdict: Approve**` and green CI, the authoring agent **squash-merges**. Exceptions — **Yacine merges these himself** after reading the review: PRs that change `.github/workflows/`, change production `infra/`, deploy anything to prod, or fix a production incident. After he merges, the authoring agent still does the close-out below.
 - On merge: the issue closes (`Closes #n`), the board moves it to Done, the branch is auto-deleted.
 - The author ticks the satisfied checkboxes in the issue body and posts the closing comment:
 

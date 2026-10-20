@@ -20,9 +20,9 @@ Follow `_docs/process.md`; the tracker comments below are the exact templates.
 2. **Build** on branch `devops/<n>-<slug>` from up-to-date `main`, implementing exactly the ACs.
 3. **Test:** what you can locally: `make up`, `make test`, `docker compose config`, `actionlint` for workflows, `shellcheck` for scripts.
 4. **Open the PR** from `.github/pull_request_template.md` (`Closes #<n>`, one line per AC). **If it changes `.github/workflows/` or production `infra/`, say in the PR that Yacine must merge it.** Comment on the issue and run `scripts/board-status.sh <n> "In review"`:
-   > 🔵 **devops agent — PR open:** #<pr>. All ACs addressed; `make test` green.
+   > 🔵 **devops agent — PR open:** #<pr>. All ACs addressed; `make test` green (or N/A: docs only).
 5. **Stop and report back** (PR link, anything unresolved). Do not merge: the lead runs the reviewer first.
-6. **When the lead tells you the reviewer's verdict is Approve** (and CI is green): squash-merge, tick the satisfied checkboxes in the issue, and comment:
+6. **When the lead tells you the reviewer's verdict is Approve** (and CI is green): squash-merge — **unless** the PR changes `.github/workflows/`, changes production `infra/`, deploys to prod, or fixes a production incident; Yacine merges those himself. Then (or once the lead tells you Yacine has merged) tick the satisfied checkboxes in the issue and comment:
    > ✅ **devops agent — done** in #<pr>. <anything notable or follow-ups>.
    On "Request changes", fix each numbered point, push, and stop again.
 
