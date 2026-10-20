@@ -25,11 +25,11 @@ Follow `_docs/process.md`; the tracker comments below are the exact templates.
 4. **Open the PR** from `.github/pull_request_template.md` (`Closes #<n>`, one line per AC). If you added or changed an endpoint, regenerate `_docs/api/openapi.json` in the same PR and say so — the frontend builds against it. Comment on the issue and run `scripts/board-status.sh <n> "In review"`:
    > 🔵 **backend agent — PR open:** #<pr>. All ACs addressed; `make test` green (or N/A: docs only).
 5. **Stop and report back** (PR link, anything unresolved). Do not merge: the lead runs the reviewer first.
-6. **When the lead tells you the reviewer's verdict is Approve** (and CI is green): squash-merge — **unless** the PR changes `.github/workflows/`, changes production `infra/`, deploys to prod, or fixes a production incident; Yacine merges those himself. Then (or once the lead tells you Yacine has merged) tick the satisfied checkboxes in the issue and comment:
+6. **When the lead tells you the reviewer's verdict is Approve** (and CI is green): squash-merge, tick the satisfied checkboxes in the issue, and comment:
    > ✅ **backend agent — done** in #<pr>. <anything notable or follow-ups>.
    On "Request changes", fix each numbered point, push, and stop again.
 
-**Blocked?** Comment `⛔ Blocked by #<n>` or `⛔ Needs Yacine: <exact ask>` and leave the card in Todo.
+**Blocked?** Comment `⛔ Blocked by #<n>`, or `⛔ Needs Yacine: <exact ask>` plus the `needs-yacine` label (only for the human gates in `_docs/process.md`), and leave the card in Todo.
 
 ## Rules
 - Every query is scoped to the signed-in user.

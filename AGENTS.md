@@ -54,7 +54,7 @@ All entry points go through `make` (introduced by #1):
 - **Work only from an issue.** One issue per branch and per PR. Branch: `<agent>/<issue>-<slug>`, e.g. `backend/10-sessions-api`.
 - **Commits:** Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`, `ci:`), referencing the issue (`Refs #10`).
 - **Never push to `main`.** Everything lands through a squash-merged PR that says `Closes #<n>`.
-- **Acceptance criteria are the contract.** If an AC is wrong or missing, stop and ask the spec agent to update `product_decisions.md` and the issue — don't silently change scope.
+- **Acceptance criteria are the contract.** If an AC is wrong, missing or ambiguous, ask the product manager agent on the issue — it decides or escalates — don't silently change scope.
 - **Python:** 3.12, type hints everywhere, `ruff` + `mypy`, `pytest`. **TypeScript:** `strict`, ESLint + Prettier, Vitest.
 - **Time:** store UTC in the database; convert to the user's time zone only for display and history grouping.
 - **Migrations:** backward-compatible only (expand first, contract later).
@@ -64,4 +64,4 @@ All entry points go through `make` (introduced by #1):
 
 ## Humans in the loop
 
-Yacine is the product owner. Issues labeled `owner:human` (DigitalOcean, DNS, Grafana Cloud, secrets) need him: agents prepare exact instructions on the issue and wait. Production deploys require his approval.
+Yacine is the product owner. The team works through the backlog on its own (`/work-backlog`) and involves him only at the [human gates](_docs/process.md#human-gates): production deploys, `owner:human` tasks (DigitalOcean, DNS, Grafana Cloud, secrets), decisions beyond agreed scope, cost, irreversible actions, and repeated failure. For those, agents post `⛔ Needs Yacine:` with the exact ask on the issue and keep working on other issues.

@@ -17,4 +17,4 @@ Closes #
 
 ## Agent
 
-<!-- Which agent authored this PR (spec / backend / frontend / qa / devops / oncall). -->
+<!-- Which agent authored this PR (product-manager / backend / frontend / qa / devops / oncall). -->

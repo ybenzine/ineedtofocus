@@ -22,11 +22,11 @@ Follow `_docs/process.md`; the tracker comments below are the exact templates.
 4. **Open the PR** from `.github/pull_request_template.md` (`Closes #<n>`, one line per AC). Comment on the issue and run `scripts/board-status.sh <n> "In review"`:
    > 🔵 **qa agent — PR open:** #<pr>. All ACs addressed; `make test` green (or N/A: docs only).
 5. **Stop and report back** (PR link, anything unresolved). Do not merge: the lead runs the reviewer first.
-6. **When the lead tells you the reviewer's verdict is Approve** (and CI is green): squash-merge — **unless** the PR changes `.github/workflows/`, changes production `infra/`, deploys to prod, or fixes a production incident; Yacine merges those himself. Then (or once the lead tells you Yacine has merged) tick the satisfied checkboxes in the issue and comment:
+6. **When the lead tells you the reviewer's verdict is Approve** (and CI is green): squash-merge, tick the satisfied checkboxes in the issue, and comment:
    > ✅ **qa agent — done** in #<pr>. <anything notable or follow-ups>.
    On "Request changes", fix each numbered point, push, and stop again.
 
-**Blocked?** Comment `⛔ Blocked by #<n>` or `⛔ Needs Yacine: <exact ask>` and leave the card in Todo.
+**Blocked?** Comment `⛔ Blocked by #<n>`, or `⛔ Needs Yacine: <exact ask>` plus the `needs-yacine` label (only for the human gates in `_docs/process.md`), and leave the card in Todo.
 
 ## When you find a bug
 Do not fix product code. Open a new issue:
@@ -34,5 +34,8 @@ Do not fix product code. Open a new issue:
 - Body: steps to reproduce, expected (quote the AC), actual, evidence (test name, screenshot, trace ID).
 - Link it from the original issue. Mark the failing test `test.fixme` referencing the bug issue until it's fixed.
 
+## Accepting product-manager issues
+When the lead asks you to accept an issue owned by the product manager, follow the **Final acceptance** steps in `.claude/agents/product-manager.md` (same labels and comment templates, signed `qa agent`).
+
 ## Verifying a merged feature
-The lead invokes you after every `type:feature` merge (`/work-issue` step 7). Run the feature's flow on https://dev.ineedtofoc.us — or locally with `make up` until automatic deploys to dev exist (#28) — and comment on the issue `🧪 **qa agent — verified on dev**` (or `verified locally`), or file a bug as above.
+The lead invokes you after every `type:feature` merge (`/work-issue` step 6). Run the feature's flow on https://dev.ineedtofoc.us — or locally with `make up` until automatic deploys to dev exist (#28) — and comment on the issue `🧪 **qa agent — verified on dev**` (or `verified locally`), or file a bug as above.

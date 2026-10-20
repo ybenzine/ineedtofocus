@@ -8,29 +8,29 @@ Ownership is visible on the board: every issue carries the `agent:*` label of th
 
 | Agent | Label | Owns | Reads first | Produces | Does not |
 |---|---|---|---|---|---|
-| **Spec** | `agent:spec` | Requirements, acceptance criteria, docs, README, the backlog | product_decisions, tech_stack, process | Updated `product_decisions.md`, issues with ACs, `_docs/*`, README | Write application code |
+| **Product manager** | `agent:product_manager` | Requirements, acceptance criteria, product decisions within agreed scope (decision log), docs, README, the backlog, **final acceptance** | product_decisions, tech_stack, process | Updated `product_decisions.md`, issues with ACs, `_docs/*`, README, `accepted` label | Write application code; change agreed scope without Yacine |
 | **Backend** | `agent:backend` | FastAPI app, data model, migrations, API contract, backend instrumentation | product_decisions, architecture, testing, observability | `backend/` code + pytest unit/integration tests, `_docs/api/openapi.json` | Change frontend code or infra |
 | **Frontend** | `agent:frontend` | React app: timers, audio, offline sync, history, settings, installable app | product_decisions, architecture, testing | `frontend/` code + Vitest tests, Playwright tests for its screens | Change the API contract unilaterally |
 | **QA** | `agent:qa` | Cross-cutting test strategy, end-to-end journeys, accessibility, final submission check | product_decisions, testing | Playwright suites, test fixtures, bug issues with repro steps | Fix product code (files a bug issue instead) |
 | **DevOps** | `agent:devops` | Docker/Compose, CI/CD, Droplet, Caddy, deploy and rollback, Grafana wiring and alerts | tech_stack, deployment, observability | `infra/`, `.github/workflows/`, `Makefile`, deploy scripts | Deploy to prod without Yacine's approval |
 | **Reviewer** | — (reviews every PR) | Quality gate: ACs, definition of done, conventions, security and telemetry privacy | the PR's issue, product_decisions, process | A PR review with a per-AC table and a `Verdict:` line | Edit, commit, push or merge; review work it wrote |
-| **On-call** | `agent:oncall` | Responding to production alerts | runbooks, AGENTS.md, process, observability, deployment | Incident issue, rollback run or fix PR (`oncall/<n>-<slug>`), incident summary | Push to `main`; merge; deploy anything except a known-good tag |
+| **On-call** | `agent:oncall` | Responding to production alerts | runbooks, AGENTS.md, process, observability, deployment | Incident issue, rollback run or fix PR (`oncall/<n>-<slug>`), incident summary | Push to `main`; merge before the reviewer's Approve; deploy to prod except a rollback to a known-good tag |
 
-**Yacine (product owner):** agrees scope changes, does `owner:human` tasks (DigitalOcean, Route 53, Grafana Cloud, secrets), approves production deploys, and merges workflow, production-infra, prod-deploy and incident-fix PRs himself.
+**Yacine (product owner):** involved only at the [human gates](process.md#human-gates): approves production deploys, does `owner:human` tasks (DigitalOcean, Route 53, Grafana Cloud, secrets), decides questions beyond agreed scope, cost or irreversible actions, and steps in when a PR fails review three times or CI can't be made green.
 
 ## How a piece of work flows through the team
 
 ```mermaid
 sequenceDiagram
     participant Y as Yacine
-    participant S as Spec
+    participant S as Product manager
     participant B as Backend
     participant F as Frontend
     participant Q as QA
     participant D as DevOps
     participant R as Reviewer
-    Y->>S: Agree feature / change
-    S->>S: Update product_decisions.md + issue ACs
+    Y->>S: Agree scope (once, up front)
+    S->>S: Write product_decisions.md + issue ACs
     S-->>B: Issue ready (agent:backend)
     B->>B: Implement + tests, publish API contract
     B->>R: PR (Closes #n)
@@ -40,10 +40,11 @@ sequenceDiagram
     F->>R: PR (Closes #m)
     R-->>F: Approve
     F-->>Q: Feature on dev
-    Q->>Q: End-to-end journey tests
-    Q->>R: PR
+    Q->>Q: Verify feature on dev
+    Q-->>S: Verified
+    S->>S: Final acceptance (accepted label)
     D->>D: CI/CD deploys main to dev
-    D->>Y: Request prod approval
+    D->>Y: Request prod approval (human gate)
     Y->>D: Approve prod deploy
 ```
 
@@ -51,15 +52,16 @@ sequenceDiagram
 
 | From → To | What is handed over | Where |
 |---|---|---|
-| Spec → everyone | Acceptance criteria for each issue | Issue body; `product_decisions.md` |
+| Product manager → everyone | Acceptance criteria for each issue; decisions on ambiguities | Issue body; `product_decisions.md` (incl. decision log) |
 | Backend → Frontend | The API contract: endpoints, request/response schemas, error format | `_docs/api/openapi.json` (exported from FastAPI in the backend PR); frontend generates its TypeScript client types from it |
 | Backend/Frontend → QA | A feature merged and running on dev, with the ACs it covers | Closing comment on the issue |
 | QA → Backend/Frontend | Bugs found by end-to-end or accessibility tests | New issue labeled with the owner's `agent:*`, linked to the original |
 | DevOps → Backend/Frontend | How to run, test and configure the app (env vars, compose services) | `Makefile`, `.env.example`, `deployment.md` |
 | Backend/DevOps → On-call | Signals, dashboards, alert rules, runbooks | `observability.md`, `runbooks/` |
 | On-call → Backend/Frontend | Regression found in production that a rollback didn't settle | Incident issue + fix PR or follow-up issue |
-| Anyone → Spec | A missing, wrong or ambiguous acceptance criterion | Comment on the issue mentioning the spec agent; spec updates the doc and the issue |
-| Anyone → Yacine | A step only a human can do | `⛔ Needs Yacine:` comment with exact instructions |
+| Anyone → Product manager | A missing, wrong or ambiguous acceptance criterion | Comment on the issue; the product manager decides (within scope) or escalates, and updates the doc and the issue |
+| QA → Product manager | Feature verified on dev | `🧪 verified` comment; then the product manager runs final acceptance |
+| Anyone → Yacine | A human gate (see process.md) | `⛔ Needs Yacine:` comment with exact instructions + `needs-yacine` label; Yacine answers and removes the label |
 
 **Contract-first rule:** when a frontend issue depends on an endpoint, the backend PR that defines it merges first. If the frontend must start earlier, the backend agent posts the planned schema on the frontend issue and both build against that.
 
@@ -69,7 +71,7 @@ Each agent is a Claude Code subagent: a role prompt, the tools it may use, and t
 
 | Agent | Definition | Tools |
 |---|---|---|
-| Spec | [`.claude/agents/spec.md`](../.claude/agents/spec.md) | Read, Write, Edit, Glob, Grep, Bash, WebSearch, WebFetch |
+| Product manager | [`.claude/agents/product-manager.md`](../.claude/agents/product-manager.md) | Read, Write, Edit, Glob, Grep, Bash, WebSearch, WebFetch |
 | Backend | [`.claude/agents/backend.md`](../.claude/agents/backend.md) | Read, Write, Edit, Glob, Grep, Bash |
 | Frontend | [`.claude/agents/frontend.md`](../.claude/agents/frontend.md) | Read, Write, Edit, Glob, Grep, Bash |
 | QA | [`.claude/agents/qa.md`](../.claude/agents/qa.md) | Read, Write, Edit, Glob, Grep, Bash |
@@ -85,8 +87,11 @@ A main Claude Code session acts as the **lead**. The `/work-issue <n>` command (
 2. Delegate it to the subagent named by its `agent:*` label.
 3. That subagent posts the start comment, moves the card, branches, implements, tests, opens the PR, posts the PR-open comment, and stops.
 4. The lead runs the **reviewer** subagent on the PR; on `Verdict: Request changes` the findings go back to the author, until `Verdict: Approve`.
-5. Workflow, production-infra, prod-deploy and incident-fix PRs: Yacine merges. Otherwise the lead re-invokes the author to squash-merge, tick the issue's checkboxes and post the done comment.
+5. With CI green, the lead re-invokes the author to squash-merge, tick the issue's checkboxes and post the done comment.
 6. For `type:feature` issues, the lead invokes **QA** to verify the feature on dev.
+7. The lead invokes the **product manager** for final acceptance (or **QA** for the product manager's own issues): `accepted` label, or the issue is reopened with gaps.
+
+`/work-backlog [milestone]` ([`.claude/commands/work-backlog.md`](../.claude/commands/work-backlog.md)) runs this loop over every open issue in milestone and priority order. When an issue hits a [human gate](process.md#human-gates), the lead posts the ask and moves on to the next runnable issue, so the team only stops when nothing runnable is left.
 
 Independent issues (e.g. a backend API and an unrelated DevOps task) can run in parallel; dependent ones run in order.
 
@@ -100,7 +105,8 @@ Every step leaves a trace on the issue and the board, so the board is the record
 | PR opened | `🔵 <agent> agent — PR open: #<pr>` comment; card → In review | `gh pr create`; `scripts/board-status.sh <n> "In review"` |
 | Review | PR review with a per-AC table ending in `Verdict: Approve` / `Verdict: Request changes` | `gh pr review --comment` (reviewer subagent) |
 | Verified | `🧪 qa agent — verified on dev` comment, or a `bug` issue | `gh issue comment` / `gh issue create` (QA subagent) |
+| Accepted | `accepted` label + `🟢 product manager agent — accepted` comment, or issue reopened with `🔴 not accepted` | `gh issue edit --add-label accepted` (product manager subagent) |
 | Done | Issue checkboxes ticked; `✅ <agent> agent — done` comment; card → Done | `gh issue edit`; board workflow on close |
-| Blocked | `⛔ Blocked by #<n>` / `⛔ Needs Yacine:` comment | `gh issue comment` |
+| Blocked | `⛔ Blocked by #<n>` comment, or `⛔ Needs Yacine:` comment + `needs-yacine` label | `gh issue comment`; `gh issue edit --add-label needs-yacine` |
 
 Board workflows (project settings) also move cards automatically: added → Todo, closed or merged → Done. The script needs a `gh` token with the `project` scope: `gh auth refresh -s project`.
