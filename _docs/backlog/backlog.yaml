@@ -1,5 +1,5 @@
 labels:
-  - {name: "agent:spec", color: "5319e7", description: "Owned by the product/spec agent"}
+  - {name: "agent:product_manager", color: "5319e7", description: "Owned by the product manager agent"}
   - {name: "agent:backend", color: "1d76db", description: "Owned by the backend agent"}
   - {name: "agent:frontend", color: "0e8a16", description: "Owned by the frontend agent"}
   - {name: "agent:qa", color: "fbca04", description: "Owned by the QA/test agent"}
@@ -14,6 +14,7 @@ labels:
   - {name: "type:incident", color: "e11d21", description: "Production incident handled by the on-call agent"}
   - {name: "P0", color: "b60205", description: "Must have for submission"}
   - {name: "P1", color: "ff9f1c", description: "Should have; first to cut if late"}
+  - {name: "accepted", color: "0e8a16", description: "Product manager accepted the delivered work"}
   - {name: "post-mvp", color: "ededed", description: "After the course submission"}
 
 milestones:
@@ -40,7 +41,7 @@ issues:
 
   - title: "Write AGENTS.md and the modular docs it points to"
     milestone: M1
-    labels: [agent:spec, type:docs, P0]
+    labels: [agent:product_manager, type:docs, P0]
     context: |
       AGENTS.md is the entry point for every coding agent. It must stay short and point to modular docs instead of inlining everything.
     ac:
@@ -53,7 +54,7 @@ issues:
 
   - title: "Define the agent team as Claude Code subagents"
     milestone: M1
-    labels: [agent:spec, type:docs, P0]
+    labels: [agent:product_manager, type:docs, P0]
     context: |
       The build team is a set of Claude Code subagents with clear ownership, matching the `agent:*` labels on this board.
     ac:
@@ -440,7 +441,7 @@ issues:
   # ---------------- M5 Submission ----------------
   - title: "README: problem, functionality, expected behavior, how to run"
     milestone: M5
-    labels: [agent:spec, type:docs, P0]
+    labels: [agent:product_manager, type:docs, P0]
     ac:
       - "Problem statement, features and expected behavior (summarized from product_decisions.md)"
       - "Architecture diagram and stack summary"

@@ -11,7 +11,8 @@ data = yaml.safe_load(open(__import__("pathlib").Path(__file__).resolve().parent
 DOD = """## Definition of done
 - [ ] Every acceptance criterion above is met and checked off
 - [ ] Tests added or updated; `make test` passes locally and in CI
-- [ ] PR references this issue (`Closes #<n>`) and the reviewer agent approved it against these criteria
+- [ ] PR references this issue (`Closes #<n>`) and the reviewer agent's verdict is Approve
+- [ ] Product manager accepted it (`accepted` label)
 - [ ] Docs updated if behavior or setup changed"""
 
 

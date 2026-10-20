@@ -165,3 +165,11 @@ Sessions are archived instead of deleted, so nothing is lost by accident.
 ## 7. Prioritization
 
 If time runs short, cut in this order, first cut first: YouTube background audio (F8.4–F8.7) → Pomodoro long break → custom history range. Everything else in §4 is the core MVP.
+
+## 8. Decision log
+
+Product decisions made after this document was agreed. The product manager agent records every decision it makes within agreed scope here; decisions beyond agreed scope are Yacine's (see [process.md — Human gates](process.md#human-gates)).
+
+| Date | Question | Decision | Why | Issue |
+|---|---|---|---|---|
+| 2026-10-20 | Who gives final acceptance, and when is Yacine involved? | The product manager agent accepts every delivered issue; Yacine is involved only at the human gates | Lets the team work through the backlog without per-task approvals | #48 |

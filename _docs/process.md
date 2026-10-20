@@ -2,6 +2,8 @@
 
 How work moves from an issue to production. Every agent follows this; the reviewer agent enforces it.
 
+The team works through the backlog on its own (`/work-backlog`). Yacine is pulled in only at the [human gates](#human-gates).
+
 ## Sources of truth
 
 | Question | Source |
@@ -24,6 +26,8 @@ Columns (the project's Status field): **Todo → In progress → In review → D
 | In review | PR open, waiting for the reviewer agent | Agent when the PR is opened |
 | Done | PR merged, issue closed | Board workflow on close/merge |
 
+After Done, the product manager's final acceptance adds the **`accepted`** label (or reopens the issue). An issue is finished only when it is Done **and** `accepted`.
+
 Milestones (`M1`–`M5`) are the schedule; work the current milestone first, `P0` before `P1`. `post-mvp` issues are not touched before submission.
 
 ## Lifecycle of an issue
@@ -39,7 +43,7 @@ Milestones (`M1`–`M5`) are the schedule; work the current milestone first, `P0
 
 ### 2. Build
 - Branch from up-to-date `main`: `<agent>/<n>-<slug>`.
-- Implement **exactly** the acceptance criteria. Scope questions go to the spec agent (comment on the issue), not into the code.
+- Implement **exactly** the acceptance criteria. Scope questions go to the product manager agent (comment on the issue), not into the code.
 - Write the tests with the change (see [testing.md](testing.md)). Run `make lint` and `make test` before pushing.
 - Small Conventional Commits that reference the issue (`feat(sessions): idempotent save — Refs #10`).
 
@@ -56,15 +60,34 @@ Milestones (`M1`–`M5`) are the schedule; work the current milestone first, `P0
 - CI must be green. Branch protection (#5) requires passing status checks, not an approving review, for the same reason.
 
 ### 5. Merge
-- After `**Verdict: Approve**` and green CI, the authoring agent **squash-merges**. Exceptions — **Yacine merges these himself** after reading the review: PRs that change `.github/workflows/`, change production `infra/`, deploy anything to prod, or fix a production incident. After he merges, the authoring agent still does the close-out below.
+- After `**Verdict: Approve**` and green CI, the authoring agent **squash-merges**. No human approval is needed to merge: merging deploys to dev only, and prod has its own gate.
 - On merge: the issue closes (`Closes #n`), the board moves it to Done, the branch is auto-deleted.
 - The author ticks the satisfied checkboxes in the issue body and posts the closing comment:
 
   > ✅ **\<agent\> agent — done** in #\<pr\>. \<one line on anything notable or follow-ups (#n)\>.
 
-### 6. Verify and deploy
-- For `type:feature` issues the QA agent verifies the feature on dev after merge and comments the result (`🧪 qa agent — verified on dev`) or files a `bug` issue.
-- Merge to `main` deploys to **dev** automatically. **Prod** is a manual, approved workflow run. See [deployment.md](deployment.md).
+### 6. Verify
+- Merge to `main` deploys to **dev** automatically (once #28 lands; until then, verification uses the local stack).
+- For `type:feature` issues the QA agent runs the feature's flow and comments `🧪 qa agent — verified on dev` (or `verified locally`), or files a `bug` issue.
+
+### 7. Accept
+- The **product manager agent** checks the delivered work against the running app and the issue's ACs, then either adds the `accepted` label with a `🟢 accepted` comment, or reopens the issue (`🔴 not accepted` with numbered gaps) or files a follow-up issue. See [.claude/agents/product-manager.md](../.claude/agents/product-manager.md).
+
+### 8. Release to prod
+- Prod is a manual workflow run that **Yacine approves** (a human gate). The lead asks for it when a milestone's user-facing work is accepted on dev. See [deployment.md](deployment.md).
+
+## Human gates
+
+Agents stop and ask Yacine (`⛔ Needs Yacine: <exact ask, options, recommendation>` on the issue) **only** for these. Everything else — picking work, deciding within agreed scope, reviewing, merging, accepting — the team does on its own, and it keeps working on other unblocked issues while it waits.
+
+| Gate | Examples |
+|---|---|
+| **Production deploys** | Approving the prod deploy workflow run. Exception: the on-call agent may roll prod back to the last known-good tag without approval |
+| **`owner:human` tasks** | DigitalOcean, Route 53, Grafana Cloud, GitHub secrets/environments, API keys |
+| **Product decisions beyond agreed scope** | Changing or cutting a requirement in `product_decisions.md`, changing the MVP cut order, adding a feature |
+| **Cost** | Anything that spends money (bigger Droplet, paid services) |
+| **Irreversible actions** | Deleting data, servers or repos; force-pushing; rewriting history; destroying volumes |
+| **Repeated failure** | The same PR fails review three rounds in a row, or CI can't be made green — stop and report instead of looping |
 
 ## Definition of done
 
@@ -73,15 +96,18 @@ An issue is done when **all** of these hold:
 - [ ] Every acceptance criterion is met and checked off in the issue
 - [ ] Tests added or updated; `make test` passes locally and in CI (docs-only changes: N/A, say so)
 - [ ] PR says `Closes #<n>` and the reviewer agent's verdict is **Approve**
+- [ ] Product manager accepted it (`accepted` label)
 - [ ] Docs updated if behavior, setup or commands changed
 - [ ] No secrets or customer data added to code, logs or telemetry
 
 ## Changing scope
 
-- Only the **spec agent** edits `product_decisions.md`, and only after Yacine agrees.
+- Only the **product manager agent** edits `product_decisions.md`.
+- **Within agreed scope** (defaults, edge cases, wording, layout details, clarifying an ambiguous AC) the product manager decides, answers on the issue, and records it in the **Decision log** of `product_decisions.md`.
+- **Beyond agreed scope** (changing or cutting a requirement, adding a feature, changing the cut order) is a human gate: the product manager asks Yacine with options and a recommendation.
 - A requirement change updates, in one PR: `product_decisions.md`, the affected issue(s)' acceptance criteria, and a short note in the PR on why.
 - New work found mid-task becomes a **new issue** (labels, milestone, ACs) instead of growing the current PR.
 
 ## Incidents
 
-Production alerts wake the **on-call agent** (see [agents.md](agents.md)). It opens a `type:incident` issue, follows the matching runbook in [runbooks/](runbooks/), and either rolls back to the last known-good release or opens a fix PR with a regression test. Fix PRs go through the normal review above.
+Production alerts wake the **on-call agent** (see [agents.md](agents.md)). It opens a `type:incident` issue, follows the matching runbook in [runbooks/](runbooks/), and either rolls back to the last known-good release or opens a fix PR with a regression test. Fix PRs go through the normal review and merge above (merging deploys the fix to dev); getting the fix to prod is a prod deploy, so Yacine approves it. A rollback to a known-good tag needs no approval.
