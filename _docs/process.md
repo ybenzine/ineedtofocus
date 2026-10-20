@@ -56,7 +56,7 @@ Milestones (`M1`–`M5`) are the schedule; work the current milestone first, `P0
 ### 4. Review
 - The **reviewer agent** reads the issue and the PR and posts a review with one line per AC: ✅ met / ❌ not met (why) / ➖ not applicable (why), plus the definition-of-done checks and numbered findings.
 - The review ends with `**Verdict: Approve**` or `**Verdict: Request changes**`. **That line is the merge signal.** All agents act through one GitHub account, which also authors the PRs, and GitHub doesn't let an author approve their own PR — so reviews are posted as comments and the verdict line decides.
-- On Request changes, the author fixes each numbered point and the reviewer reviews again; loop until Approve.
+- On Request changes, the author fixes each numbered point and the reviewer reviews again, for at most three rounds; after that it's a [human gate](#human-gates) (repeated failure).
 - CI must be green. Branch protection (#5) requires passing status checks, not an approving review, for the same reason.
 
 ### 5. Merge
@@ -78,16 +78,18 @@ Milestones (`M1`–`M5`) are the schedule; work the current milestone first, `P0
 
 ## Human gates
 
-Agents stop and ask Yacine (`⛔ Needs Yacine: <exact ask, options, recommendation>` on the issue) **only** for these. Everything else — picking work, deciding within agreed scope, reviewing, merging, accepting — the team does on its own, and it keeps working on other unblocked issues while it waits.
+Agents stop and ask Yacine **only** for these: they comment `⛔ Needs Yacine: <exact ask, options, recommendation>` on the issue and add the **`needs-yacine`** label. Yacine answers on the issue and removes the label; that's the signal to resume. Everything else — picking work, deciding within agreed scope, reviewing, merging, accepting — the team does on its own, and it keeps working on other unblocked issues while it waits.
 
 | Gate | Examples |
 |---|---|
-| **Production deploys** | Approving the prod deploy workflow run. Exception: the on-call agent may roll prod back to the last known-good tag without approval |
+| **Production deploys** | Approving the prod deploy workflow run. Exception: the on-call agent may roll prod back to the last known-good tag without approval. The gate is enforced by credentials, not trust: see below |
 | **`owner:human` tasks** | DigitalOcean, Route 53, Grafana Cloud, GitHub secrets/environments, API keys |
 | **Product decisions beyond agreed scope** | Changing or cutting a requirement in `product_decisions.md`, changing the MVP cut order, adding a feature |
 | **Cost** | Anything that spends money (bigger Droplet, paid services) |
 | **Irreversible actions** | Deleting data, servers or repos; force-pushing; rewriting history; destroying volumes |
-| **Repeated failure** | The same PR fails review three rounds in a row, or CI can't be made green — stop and report instead of looping |
+| **Repeated failure** | The same PR fails review three rounds in a row, or CI is still red after three fix attempts — stop and report instead of looping |
+
+**Why agents can merge workflow changes safely:** prod credentials (the prod SSH deploy key and prod secrets) exist **only** as secrets of the GitHub `production` environment, which requires Yacine's approval for every job that uses it. The dev deploy key is restricted on the server (SSH forced command) to deploying and rolling back dev, and the rollback key to rolling back to a recorded known-good tag. A workflow edit merged by an agent therefore can't reach prod without that approval. Set up in #28–#30.
 
 ## Definition of done
 

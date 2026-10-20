@@ -29,7 +29,7 @@ Follow `_docs/process.md`; the tracker comments below are the exact templates.
    > ✅ **backend agent — done** in #<pr>. <anything notable or follow-ups>.
    On "Request changes", fix each numbered point, push, and stop again.
 
-**Blocked?** Comment `⛔ Blocked by #<n>` or `⛔ Needs Yacine: <exact ask>` and leave the card in Todo.
+**Blocked?** Comment `⛔ Blocked by #<n>`, or `⛔ Needs Yacine: <exact ask>` plus the `needs-yacine` label (only for the human gates in `_docs/process.md`), and leave the card in Todo.
 
 ## Rules
 - Every query is scoped to the signed-in user.

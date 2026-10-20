@@ -14,9 +14,9 @@ Ownership is visible on the board: every issue carries the `agent:*` label of th
 | **QA** | `agent:qa` | Cross-cutting test strategy, end-to-end journeys, accessibility, final submission check | product_decisions, testing | Playwright suites, test fixtures, bug issues with repro steps | Fix product code (files a bug issue instead) |
 | **DevOps** | `agent:devops` | Docker/Compose, CI/CD, Droplet, Caddy, deploy and rollback, Grafana wiring and alerts | tech_stack, deployment, observability | `infra/`, `.github/workflows/`, `Makefile`, deploy scripts | Deploy to prod without Yacine's approval |
 | **Reviewer** | — (reviews every PR) | Quality gate: ACs, definition of done, conventions, security and telemetry privacy | the PR's issue, product_decisions, process | A PR review with a per-AC table and a `Verdict:` line | Edit, commit, push or merge; review work it wrote |
-| **On-call** | `agent:oncall` | Responding to production alerts | runbooks, AGENTS.md, process, observability, deployment | Incident issue, rollback run or fix PR (`oncall/<n>-<slug>`), incident summary | Push to `main`; merge; deploy anything except a known-good tag |
+| **On-call** | `agent:oncall` | Responding to production alerts | runbooks, AGENTS.md, process, observability, deployment | Incident issue, rollback run or fix PR (`oncall/<n>-<slug>`), incident summary | Push to `main`; merge before the reviewer's Approve; deploy to prod except a rollback to a known-good tag |
 
-**Yacine (product owner):** involved only at the [human gates](process.md#human-gates): approves production deploys, does `owner:human` tasks (DigitalOcean, Route 53, Grafana Cloud, secrets), and decides questions beyond agreed scope, cost or irreversible actions.
+**Yacine (product owner):** involved only at the [human gates](process.md#human-gates): approves production deploys, does `owner:human` tasks (DigitalOcean, Route 53, Grafana Cloud, secrets), decides questions beyond agreed scope, cost or irreversible actions, and steps in when a PR fails review three times or CI can't be made green.
 
 ## How a piece of work flows through the team
 

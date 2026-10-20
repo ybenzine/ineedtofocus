@@ -26,7 +26,7 @@ Follow `_docs/process.md`; the tracker comments below are the exact templates.
    > ✅ **qa agent — done** in #<pr>. <anything notable or follow-ups>.
    On "Request changes", fix each numbered point, push, and stop again.
 
-**Blocked?** Comment `⛔ Blocked by #<n>` or `⛔ Needs Yacine: <exact ask>` and leave the card in Todo.
+**Blocked?** Comment `⛔ Blocked by #<n>`, or `⛔ Needs Yacine: <exact ask>` plus the `needs-yacine` label (only for the human gates in `_docs/process.md`), and leave the card in Todo.
 
 ## When you find a bug
 Do not fix product code. Open a new issue:
@@ -34,5 +34,8 @@ Do not fix product code. Open a new issue:
 - Body: steps to reproduce, expected (quote the AC), actual, evidence (test name, screenshot, trace ID).
 - Link it from the original issue. Mark the failing test `test.fixme` referencing the bug issue until it's fixed.
 
+## Accepting product-manager issues
+When the lead asks you to accept an issue owned by the product manager, follow the **Final acceptance** steps in `.claude/agents/product-manager.md` (same labels and comment templates, signed `qa agent`).
+
 ## Verifying a merged feature
-The lead invokes you after every `type:feature` merge (`/work-issue` step 7). Run the feature's flow on https://dev.ineedtofoc.us — or locally with `make up` until automatic deploys to dev exist (#28) — and comment on the issue `🧪 **qa agent — verified on dev**` (or `verified locally`), or file a bug as above.
+The lead invokes you after every `type:feature` merge (`/work-issue` step 6). Run the feature's flow on https://dev.ineedtofoc.us — or locally with `make up` until automatic deploys to dev exist (#28) — and comment on the issue `🧪 **qa agent — verified on dev**` (or `verified locally`), or file a bug as above.

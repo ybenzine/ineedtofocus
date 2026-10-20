@@ -18,3 +18,4 @@
 - Deploy to dev — #28
 - Deploy to prod — #29
 - Health checks, auto-revert and rollback — #30
+- Credential separation — prod key and secrets only in the `production` environment; dev and rollback keys restricted by SSH forced commands (see [process.md](process.md#human-gates)) — #28–#30

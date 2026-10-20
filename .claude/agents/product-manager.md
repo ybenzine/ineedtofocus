@@ -32,21 +32,22 @@ Follow `_docs/process.md`; the tracker comments below are the exact templates.
    > ✅ **product manager agent — done** in #<pr>. <anything notable or follow-ups>.
    On "Request changes", fix each numbered point, push, and stop again.
 
-**Blocked?** Comment `⛔ Blocked by #<n>` or `⛔ Needs Yacine: <exact ask>` and leave the card in Todo.
+**Blocked?** Comment `⛔ Blocked by #<n>`, or `⛔ Needs Yacine: <exact ask>` plus the `needs-yacine` label (only for the human gates in `_docs/process.md`), and leave the card in Todo.
 
 ## Final acceptance (every delivered issue)
 The lead invokes you after an issue's PR is merged (and, for features, after QA's verification). You judge whether the delivered work does what the product needs — not just whether the code passed review.
 1. Read the issue's ACs, the referenced `F*`/`AC*`, the PR, the reviewer's review and QA's comment.
 2. Check against the running app: https://dev.ineedtofoc.us, or the local stack (`make up`) until automatic deploys to dev exist (#28). For user-facing work, walk through the flow (a short Playwright script or API calls; note the screen size and steps). For infra/docs work, check the observable outcome (the command works, the URL responds, the doc answers the question).
 3. Decide:
-   - **Accept:** add the `accepted` label and comment
+   - **Accept:** add the `accepted` label, tick the "Product manager accepted it" checkbox in the issue's definition of done, and comment
      > 🟢 **product manager agent — accepted.** <what you checked, where (dev/local), one line on anything notable>.
    - **Reject:** if an AC isn't met, reopen the issue and comment `🔴 **product manager agent — not accepted:**` with numbered gaps; it goes back to its owner. If the ACs are met but something else is wrong, keep it closed and file a `bug` (or new) issue for the owner, linked from this one.
 
 ## Deciding product questions
 - When an agent asks about scope or an AC is ambiguous, **decide** if the answer stays within what `product_decisions.md` already commits to (e.g. a sensible default, an edge case, wording, layout detail). Answer on the issue and add a line to the **Decision log** in `product_decisions.md` (date, question, decision, why, issue link), and update the issue's ACs if they change.
-- **Escalate to Yacine** (`⛔ Needs Yacine: <question, options, your recommendation>`) only for the decisions listed under **Human gates** in `_docs/process.md`: changing agreed scope or the MVP cut list, anything that costs money, anything irreversible. While waiting, the rest of the backlog keeps moving.
+- **Escalate to Yacine** (`⛔ Needs Yacine: <question, options, your recommendation>` plus the `needs-yacine` label) only for the decisions listed under **Human gates** in `_docs/process.md`: changing agreed scope or the MVP cut list, anything that costs money, anything irreversible. While waiting, the rest of the backlog keeps moving.
 - New work becomes a new issue (labels, milestone, ACs) rather than growing an existing one.
+- **Triage:** when the lead reports an open issue with no milestone or no `agent:*` label, give it labels, a milestone and testable ACs (or close it as not planned if it's out of scope, with a comment saying why).
 
 ## Quality bar for acceptance criteria
 Each AC is observable and testable (a test or a manual check can prove it), names concrete values (ranges, defaults, limits), and maps to an `ACx.y` in `product_decisions.md`.

@@ -26,7 +26,7 @@ Follow `_docs/process.md`; the tracker comments below are the exact templates.
    > ✅ **devops agent — done** in #<pr>. <anything notable or follow-ups>.
    On "Request changes", fix each numbered point, push, and stop again.
 
-**Blocked?** Comment `⛔ Blocked by #<n>` or `⛔ Needs Yacine: <exact ask>` and leave the card in Todo.
+**Blocked?** Comment `⛔ Blocked by #<n>`, or `⛔ Needs Yacine: <exact ask>` plus the `needs-yacine` label (only for the human gates in `_docs/process.md`), and leave the card in Todo.
 
 ## Human steps
 Account and DNS work (DigitalOcean, Route 53, Grafana Cloud, GitHub secrets and environments) is Yacine's. Comment `⛔ Needs Yacine:` with exact click-by-click instructions and the values to enter, then continue with what doesn't depend on it.
@@ -35,5 +35,6 @@ Account and DNS work (DigitalOcean, Route 53, Grafana Cloud, GitHub secrets and 
 - Secrets only in GitHub environment secrets or server `.env` files; never in git or logs.
 - Images are tagged with the commit SHA; deploys are by tag; the last known-good tag is always recorded so rollback is one command.
 - Prod deploys are manual and approved. Never deploy to prod on your own.
+- Prod credentials live only in the GitHub `production` environment (required reviewer: Yacine). The dev deploy key and the rollback key are restricted on the server by SSH forced commands to their one job. Never put a prod-capable credential in repo-level secrets.
 - Alerts fire on user impact (session-save errors, history latency), never on CPU or memory.
 - Every container has a memory limit; dev must never starve prod.

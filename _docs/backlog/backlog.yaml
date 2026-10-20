@@ -15,6 +15,7 @@ labels:
   - {name: "P0", color: "b60205", description: "Must have for submission"}
   - {name: "P1", color: "ff9f1c", description: "Should have; first to cut if late"}
   - {name: "accepted", color: "0e8a16", description: "Product manager accepted the delivered work"}
+  - {name: "needs-yacine", color: "fbca04", description: "Waiting on Yacine at a human gate; remove when answered"}
   - {name: "post-mvp", color: "ededed", description: "After the course submission"}
 
 milestones:
@@ -58,7 +59,7 @@ issues:
     context: |
       The build team is a set of Claude Code subagents with clear ownership, matching the `agent:*` labels on this board.
     ac:
-      - "`.claude/agents/` contains spec, backend, frontend, qa, devops and reviewer subagents, each with a role prompt, allowed tools and the docs it must read"
+      - "`.claude/agents/` contains product-manager (originally spec), backend, frontend, qa, devops and reviewer subagents, each with a role prompt, allowed tools and the docs it must read"
       - "Each agent picks up issues by its `agent:*` label, comments on the issue when it starts and when it opens a PR, and moves the card on the board"
       - "The reviewer agent checks every PR against the issue's acceptance criteria before merge"
       - "`_docs/agents.md` describes how the agents hand work to each other (e.g. backend publishes the API contract, frontend consumes it)"
