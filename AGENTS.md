@@ -54,6 +54,7 @@ All entry points go through `make` (introduced by #1):
 - **Work only from an issue.** One issue per branch and per PR. Branch: `<agent>/<issue>-<slug>`, e.g. `backend/10-sessions-api`.
 - **Commits:** Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`, `ci:`), referencing the issue (`Refs #10`).
 - **Never push to `main`.** Everything lands through a squash-merged PR that says `Closes #<n>`.
+- **Run git from the repo root** (`cd` into the repo), not `git -C <path>` — the permission rules in `.claude/settings.json` only recognise the plain form.
 - **Acceptance criteria are the contract.** If an AC is wrong, missing or ambiguous, ask the product manager agent on the issue — it decides or escalates — don't silently change scope.
 - **Python:** 3.12, type hints everywhere, `ruff` + `mypy`, `pytest`. **TypeScript:** `strict`, ESLint + Prettier, Vitest.
 - **Time:** store UTC in the database; convert to the user's time zone only for display and history grouping.
