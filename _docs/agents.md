@@ -63,8 +63,42 @@ sequenceDiagram
 
 **Contract-first rule:** when a frontend issue depends on an endpoint, the backend PR that defines it merges first. If the frontend must start earlier, the backend agent posts the planned schema on the frontend issue and both build against that.
 
+## Subagent definitions
+
+Each agent is a Claude Code subagent: a role prompt, the tools it may use, and the docs it must read before working.
+
+| Agent | Definition | Tools |
+|---|---|---|
+| Spec | [`.claude/agents/spec.md`](../.claude/agents/spec.md) | Read, Write, Edit, Glob, Grep, Bash, WebSearch, WebFetch |
+| Backend | [`.claude/agents/backend.md`](../.claude/agents/backend.md) | Read, Write, Edit, Glob, Grep, Bash |
+| Frontend | [`.claude/agents/frontend.md`](../.claude/agents/frontend.md) | Read, Write, Edit, Glob, Grep, Bash |
+| QA | [`.claude/agents/qa.md`](../.claude/agents/qa.md) | Read, Write, Edit, Glob, Grep, Bash |
+| DevOps | [`.claude/agents/devops.md`](../.claude/agents/devops.md) | Read, Write, Edit, Glob, Grep, Bash |
+| Reviewer | [`.claude/agents/reviewer.md`](../.claude/agents/reviewer.md) | Read, Glob, Grep, Bash — **no Write/Edit**, so it cannot change the code it reviews |
+| On-call | [`.claude/agents/oncall.md`](../.claude/agents/oncall.md) | Read, Write, Edit, Glob, Grep, Bash — run headless by the alert workflow (#35) |
+
 ## Orchestration
 
-A main Claude Code session acts as the **lead**: it reads the board, picks the next issue in the current milestone, and delegates it to the subagent matching the issue's `agent:*` label. Independent issues (e.g. a backend API and an unrelated DevOps task) can run in parallel; dependent ones run in order. After each PR the lead invokes the **reviewer** subagent on it before merging.
+A main Claude Code session acts as the **lead**. The `/work-issue <n>` command ([`.claude/commands/work-issue.md`](../.claude/commands/work-issue.md)) runs the loop for one issue:
 
-Every step leaves a trace in the tracker (start comment, PR link, review, closing comment, card status), so the board is the record of what each agent did.
+1. Read the issue; check its dependencies and whether it needs Yacine (`owner:human`).
+2. Delegate it to the subagent named by its `agent:*` label.
+3. That subagent posts the start comment, moves the card, branches, implements, tests and opens the PR.
+4. The lead runs the **reviewer** subagent on the PR; changes go back to the author until the reviewer approves.
+5. Merge (Yacine approves first for workflow and production-infra PRs); the author ticks the issue's checkboxes and posts the done comment.
+
+Independent issues (e.g. a backend API and an unrelated DevOps task) can run in parallel; dependent ones run in order.
+
+## Tracker trail
+
+Every step leaves a trace on the issue and the board, so the board is the record of what each agent did:
+
+| Step | Trace | How |
+|---|---|---|
+| Start | `🟡 <agent> agent — started` comment; card → In progress | `gh issue comment`; `scripts/board-status.sh <n> "In progress"` |
+| PR opened | `🔵 <agent> agent — PR open: #<pr>` comment; card → In review | `gh pr create`; `scripts/board-status.sh <n> "In review"` |
+| Review | PR review with a per-AC verdict | `gh pr review` (reviewer subagent) |
+| Done | Issue checkboxes ticked; `✅ <agent> agent — done` comment; card → Done | `gh issue edit`; board workflow on close |
+| Blocked | `⛔ Blocked by #<n>` / `⛔ Needs Yacine:` comment | `gh issue comment` |
+
+Board workflows (project settings) also move cards automatically: added → Todo, closed or merged → Done. The script needs a `gh` token with the `project` scope: `gh auth refresh -s project`.
