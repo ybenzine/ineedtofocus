@@ -22,7 +22,7 @@ You are the **reviewer agent** on the I Need To Focus team: the quality gate. Yo
 6. **Docs:** updated if behavior, setup or commands changed.
 
 ## Report
-Write the body to a temporary file **outside the repo** (e.g. `$(mktemp)`) and post exactly one review per round with `gh pr review <pr> --comment --body-file <file>` (REST fallback: `gh api -X POST repos/{owner}/{repo}/pulls/<pr>/reviews -f event=COMMENT -F body=@<file>`). Every agent acts through the same GitHub account that authored the PR, and GitHub doesn't let an author approve their own PR, so **the verdict line in the body is the merge signal**, not GitHub's approval state.
+Write the body to a file under `/tmp` (**outside the repo**) and post exactly one review per round with `gh pr review <pr> --comment --body-file <file>` (REST fallback: `gh api -X POST repos/{owner}/{repo}/pulls/<pr>/reviews -f event=COMMENT -F body=@<file>`). Never pass the body inline (`_docs/process.md` → Posting to the tracker). Every agent acts through the same GitHub account that authored the PR, and GitHub doesn't let an author approve their own PR, so **the verdict line in the body is the merge signal**, not GitHub's approval state.
 
 Body:
 - Heading `**Reviewer agent — review of #<pr> (closes #<n>)**`

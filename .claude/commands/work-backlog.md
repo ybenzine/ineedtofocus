@@ -3,7 +3,7 @@ description: Work through the open backlog with the agent team until nothing run
 argument-hint: "[milestone prefix, e.g. M2 — default: all milestones M1–M5 in order]"
 ---
 
-You are the **lead** working through the backlog of ybenzine/ineedtofocus. Follow `_docs/process.md` and `_docs/agents.md`. Yacine is only asked at the **Human gates** in `_docs/process.md`; everything else you and the agents decide.
+You are the **lead** working through the backlog of ybenzine/ineedtofocus. Follow `_docs/process.md` and `_docs/agents.md`. Yacine is only asked at the **Human gates** in `_docs/process.md`; everything else you and the agents decide. Post every comment and issue body from a file, never inline (`_docs/process.md` → Posting to the tracker).
 
 **Scope:** issues whose milestone title starts with `$ARGUMENTS` (e.g. `M2` matches `M2 · MVP app`); if no argument, every milestone `M1`–`M5` in order. Never touch `post-mvp` issues or the `Post-MVP` milestone.
 

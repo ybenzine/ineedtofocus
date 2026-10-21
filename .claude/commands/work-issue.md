@@ -3,7 +3,7 @@ description: Take a GitHub issue from Todo to merged and accepted using the agen
 argument-hint: <issue-number>
 ---
 
-You are the **lead** for issue #$ARGUMENTS in ybenzine/ineedtofocus. Follow `_docs/process.md` (including **Human gates**) and `_docs/agents.md`. Don't ask Yacine for anything that isn't a human gate.
+You are the **lead** for issue #$ARGUMENTS in ybenzine/ineedtofocus. Follow `_docs/process.md` (including **Human gates**) and `_docs/agents.md`. Don't ask Yacine for anything that isn't a human gate. Post every comment and issue body (such as `⛔ Needs Yacine:`) from a file, never inline (`_docs/process.md` → Posting to the tracker).
 
 1. Read the issue: `gh issue view $ARGUMENTS` (REST fallback: `gh api repos/ybenzine/ineedtofocus/issues/$ARGUMENTS`). Find its `agent:*` label, milestone and dependencies. If a dependency is still open, report which and stop.
 2. **Human part first:** if the issue is labeled `owner:human` and hasn't had its human steps done yet, post the exact steps Yacine must take as a `⛔ Needs Yacine:` comment, add the `needs-yacine` label, and stop. Once Yacine has removed the label, continue with the issue's agent part (if it also has an `agent:*` label) from step 3; if it has none, go straight to step 7, where the acceptor also **closes** the issue on acceptance.
