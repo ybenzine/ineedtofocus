@@ -1,0 +1,37 @@
+# Local development stack: `make up` (or plain `docker compose up -d`) from the repo root.
+#
+# Scaffold from #1: Postgres + the local observability stack (grafana/otel-lgtm).
+# #4 completes it: the app service (image built from the backend + frontend),
+# health checks, the app waiting for a healthy database, and telemetry wiring.
+#
+# Values come from `.env` (copy `.env.example`); the defaults below are
+# local-only development values, never used on a server.
+# Production and dev Compose files live in infra/ (#27).
+
+name: focus-local
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-focus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-focus}
+      POSTGRES_DB: ${POSTGRES_DB:-focus}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    mem_limit: 512m
+    restart: unless-stopped
+
+  lgtm:
+    image: grafana/otel-lgtm:0.37.0
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000" # Grafana UI
+      - "127.0.0.1:${OTLP_GRPC_PORT:-4317}:4317" # OTLP gRPC
+      - "127.0.0.1:${OTLP_HTTP_PORT:-4318}:4318" # OTLP HTTP
+    mem_limit: 2g
+    restart: unless-stopped
+
+volumes:
+  db-data:

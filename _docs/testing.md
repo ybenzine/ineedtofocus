@@ -4,7 +4,16 @@
 
 ## One command
 
-`make test` runs everything below, locally and in CI.
+`make test` runs everything below, locally and in CI. `make lint` runs the linters and type checks.
+
+| Command | Runs |
+|---|---|
+| `make test-backend` | `uv run pytest` in `backend/` (unit + integration) |
+| `make test-frontend` | `vitest run` in `frontend/` |
+| `make lint-backend` | `ruff check`, `ruff format --check`, `mypy` (strict) |
+| `make lint-frontend` | `eslint`, `prettier --check`, `tsc -b` (strict) |
+
+Playwright end-to-end tests join `make test` with #23.
 
 ## Layers
 
