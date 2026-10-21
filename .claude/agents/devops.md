@@ -36,6 +36,6 @@ Account and DNS work (DigitalOcean, Route 53, Grafana Cloud, GitHub secrets and 
 - Secrets only in GitHub environment secrets or server `.env` files; never in git or logs.
 - Images are tagged with the commit SHA; deploys are by tag; the last known-good tag is always recorded so rollback is one command.
 - Prod deploys are manual and approved. Never deploy to prod on your own.
-- Credentials live only in GitHub environments, never at repo level: `production` (prod deploy key and secrets; required reviewer Yacine), `dev` (dev deploy key, forced command: deploy/roll back dev), `rollback` (prod rollback key, forced command: restore a recorded known-good tag only; `main` branch only). See `_docs/process.md` → Human gates.
+- Credentials live only in GitHub environments, never at repo level: `production` (prod deploy key and secrets; required reviewer Yacine), `dev` (dev deploy key, forced command: deploy/roll back dev), `rollback` (prod rollback key, forced command: restore a recorded known-good tag only; `main` branch only), `oncall` (Claude API key and read-only Grafana token for the on-call workflow, #35; no reviewer; `main` branch only). The Grafana Cloud OTLP token (#32) lives only in the server's per-environment `.env` files, read by the collector. See `_docs/process.md` → Human gates.
 - Alerts fire on user impact (session-save errors, history latency), never on CPU or memory.
 - Every container has a memory limit; dev must never starve prod.

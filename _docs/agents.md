@@ -60,7 +60,7 @@ sequenceDiagram
 | Backend/DevOps → On-call | Signals, dashboards, alert rules, runbooks | `observability.md`, `runbooks/` |
 | On-call → Backend/Frontend | Regression found in production that a rollback didn't settle | Incident issue + fix PR or follow-up issue |
 | Anyone → Product manager | A missing, wrong or ambiguous acceptance criterion | Comment on the issue; the product manager decides (within scope) or escalates, and updates the doc and the issue |
-| QA → Product manager | Feature verified on dev | `🧪 verified` comment; then the product manager runs final acceptance |
+| QA → Product manager | Feature verified on dev | `🧪 verified` comment; then the product manager runs final acceptance (for the product manager's own issues, QA gives the acceptance instead) |
 | Anyone → Yacine | A human gate (see process.md) | `⛔ Needs Yacine:` comment with exact instructions + `needs-yacine` label; Yacine answers and removes the label |
 
 **Contract-first rule:** when a frontend issue depends on an endpoint, the backend PR that defines it merges first. If the frontend must start earlier, the backend agent posts the planned schema on the frontend issue and both build against that.
@@ -94,8 +94,8 @@ Each agent's model and effort level are set in its `.claude/agents/*.md` frontma
 | Frontend | Sonnet 5.5 | default (high) | Largest share of issues |
 | QA | Sonnet 5.5 | default (high) | Well-specified test writing and running |
 
-- **Lead session:** start Claude Code with `/model opus` and medium effort before `/work-backlog`; subagents with `model:` set use their own model regardless.
-- **Opus overrides:** `/work-issue` runs **#11** (history grouping by time zone and week start), **#13** (timer engine) and **#19** (offline sync without duplicates) on Opus — the trickiest logic in the app — without changing the agents' defaults.
+- **Lead session:** start Claude Code with `/model opus` and `/effort medium` before `/work-backlog`. Subagents use the `model:` and `effort:` in their frontmatter unless the lead passes a per-invocation model override, which takes precedence.
+- **Opus overrides:** `/work-issue` runs **#11** (history grouping by time zone and week start), **#13** (timer engine) and **#19** (offline sync without duplicates) on Opus — the trickiest logic in the app — without changing the agents' defaults. These runs use Opus's default effort.
 - **Fable 5.1 retry:** after three failed review rounds, the author gets one retry on Fable 5.1 before the repeated-failure gate. Not used otherwise (2.5× Opus's price, slower).
 - **Haiku 5.5:** not assigned; no agent does simple, high-volume work.
 - **Subscription limits:** Yacine runs Claude Code on a subscription, where Opus uses limits faster. If a run hits limits, move the lead to Sonnet first (`/model sonnet`); keep the reviewer on Opus.
@@ -108,7 +108,7 @@ A main Claude Code session acts as the **lead**. The `/work-issue <n>` command (
 1. Read the issue; check its dependencies and whether it needs Yacine (`owner:human`).
 2. Delegate it to the subagent named by its `agent:*` label.
 3. That subagent posts the start comment, moves the card, branches, implements, tests, opens the PR, posts the PR-open comment, and stops.
-4. The lead runs the **reviewer** subagent on the PR; on `Verdict: Request changes` the findings go back to the author, until `Verdict: Approve`.
+4. The lead runs the **reviewer** subagent on the PR; on `Verdict: Request changes` the findings go back to the author, until `Verdict: Approve`. After three rounds without Approve the author gets one retry on Fable 5.1 (see [Models](#models)); if that fails too, it's the repeated-failure [human gate](process.md#human-gates).
 5. With CI green, the lead re-invokes the author to squash-merge, tick the issue's checkboxes and post the done comment.
 6. For `type:feature` issues, the lead invokes **QA** to verify the feature on dev.
 7. The lead invokes the **product manager** for final acceptance (or **QA** for the product manager's own issues): `accepted` label, or the issue is reopened with gaps.
@@ -127,7 +127,7 @@ Every step leaves a trace on the issue and the board, so the board is the record
 | PR opened | `🔵 <agent> agent — PR open: #<pr>` comment; card → In review | `gh pr create`; `scripts/board-status.sh <n> "In review"` |
 | Review | PR review with a per-AC table ending in `Verdict: Approve` / `Verdict: Request changes` | `gh pr review --comment` (reviewer subagent) |
 | Verified | `🧪 qa agent — verified on dev` comment, or a `bug` issue | `gh issue comment` / `gh issue create` (QA subagent) |
-| Accepted | `accepted` label + `🟢 product manager agent — accepted` comment, or issue reopened with `🔴 not accepted` | `gh issue edit --add-label accepted` (product manager subagent) |
+| Accepted | `accepted` label + `🟢 product manager agent — accepted` comment, or issue reopened with `🔴 not accepted` (QA posts the acceptance on the product manager's own issues) | `gh issue edit --add-label accepted` (product manager subagent; QA subagent for the product manager's own issues) |
 | Done | Issue checkboxes ticked; `✅ <agent> agent — done` comment; card → Done | `gh issue edit`; board workflow on close |
 | Blocked | `⛔ Blocked by #<n>` comment, or `⛔ Needs Yacine:` comment + `needs-yacine` label | `gh issue comment`; `gh issue edit --add-label needs-yacine` |
 
