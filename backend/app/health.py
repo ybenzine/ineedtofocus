@@ -1,10 +1,12 @@
 """Liveness and readiness probes."""
 
+from typing import Any
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.errors import error_body
+from app.errors import ErrorResponse, error_body
 
 router = APIRouter(tags=["health"])
 
@@ -19,7 +21,12 @@ async def healthz() -> Status:
     return Status(status="ok")
 
 
-@router.get("/readyz", response_model=Status, responses={503: {"description": "Database down"}})
+_DOWN: dict[int | str, dict[str, Any]] = {
+    503: {"model": ErrorResponse, "description": "Database down"}
+}
+
+
+@router.get("/readyz", response_model=Status, responses=_DOWN)
 async def readyz(request: Request) -> Status | JSONResponse:
     """Ready when the database answers."""
     if await request.app.state.readiness_check():

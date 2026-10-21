@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from app import __version__
 from app.config import Settings, get_settings
 from app.db import ReadinessCheck, create_engine, database_check
-from app.errors import register_error_handlers
+from app.errors import fix_openapi, register_error_handlers
 from app.health import router as health_router
 from app.logging_config import configure_logging
 from app.web import mount_frontend
@@ -35,8 +35,8 @@ def create_app(
         engine, settings.readiness_timeout_seconds
     )
     register_error_handlers(app)
+    fix_openapi(app)
     app.include_router(health_router)
-    # Registered last: the catch-all must not shadow API routes.
     mount_frontend(app, settings.frontend_dist)
     return app
 

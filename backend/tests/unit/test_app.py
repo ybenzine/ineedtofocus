@@ -35,6 +35,21 @@ def make_app(tmp_path: Path, ready: bool = True, dist: bool = False) -> FastAPI:
     class Body(BaseModel):
         minutes: int = Field(ge=1, le=240)
 
+    class Strict(BaseModel):
+        model_config = {"extra": "forbid"}
+        name: str
+
+    class Tags(BaseModel):
+        tags: dict[str, int]
+
+    @app.post("/api/_strict")
+    async def strict(body: Strict) -> Strict:
+        return body
+
+    @app.post("/api/_tags")
+    async def tags(body: Tags) -> Tags:
+        return body
+
     @app.post("/api/_echo")
     async def echo(body: Body) -> Body:
         return body
@@ -152,3 +167,36 @@ def test_serves_frontend_with_spa_fallback(tmp_path: Path) -> None:
         assert r.status_code == 404
         assert r.json()["error"]["code"] == "not_found"
         assert "spa" in c.get("/..%2f..%2fetc/passwd").text  # no traversal out of dist
+
+
+def test_unknown_and_url_keys_are_not_echoed_in_422(client: TestClient) -> None:
+    secret = "https://youtube.com/watch?v=abc"
+    r = client.post("/api/_strict", json={"name": "x", secret: 1})
+    assert r.status_code == 422
+    assert "youtube" not in r.text
+    assert r.json()["error"]["details"][0]["field"] == "<unknown>"
+    r = client.post("/api/_tags", json={"tags": {secret: "nope"}})
+    assert r.status_code == 422
+    assert "youtube" not in r.text
+    assert r.json()["error"]["details"][0]["field"] == "tags.<key>"
+
+
+def test_routes_added_after_create_app_are_not_shadowed_by_spa(tmp_path: Path) -> None:
+    app = make_app(tmp_path, dist=True)
+
+    @app.get("/late")
+    async def late() -> dict[str, str]:
+        return {"late": "yes"}
+
+    with TestClient(app) as c:
+        assert c.get("/late").json() == {"late": "yes"}
+        assert "spa" in c.get("/other").text
+
+
+def test_openapi_describes_error_envelope(client: TestClient) -> None:
+    schema = client.get("/openapi.json").json()
+    resp = schema["paths"]["/api/_echo"]["post"]["responses"]["422"]
+    assert resp["content"]["application/json"]["schema"]["$ref"].endswith("/ErrorResponse")
+    assert "HTTPValidationError" not in schema["components"]["schemas"]
+    ready = schema["paths"]["/readyz"]["get"]["responses"]["503"]
+    assert ready["content"]["application/json"]["schema"]["$ref"].endswith("/ErrorResponse")
