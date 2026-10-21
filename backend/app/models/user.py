@@ -36,7 +36,7 @@ class User(Base):
 
 
 class UserSettings(Base):
-    """One row per user (F12). Defaults match the product decisions."""
+    """One row per user (F12); the column set and defaults are our reading of F12."""
 
     __tablename__ = "user_settings"
     __table_args__ = (

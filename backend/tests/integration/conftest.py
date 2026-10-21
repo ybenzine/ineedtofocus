@@ -8,6 +8,7 @@ compose `db` by default), dropped afterwards, so tests never touch the dev datab
 import asyncio
 import uuid
 from collections.abc import Coroutine, Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -17,6 +18,8 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import Settings
+
+BACKEND = Path(__file__).resolve().parents[2]
 
 
 def run[T](coro: Coroutine[Any, Any, T]) -> T:
@@ -57,7 +60,7 @@ def test_db_url(server_url: URL) -> Iterator[str]:
 
 @pytest.fixture
 def alembic_config(test_db_url: str) -> Config:
-    cfg = Config("alembic.ini")
-    cfg.set_main_option("script_location", "migrations")
+    cfg = Config(str(BACKEND / "alembic.ini"))
+    cfg.set_main_option("script_location", str(BACKEND / "migrations"))
     cfg.set_main_option("sqlalchemy.url", test_db_url.replace("%", "%%"))
     return cfg

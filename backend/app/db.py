@@ -10,7 +10,7 @@ ReadinessCheck = Callable[[], Awaitable[bool]]
 
 
 def create_engine(database_url: str) -> AsyncEngine:
-    return create_async_engine(database_url, pool_pre_ping=True)
+    return create_async_engine(database_url, pool_pre_ping=True, hide_parameters=True)
 
 
 def database_check(engine: AsyncEngine, timeout: float) -> ReadinessCheck:

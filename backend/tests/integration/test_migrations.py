@@ -1,5 +1,7 @@
 """Alembic migrations and schema constraints against a real, throwaway Postgres."""
 
+import logging
+import re
 import uuid
 from typing import Any
 
@@ -9,11 +11,14 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import Connection, inspect, text
+from sqlalchemy import CheckConstraint, Connection, DefaultClause, inspect, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.models import Base
+from app.db import create_engine
+from app.logging_config import JsonFormatter
+from app.models import MODES, STATUSES, TAGS, Base
+from app.models.enums import in_list
 from tests.integration.conftest import run
 
 pytestmark = pytest.mark.integration
@@ -77,14 +82,70 @@ def test_single_migration_head(alembic_config: Config) -> None:
     assert len(ScriptDirectory.from_config(alembic_config).get_heads()) == 1
 
 
+_QUOTED = re.compile(r"'([^']*)'")
+_NUMBER = re.compile(r"(?<![\w.])\d+(?![\w.])")
+
+
+def _tokens(sql: str) -> tuple[set[str], set[str]]:
+    """Quoted literals and bare numbers in a CHECK expression (spelling-independent)."""
+    return set(_QUOTED.findall(sql)), set(_NUMBER.findall(_QUOTED.sub("", sql)))
+
+
+def drift(conn: Connection) -> list[str]:
+    """Differences between the models and the migrated database.
+
+    Alembic's own diff (with server defaults) plus CHECK constraints, which Alembic does
+    not compare: names and the allowed-value/number sets must match the model.
+    """
+    problems = [
+        str(d)
+        for d in compare_metadata(
+            MigrationContext.configure(conn, opts={"compare_server_default": True}),
+            Base.metadata,
+        )
+    ]
+    insp = inspect(conn)
+    for table in Base.metadata.sorted_tables:
+        in_db = {str(c["name"]): c["sqltext"] for c in insp.get_check_constraints(table.name)}
+        in_model = {
+            str(c.name): str(c.sqltext) for c in table.constraints if isinstance(c, CheckConstraint)
+        }
+        if set(in_db) != set(in_model):
+            names = sorted(set(in_db) ^ set(in_model))
+            problems.append(f"{table.name}: CHECK names differ: {names}")
+        for name in in_db.keys() & in_model.keys():
+            if _tokens(in_db[name]) != _tokens(in_model[name]):
+                problems.append(f"{table.name}.{name}: CHECK differs: {in_db[name]}")
+    return problems
+
+
 def test_models_match_migrations(alembic_config: Config, test_db_url: str) -> None:
-    """No drift: autogenerate against the migrated database finds nothing to change."""
+    """No drift: columns, defaults, indexes and CHECK constraints all match."""
     command.upgrade(alembic_config, "head")
+    assert run(_with_conn(test_db_url, drift)) == []
 
-    def diff(conn: Connection) -> list[Any]:
-        return list(compare_metadata(MigrationContext.configure(conn), Base.metadata))
 
-    assert run(_with_conn(test_db_url, diff)) == []
+def test_drift_detects_changed_allowed_tags(
+    alembic_config: Config, test_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    command.upgrade(alembic_config, "head")
+    table = Base.metadata.tables["focus_sessions"]
+    check = next(
+        c for c in table.constraints if getattr(c, "name", None) == "ck_focus_sessions_tag"
+    )
+    monkeypatch.setattr(check, "sqltext", text(in_list("tag", (*TAGS, "gaming"))))
+    problems = run(_with_conn(test_db_url, drift))
+    assert any("ck_focus_sessions_tag" in p for p in problems)
+
+
+def test_drift_detects_changed_default(
+    alembic_config: Config, test_db_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    command.upgrade(alembic_config, "head")
+    column = Base.metadata.tables["user_settings"].c.alert_volume
+    monkeypatch.setattr(column, "server_default", DefaultClause(text("99")))
+    problems = run(_with_conn(test_db_url, drift))
+    assert any("alert_volume" in p for p in problems)
 
 
 # --- constraints ---------------------------------------------------------------
@@ -130,8 +191,12 @@ def _insert_session(url: str, **overrides: Any) -> None:
 
 
 def test_ac7_1_valid_session_is_accepted(db: str) -> None:
-    for tag in ("work", "study", "nap", "read", "meditation", "exercise"):
+    for tag in TAGS:
         _insert_session(db, tag=tag)
+    for mode in MODES:
+        _insert_session(db, mode=mode)
+    for status in STATUSES:
+        _insert_session(db, status=status)
     _insert_session(db, mode="pomodoro", status="ended_early", blocks_completed=2)
 
 
@@ -260,3 +325,40 @@ def test_ac_history_indexes_exist_and_are_used(db: str) -> None:
         return "\n".join(r[0] for r in rows)
 
     assert "ix_focus_sessions_user_started" in run(_with_conn(db, plan))
+
+
+def test_database_errors_do_not_leak_parameters(db: str) -> None:
+    """A logged duplicate-email IntegrityError must not contain the email (privacy)."""
+    email = "private.person@example.com"
+    sql = "INSERT INTO users (email, password_hash) VALUES (:e, 'x')"
+
+    async def attempt() -> BaseException:
+        engine = create_engine(db)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text(sql), {"e": email})
+            async with engine.begin() as conn:
+                await conn.execute(text(sql), {"e": email})
+        except IntegrityError as exc:
+            return exc
+        finally:
+            await engine.dispose()
+        raise AssertionError("expected IntegrityError")
+
+    exc = run(attempt())
+    # SQLAlchemy hides the statement parameters ...
+    assert email not in str(exc)
+    # ... and the Postgres DETAIL line (which quotes the row) is scrubbed by our log formatter.
+    record = logging.LogRecord(
+        "test",
+        logging.ERROR,
+        __file__,
+        1,
+        "db error: %s",
+        (exc,),
+        (type(exc), exc, exc.__traceback__),
+    )
+    logged = JsonFormatter().format(record)
+    assert email not in logged
+    assert email.split("@")[0] not in logged
+    assert "IntegrityError" in logged  # still useful for diagnosis
