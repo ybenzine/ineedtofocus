@@ -33,8 +33,11 @@ RUN groupadd --system --gid 10001 app \
     && useradd --system --uid 10001 --gid app --no-create-home app
 WORKDIR /app
 COPY --from=backend /app/.venv /app/.venv
+COPY backend/alembic.ini ./alembic.ini
+COPY backend/migrations ./migrations
 COPY backend/app ./app
 COPY --from=frontend /frontend/dist ./frontend/dist
+COPY --chmod=0755 infra/app/entrypoint.sh /usr/local/bin/app-entrypoint
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -42,6 +45,8 @@ ENV PATH=/app/.venv/bin:$PATH \
     OTEL_SERVICE_NAME=ineedtofocus
 USER 10001:10001
 EXPOSE 8000
+# Runs `alembic upgrade head` first; a failed migration stops the container (#4, #6).
+ENTRYPOINT ["app-entrypoint"]
 # `opentelemetry-instrument` sets up the tracer, meter and logger providers with OTLP
 # exporters (configured by the OTEL_* env vars) and ships Python logs; FastAPI's built-in
 # telemetry traces and meters requests through them (backend/app/telemetry.py).

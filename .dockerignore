@@ -3,7 +3,10 @@
 !backend/pyproject.toml
 !backend/uv.lock
 !backend/app/
+!backend/alembic.ini
+!backend/migrations/
 !frontend/
+!infra/app/entrypoint.sh
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/

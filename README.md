@@ -28,7 +28,7 @@ make up                 # build the app image, start everything, wait until heal
 | `db` | PostgreSQL 17; data in the named volume `db-data` | `localhost:5432`, user/password/db `focus` |
 | `lgtm` | Grafana with Tempo, Prometheus and Loki (`grafana/otel-lgtm`) | http://localhost:3000 (no login) · OTLP on 4317/4318 |
 
-- **Start order:** the app starts only once Postgres passes its health check (`pg_isready`). Compose then marks the app healthy when `GET /healthz` answers.
+- **Start order:** the app container starts only once Postgres passes its health check (`pg_isready`). It first applies the database migrations (`alembic upgrade head`), then starts the server, and Compose marks it healthy when `GET /healthz` answers. If a migration fails, the server doesn't start and `make up` fails: see `docker compose logs app`.
 - **Data:** `make down` stops the stack and keeps the database. To wipe it, run `docker compose down -v`, which deletes the volume.
 - **Telemetry:** the app runs under `opentelemetry-instrument` and sends traces (one per request, except `/healthz`), HTTP metrics and its JSON logs over OTLP to `lgtm`. In Grafana, open **Explore** and pick **Tempo**, **Prometheus** or **Loki**, filtering on service `ineedtofocus`. Query strings and cookies are stripped from traces.
 - **Check it:** `make check-stack` probes the health endpoints and the frontend. It then waits until Grafana has traces, metrics and logs from the app, and fails if a query string or cookie reached telemetry.

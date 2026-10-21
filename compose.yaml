@@ -4,8 +4,9 @@
 #   db    localhost:5432          Postgres, data in the named volume `db-data`
 #   lgtm  http://localhost:3000   Grafana + OTLP ingest (grafana/otel-lgtm)
 #
-# The app starts once the database is healthy and sends traces, metrics and logs
-# over OTLP to `lgtm`. All ports are published on 127.0.0.1 only.
+# The app starts once the database is healthy, applies the migrations
+# (`alembic upgrade head`, image entrypoint), then serves and sends traces, metrics
+# and logs over OTLP to `lgtm`. All ports are published on 127.0.0.1 only.
 #
 # Values come from `.env` (copy `.env.example`); the defaults below are
 # local-only development values, never used on a server.
