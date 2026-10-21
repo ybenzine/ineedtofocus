@@ -142,7 +142,6 @@
       "Bash(git push * --delete *)",
       "Bash(git push -d *)",
       "Bash(git push * -d *)",
-      "Bash(git push * :*)",
       "Bash(gh api *--method=DELETE*)",
       "Bash(gh api *-XDELETE*)",
       "Bash(gh api *actions/secrets*)",
