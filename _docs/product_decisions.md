@@ -173,3 +173,4 @@ Product decisions made after this document was agreed. The product manager agent
 | Date | Question | Decision | Why | Issue |
 |---|---|---|---|---|
 | 2026-10-20 | Who gives final acceptance, and when is Yacine involved? | The product manager agent accepts every delivered issue; Yacine is involved only at the human gates | Lets the team work through the backlog without per-task approvals | #48 |
+| 2026-10-21 | Where do non-deploy secrets live (Claude API key, read-only Grafana token, Grafana Cloud OTLP token)? | Claude API key and read-only Grafana token in a GitHub `oncall` environment (no reviewer, `main` only); OTLP token only in the server's per-environment `.env` files | Keeps "no credential at repo level" true; on-call can act at any hour without holding deploy keys; the collector is the only OTLP consumer | #51 |
