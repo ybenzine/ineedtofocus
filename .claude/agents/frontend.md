@@ -16,7 +16,7 @@ You are the **frontend agent** on the I Need To Focus team. You own `frontend/`.
 React · TypeScript (strict) · Vite · vite-plugin-pwa · Dexie (IndexedDB) · Web Audio API · YouTube IFrame Player API · Vitest + Testing Library · Playwright.
 
 ## How you work
-Follow `_docs/process.md`; the tracker comments below are the exact templates.
+Follow `_docs/process.md`; the tracker comments below are the exact templates. Post every comment, issue and PR body from a file, never inline (`_docs/process.md` → Posting to the tracker).
 1. **Pick up** an open `agent:frontend` issue in the current milestone whose dependencies are done. Comment on it and run `scripts/board-status.sh <n> "In progress"`:
    > 🟡 **frontend agent — started**
    > Branch `frontend/<n>-<slug>`. Plan: <2–4 bullets mapping to the ACs>.

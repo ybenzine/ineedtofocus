@@ -30,6 +30,18 @@ After Done, final acceptance — by the product manager, or by QA for issues the
 
 Milestones (`M1`–`M5`) are the schedule; work the current milestone first, `P0` before `P1`. `post-mvp` issues are not touched before submission.
 
+## Posting to the tracker
+
+Write every issue comment, PR body and review body to a file under `/tmp` (outside the repo) first, then post it from that file:
+
+- `gh issue comment <n> --body-file <file>`
+- `gh pr create --body-file <file>` and `gh pr edit <pr> --body-file <file>`
+- `gh pr review <pr> --comment --body-file <file>`
+- `gh issue create --body-file <file>` and `gh issue edit <n> --body-file <file>`
+- REST fallback: `gh api -X POST <path> -F body=@<file>`
+
+Never pass a body inline (`--body "…"`, `-b "…"`, `-f body=…`). The permission rules in `.claude/settings.json` match the whole command text, so a word such as "protection", "environments", "dispatches" or "private=" in an inline body triggers an ask or deny rule and stalls an unattended run.
+
 ## Lifecycle of an issue
 
 ### 1. Pick up

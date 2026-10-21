@@ -59,7 +59,7 @@ All entry points go through `make` (`make help` lists them). Needs Docker with C
 - **Work only from an issue.** One issue per branch and per PR. Branch: `<agent>/<issue>-<slug>`, e.g. `backend/10-sessions-api`.
 - **Commits:** Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`, `ci:`), referencing the issue (`Refs #10`).
 - **Never push to `main`.** Everything lands through a squash-merged PR that says `Closes #<n>`.
-- **Run git from the repo root** (`cd` into the repo), not `git -C <path>` — the permission rules in `.claude/settings.json` only recognise the plain form.
+- **Run git from the repo root, as the session's start directory.** Start Claude Code in the repo root (or a worktree's root) and run plain `git …` there: no `git -C <path>`, and no `cd` into another directory before git. The permission rules in `.claude/settings.json` only recognise the plain form, and git after a `cd` away from the start directory prompts. If a session started elsewhere, restart it from the repo root rather than working around the prompt.
 - **Acceptance criteria are the contract.** If an AC is wrong, missing or ambiguous, ask the product manager agent on the issue — it decides or escalates — don't silently change scope.
 - **Python:** 3.12, type hints everywhere, `ruff` + `mypy`, `pytest`. **TypeScript:** `strict`, ESLint + Prettier, Vitest.
 - **Time:** store UTC in the database; convert to the user's time zone only for display and history grouping.
