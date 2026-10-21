@@ -1,0 +1,15 @@
+# Build context is the repo root; send only what the Dockerfile copies.
+*
+!backend/pyproject.toml
+!backend/uv.lock
+!backend/app/
+!frontend/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/playwright-report/
+frontend/test-results/
+**/__pycache__/
+**/.env
+**/.env.*
+**/*.log

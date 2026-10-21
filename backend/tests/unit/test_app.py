@@ -142,6 +142,34 @@ def test_configure_logging_writes_json_to_stdout(capsys: pytest.CaptureFixture[s
     assert json.loads(out)["message"] == "hello"
 
 
+def test_configure_logging_keeps_telemetry_handler_and_one_json_handler() -> None:
+    """The OTLP log handler added by `opentelemetry-instrument` survives (#4)."""
+
+    class ExportHandler(logging.Handler):  # stands in for OpenTelemetry's LoggingHandler
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    root = logging.getLogger()
+    saved = root.handlers[:]
+    export = ExportHandler()
+    try:
+        root.handlers[:] = [export, logging.StreamHandler()]
+        configure_logging("INFO")
+        configure_logging("INFO")  # idempotent: no duplicate console handlers
+        streams = [h for h in root.handlers if isinstance(h, logging.StreamHandler)]
+        assert export in root.handlers
+        assert len(streams) == 1
+        assert isinstance(streams[0].formatter, JsonFormatter)
+        logging.getLogger("x").info("exported")
+        assert [r.getMessage() for r in export.records] == ["exported"]
+    finally:
+        root.handlers[:] = saved
+
+
 def test_unhandled_error_log_has_no_request_data(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

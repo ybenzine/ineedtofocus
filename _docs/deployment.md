@@ -6,7 +6,7 @@
 
 | Env | URL | Deployed | Compose project |
 |---|---|---|---|
-| Local | http://localhost | `make up` | — |
+| Local | http://localhost:8000 | `make up` | `focus-local` |
 | Dev | https://dev.ineedtofoc.us | Automatically on merge to `main` | `focus-dev` |
 | Prod | https://ineedtofoc.us | Manual workflow run with Yacine's approval | `focus-prod` |
 

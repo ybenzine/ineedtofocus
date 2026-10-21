@@ -42,7 +42,11 @@ def configure_logging(level: str = "INFO") -> None:
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
-    root.handlers[:] = [handler]
+    # Replace console (stream) handlers with the one JSON handler, but keep the others:
+    # under `opentelemetry-instrument` the root logger also holds OpenTelemetry's OTLP
+    # LoggingHandler, which ships these same records to Grafana.
+    others = [h for h in root.handlers if not isinstance(h, logging.StreamHandler)]
+    root.handlers[:] = [*others, handler]
     root.setLevel(level.upper())
     # Uvicorn's own handlers would emit plain text; route through the root handler.
     for name in ("uvicorn", "uvicorn.error"):
