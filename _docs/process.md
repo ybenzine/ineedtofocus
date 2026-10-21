@@ -56,7 +56,7 @@ Milestones (`M1`–`M5`) are the schedule; work the current milestone first, `P0
 ### 4. Review
 - The **reviewer agent** reads the issue and the PR and posts a review with one line per AC: ✅ met / ❌ not met (why) / ➖ not applicable (why), plus the definition-of-done checks and numbered findings.
 - The review ends with `**Verdict: Approve**` or `**Verdict: Request changes**`. **That line is the merge signal.** All agents act through one GitHub account, which also authors the PRs, and GitHub doesn't let an author approve their own PR — so reviews are posted as comments and the verdict line decides.
-- On Request changes, the author fixes each numbered point and the reviewer reviews again, for at most three rounds; after that it's a [human gate](#human-gates) (repeated failure).
+- On Request changes, the author fixes each numbered point and the reviewer reviews again, for at most three rounds, then one retry on Fable 5.1; after that it's a [human gate](#human-gates) (repeated failure).
 - CI must be green. Branch protection (#5) requires passing status checks, not an approving review, for the same reason.
 
 ### 5. Merge
@@ -87,7 +87,7 @@ Agents stop and ask Yacine **only** for these: they comment `⛔ Needs Yacine: <
 | **Product decisions beyond agreed scope** | Changing or cutting a requirement in `product_decisions.md`, changing the MVP cut order, adding a feature |
 | **Cost** | Anything that spends money (bigger Droplet, paid services) |
 | **Irreversible actions** | Deleting data, servers or repos; force-pushing; rewriting history; destroying volumes |
-| **Repeated failure** | The same PR fails review three rounds in a row, or CI is still red after three fix attempts — stop and report instead of looping |
+| **Repeated failure** | The same PR fails review three rounds in a row and then one more after a Fable 5.1 retry (see [agents.md → Models](agents.md#models)), or CI is still red after three fix attempts — stop and report instead of looping |
 
 **Why agents can merge workflow changes safely:** prod credentials (the prod SSH deploy key and prod secrets) exist **only** as secrets of the GitHub `production` environment, which requires Yacine's approval for every job that uses it. The dev deploy key lives in a `dev` environment and is restricted on the server (SSH forced command) to deploying and rolling back dev. The prod **rollback** key lives in a separate `rollback` environment (no reviewer, so on-call can use it at any hour; limited to the `main` branch) and is restricted by forced command to restoring a recorded known-good tag — it can't deploy anything new. No credential is stored at repo level. A workflow edit merged by an agent therefore can't put new code on prod without Yacine's approval. Set up in #28–#30.
 

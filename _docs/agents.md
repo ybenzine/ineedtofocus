@@ -79,6 +79,28 @@ Each agent is a Claude Code subagent: a role prompt, the tools it may use, and t
 | Reviewer | [`.claude/agents/reviewer.md`](../.claude/agents/reviewer.md) | Read, Glob, Grep, Bash — no Write/Edit tools; Bash is for running tests and `gh`, and its role forbids editing, committing, pushing or merging |
 | On-call | [`.claude/agents/oncall.md`](../.claude/agents/oncall.md) | Read, Write, Edit, Glob, Grep, Bash — run headless by the alert workflow (#35) |
 
+## Models
+
+Each agent's model and effort level are set in its `.claude/agents/*.md` frontmatter. Opus 5.5 goes where judgment matters and volume is low; Sonnet 5.5 goes where most of the code is written (half Opus's price and faster, with the Opus reviewer as backstop). Decided with Yacine on 2026-10-21 (#54).
+
+| Agent | Model | Effort | Why |
+|---|---|---|---|
+| Lead (main session) | Opus 5.5 | medium | Hours of orchestration — dependencies, gates, when to stop; mistakes compound |
+| Product manager | Opus 5.5 | medium | Scope decisions and final acceptance are judgment calls; low output volume |
+| Reviewer | Opus 5.5 | high | The quality gate; a weaker reviewer costs more in rework than it saves |
+| DevOps | Opus 5.5 | high | Few issues, high stakes: credentials, deploys, rollback, the server |
+| On-call | Opus 5.5 | high | Runs rarely; the rollback-or-fix decision has to be right |
+| Backend | Sonnet 5.5 | default (high) | Bulk of the code; fast and cheaper |
+| Frontend | Sonnet 5.5 | default (high) | Largest share of issues |
+| QA | Sonnet 5.5 | default (high) | Well-specified test writing and running |
+
+- **Lead session:** start Claude Code with `/model opus` and medium effort before `/work-backlog`; subagents with `model:` set use their own model regardless.
+- **Opus overrides:** `/work-issue` runs **#11** (history grouping by time zone and week start), **#13** (timer engine) and **#19** (offline sync without duplicates) on Opus — the trickiest logic in the app — without changing the agents' defaults.
+- **Fable 5.1 retry:** after three failed review rounds, the author gets one retry on Fable 5.1 before the repeated-failure gate. Not used otherwise (2.5× Opus's price, slower).
+- **Haiku 5.5:** not assigned; no agent does simple, high-volume work.
+- **Subscription limits:** Yacine runs Claude Code on a subscription, where Opus uses limits faster. If a run hits limits, move the lead to Sonnet first (`/model sonnet`); keep the reviewer on Opus.
+- **Keep these unset:** `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` (makes Claude Code ignore the `model:` field) and `CLAUDE_CODE_EFFORT_LEVEL` (overrides every agent's `effort:`).
+
 ## Orchestration
 
 A main Claude Code session acts as the **lead**. The `/work-issue <n>` command ([`.claude/commands/work-issue.md`](../.claude/commands/work-issue.md)) runs the loop for one issue:
