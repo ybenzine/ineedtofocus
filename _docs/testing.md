@@ -34,4 +34,6 @@ Playwright end-to-end tests join `make test` with #23.
 
 ## Database for integration tests
 
-`make test-backend` does not start Postgres. Integration tests connect to `DATABASE_URL` (default: the compose `db` service on localhost, started by `make up`) and skip with a clear reason when it is unreachable. CI must provide a Postgres service (tracked with the CI issue).
+`make test-backend` does not start Postgres. Integration tests use the Postgres **server** at `DATABASE_URL` (default: the compose `db` service on localhost, started by `make up`) but never its database: `backend/tests/integration/conftest.py` creates a uniquely named `focus_test_<random>` database per test, runs the Alembic migrations or the test against it, and drops it afterwards (`DROP DATABASE ... WITH (FORCE)`). The dev database is never read or written. The tests skip with a clear reason when the server is unreachable. CI must provide a Postgres service (tracked with the CI issue); the role needs the `CREATEDB` privilege (the compose superuser has it).
+
+Migration tests (`tests/integration/test_migrations.py`) cover upgrade, downgrade to base, repeated upgrade, a single head, drift between the models and the migrations (`compare_metadata` must be empty), and the schema constraints. `tests/unit/test_migration_safety.py` enforces the expand/contract rule (see [architecture.md](architecture.md#data-model)).

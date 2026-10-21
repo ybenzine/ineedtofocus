@@ -8,6 +8,7 @@ FastAPI app (Python 3.12, managed with [uv](https://docs.astral.sh/uv/)).
 make up                  # from the repo root: Postgres (and Grafana) via Docker Compose
 cd backend
 uv sync
+uv run alembic upgrade head                              # or `make migrate` from the root
 uv run uvicorn app.main:app_factory --factory --reload   # http://localhost:8000
 ```
 

@@ -200,3 +200,12 @@ def test_openapi_describes_error_envelope(client: TestClient) -> None:
     assert "HTTPValidationError" not in schema["components"]["schemas"]
     ready = schema["paths"]["/readyz"]["get"]["responses"]["503"]
     assert ready["content"]["application/json"]["schema"]["$ref"].endswith("/ErrorResponse")
+
+
+def test_log_scrub_redacts_postgres_detail_line() -> None:
+    from app.logging_config import scrub
+
+    msg = "duplicate key\nDETAIL:  Key (lower(email))=(a@b.c) already exists.\nmore"
+    out = scrub(msg)
+    assert "a@b.c" not in out
+    assert out.startswith("duplicate key") and out.endswith("more")
