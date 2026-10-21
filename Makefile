@@ -11,7 +11,7 @@ NPM     := npm --prefix frontend
 COMPOSE := docker compose
 
 .PHONY: help install up down logs test test-backend test-frontend \
-	lint lint-backend lint-frontend fmt fmt-backend fmt-frontend hooks
+	migrate lint lint-backend lint-frontend fmt fmt-backend fmt-frontend hooks
 
 help: ## List the available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -39,6 +39,9 @@ down: ## Stop the local stack (keeps the database volume)
 
 logs: ## Follow the local stack's logs
 	$(COMPOSE) logs -f
+
+migrate: backend/.venv ## Apply database migrations (alembic upgrade head) to DATABASE_URL
+	$(UV) run alembic upgrade head
 
 # --- Tests --------------------------------------------------------------------
 
