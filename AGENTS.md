@@ -28,26 +28,31 @@ Entry point for every coding agent (and human) working in this repo. Keep this f
 ```
 backend/              FastAPI app, SQLAlchemy models, Alembic migrations, pytest tests
 frontend/             React + TypeScript (Vite) installable web app, Vitest + Playwright tests
-infra/                Docker Compose (local + prod), Caddy, OpenTelemetry Collector, Grafana exports, server setup
+infra/                Prod/dev Compose, Caddy, OpenTelemetry Collector, Grafana exports, server setup
 scripts/              Repo tooling (backlog publishing, board helpers, traffic generator)
 _docs/                Project documentation (kept separate from code)
 .claude/agents/       Claude Code subagent definitions for the agent team
 .github/              Workflows, PR template
+compose.yaml          Local stack (`make up` / `docker compose up -d` from the repo root)
+Makefile              Every entry point below
+.env.example          Every environment variable, with local defaults (copy to `.env`)
 ```
 
-Folders appear as their issues land (#1 scaffolds them).
+Folders fill in as their issues land.
 
 ## Commands
 
-All entry points go through `make` (introduced by #1):
+All entry points go through `make` (`make help` lists them). Needs Docker with Compose v2, [uv](https://docs.astral.sh/uv/) and Node.js ≥ 22.
 
 | Command | Does |
 |---|---|
+| `make install` | Install backend (uv) and frontend (npm) dependencies; the other targets do this on demand |
 | `make up` | Start the full local stack (app, Postgres, Grafana/OTel) with Docker Compose |
-| `make down` | Stop it |
+| `make down` | Stop it (keeps the database volume) |
 | `make test` | Run every test suite: backend unit + integration, frontend unit, Playwright end-to-end |
-| `make lint` | Linters and type checks for backend and frontend |
+| `make lint` | Linters and type checks for backend (ruff, mypy) and frontend (ESLint, Prettier, tsc) |
 | `make fmt` | Auto-format |
+| `make hooks` | Install the pre-commit hooks (ruff, ESLint, Prettier, hygiene checks) |
 
 ## Conventions
 

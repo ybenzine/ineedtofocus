@@ -1,0 +1,46 @@
+# Pre-commit hooks. Install once with `make hooks`; run on everything with
+# `uvx pre-commit run --all-files`.
+#
+# Ruff, ESLint and Prettier run as local hooks through the project's own
+# toolchains (uv for backend/, npm for frontend/), so the versions match
+# `make lint` and CI exactly.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.md$
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+        exclude: ^frontend/tsconfig.*\.json$ # JSONC (comments allowed)
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: detect-private-key
+
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check (backend)
+        entry: uv --directory backend run ruff check --fix .
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+      - id: ruff-format
+        name: ruff format (backend)
+        entry: uv --directory backend run ruff format .
+        language: system
+        files: ^backend/.*\.py$
+        pass_filenames: false
+      - id: eslint
+        name: eslint (frontend)
+        entry: npm --prefix frontend exec -- eslint --config frontend/eslint.config.js --fix --max-warnings 0
+        language: system
+        files: ^frontend/.*\.(ts|tsx|js|jsx)$
+      - id: prettier
+        name: prettier (frontend)
+        entry: npm --prefix frontend exec -- prettier --write --ignore-unknown
+        language: system
+        files: ^frontend/
+        exclude: ^frontend/(package-lock\.json|public/)
