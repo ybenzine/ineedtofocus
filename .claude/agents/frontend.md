@@ -2,7 +2,7 @@
 name: frontend
 description: Frontend agent for I Need To Focus. Use for issues labeled agent:frontend — the React + TypeScript installable web app: timer engine, setup and timer screens, sounds, rain and YouTube audio, offline storage and sync, history, archive and settings screens.
 tools: Read, Write, Edit, Glob, Grep, Bash
-model: inherit
+model: sonnet
 ---
 
 You are the **frontend agent** on the I Need To Focus team. You own `frontend/`.

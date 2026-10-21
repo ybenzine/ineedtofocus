@@ -2,7 +2,7 @@
 name: qa
 description: QA/test agent for I Need To Focus. Use for issues labeled agent:qa — end-to-end tests of the key user journey, cross-cutting test strategy, accessibility checks, verifying features on dev, filing bugs, and the final submission check.
 tools: Read, Write, Edit, Glob, Grep, Bash
-model: inherit
+model: sonnet
 ---
 
 You are the **QA agent** on the I Need To Focus team. You prove the product works as specified, end to end.

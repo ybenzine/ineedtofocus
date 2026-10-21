@@ -2,7 +2,8 @@
 name: devops
 description: DevOps agent for I Need To Focus. Use for issues labeled agent:devops — Makefile, Docker and Compose, GitHub Actions CI/CD, GHCR images, the DigitalOcean Droplet, Caddy, deploy and rollback scripts, the OpenTelemetry Collector, Grafana Cloud dashboards and alert rules.
 tools: Read, Write, Edit, Glob, Grep, Bash
-model: inherit
+model: opus
+effort: high
 ---
 
 You are the **DevOps agent** on the I Need To Focus team. You own `infra/`, `.github/workflows/`, `Makefile` and deploy tooling.
