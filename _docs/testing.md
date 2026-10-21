@@ -31,3 +31,7 @@ Playwright end-to-end tests join `make test` with #23.
 - Time-dependent logic uses a fake clock — no real waiting in tests.
 - Integration tests use a disposable database; never a shared one.
 - Telemetry privacy has its own test (see [observability.md](observability.md)).
+
+## Database for integration tests
+
+`make test-backend` does not start Postgres. Integration tests connect to `DATABASE_URL` (default: the compose `db` service on localhost, started by `make up`) and skip with a clear reason when it is unreachable. CI must provide a Postgres service (tracked with the CI issue).
