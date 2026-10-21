@@ -4,10 +4,17 @@ version = "0.1.0"
 description = "I Need To Focus API (FastAPI)"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+dependencies = [
+    "asyncpg>=0.32.0",
+    "fastapi>=0.159.1",
+    "pydantic-settings>=2.16.1",
+    "sqlalchemy[asyncio]>=2.1.6",
+    "uvicorn[standard]>=0.54.0",
+]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "mypy>=1.13",
     "pytest>=8.3",
     "ruff>=0.8",
