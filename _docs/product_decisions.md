@@ -128,10 +128,10 @@ Sessions are archived instead of deleted, so nothing is lost by accident.
 ### F12. Settings (per user, synced across devices)
 
 - AC12.1 Week start day (default Sunday).
-- AC12.2 Alert sound volume and background audio volume.
-- AC12.3 Keep screen awake default.
+- AC12.2 Alert sound volume and background audio volume, each 0–100 (defaults: alert 80, background 50).
+- AC12.3 Keep screen awake default (off for a new user).
 - AC12.4 Default unlimited-timer reminder interval.
-- AC12.5 Last-used Pomodoro configuration and tag are remembered.
+- AC12.5 Last-used Pomodoro configuration and tag are remembered (no stored tag means Work, per AC7.2).
 
 ### F13. Offline use and sync
 
@@ -174,3 +174,7 @@ Product decisions made after this document was agreed. The product manager agent
 |---|---|---|---|---|
 | 2026-10-20 | Who gives final acceptance, and when is Yacine involved? | The product manager agent accepts every delivered issue; Yacine is involved only at the human gates | Lets the team work through the backlog without per-task approvals | #48 |
 | 2026-10-21 | Where do non-deploy secrets live (Claude API key, read-only Grafana token, Grafana Cloud OTLP token)? | Claude API key and read-only Grafana token in a GitHub `oncall` environment (no reviewer, `main` only); OTLP token only in the server's per-environment `.env` files | Keeps "no credential at repo level" true; on-call can act at any hour without holding deploy keys; the collector is the only OTLP consumer | #51 |
+| 2026-10-21 | What are the default settings for a new user (F12)? | Alert volume 80, background audio volume 50 (both 0–100), Keep screen awake off; week start stays Sunday (AC10.6) | Alerts must be clearly audible over background audio, which should sit under them; keep-awake costs battery, so it is opt-in and the user turns it on in Settings or on the timer screen (AC9.2) | #6 |
+| 2026-10-21 | What does an empty last-used tag mean in settings? | No stored last tag (`last_tag` NULL) means Work; the API and the app treat it as Work | Matches AC7.2 (Work for a new user): a new user has no last-used tag yet | #6 |
+| 2026-10-21 | What are the on-call secrets called? | `ANTHROPIC_API_KEY` (Claude API key used only by the on-call workflow) and `GRAFANA_READONLY_TOKEN` (read-only Grafana token), both secrets of the GitHub `oncall` environment | One fixed name per secret so Yacine's setup steps, the workflow and the docs agree | #35, #32 |
+| 2026-10-21 | Who runs migrations on deploy, now that the schema merged before the compose app service? | #4 owns running `alembic upgrade head` before the app starts (a failed migration fails startup); #6 keeps backward compatibility | The app service lives in #4; #6 had nothing to wire it into | #6, #4 |
