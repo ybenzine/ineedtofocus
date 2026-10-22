@@ -1,8 +1,12 @@
-# Local development stack: `make up` (or plain `docker compose up -d`) from the repo root.
+# Local development stack: `make up` (or plain `docker compose up -d --build`) from the repo root.
 #
-# Scaffold from #1: Postgres + the local observability stack (grafana/otel-lgtm).
-# #4 completes it: the app service (image built from the backend + frontend),
-# health checks, the app waiting for a healthy database, and telemetry wiring.
+#   app   http://localhost:8000   FastAPI + built frontend (image from ./Dockerfile)
+#   db    localhost:5432          Postgres, data in the named volume `db-data`
+#   lgtm  http://localhost:3000   Grafana + OTLP ingest (grafana/otel-lgtm)
+#
+# The app starts once the database is healthy, applies the migrations
+# (`alembic upgrade head`, image entrypoint), then serves and sends traces, metrics
+# and logs over OTLP to `lgtm`. All ports are published on 127.0.0.1 only.
 #
 # Values come from `.env` (copy `.env.example`); the defaults below are
 # local-only development values, never used on a server.
@@ -11,6 +15,49 @@
 name: focus-local
 
 services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # No `image:` name: Compose tags the build `<project>-app`, so parallel stacks
+    # (other worktrees, COMPOSE_PROJECT_NAME) don't overwrite each other's image.
+    environment:
+      # The app reaches Postgres by service name. Built from the POSTGRES_* values,
+      # so the host-side DATABASE_URL in .env (localhost) does not apply here.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-focus}:${POSTGRES_PASSWORD:-focus}@db:5432/${POSTGRES_DB:-focus}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      READINESS_TIMEOUT_SECONDS: ${READINESS_TIMEOUT_SECONDS:-2}
+      # Run `alembic upgrade head` before the server starts (image entrypoint).
+      MIGRATE_ON_START: ${MIGRATE_ON_START:-1}
+      # OpenTelemetry: traces, metrics and logs over OTLP/HTTP to the lgtm container.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://lgtm:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER: otlp
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=local
+      OTEL_METRIC_EXPORT_INTERVAL: ${OTEL_METRIC_EXPORT_INTERVAL:-15000}
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      lgtm:
+        condition: service_started
+    healthcheck:
+      # GET, not HEAD: the API answers HEAD on /healthz with 405.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    mem_limit: 512m
+    restart: unless-stopped
+
   db:
     image: postgres:17-alpine
     environment:
@@ -21,6 +68,12 @@ services:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
     mem_limit: 512m
     restart: unless-stopped
 

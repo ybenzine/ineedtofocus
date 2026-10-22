@@ -10,7 +10,7 @@ UV      := uv --directory backend
 NPM     := npm --prefix frontend
 COMPOSE := docker compose
 
-.PHONY: help install up down logs test test-backend test-frontend \
+.PHONY: help install up down logs check-stack test test-backend test-frontend \
 	migrate lint lint-backend lint-frontend fmt fmt-backend fmt-frontend hooks
 
 help: ## List the available targets
@@ -30,8 +30,9 @@ frontend/node_modules: frontend/package.json frontend/package-lock.json
 
 # --- Local stack --------------------------------------------------------------
 
-up: ## Start the local stack in the background (compose.yaml)
-	$(COMPOSE) up -d
+up: ## Build and start the local stack, wait until it is healthy (compose.yaml)
+	$(COMPOSE) up -d --build --wait
+	@echo "App:     http://localhost:8000 (or the APP_PORT set in .env)"
 	@echo "Grafana: http://localhost:3000 (or the GRAFANA_PORT set in .env)"
 
 down: ## Stop the local stack (keeps the database volume)
@@ -39,6 +40,9 @@ down: ## Stop the local stack (keeps the database volume)
 
 logs: ## Follow the local stack's logs
 	$(COMPOSE) logs -f
+
+check-stack: ## Check the running stack: health, frontend, telemetry in Grafana
+	python3 scripts/check_local_stack.py
 
 migrate: backend/.venv ## Apply database migrations (alembic upgrade head) to DATABASE_URL
 	$(UV) run alembic upgrade head
