@@ -6,15 +6,17 @@ query strings and cookies never reach exported span attributes.
 
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from opentelemetry import trace
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.trace import NoOpTracerProvider
+from opentelemetry.trace import NoOpTracerProvider, SpanKind
 
 from app.config import Settings
-from app.main import create_app
+from app.main import app_factory, create_app
 from app.telemetry import QueryStringScrubber, install_privacy_filters, strip_query
 
 SECRETS = ("someone", "example.com", "goal=write", "s3cr3t-cookie", "?")
@@ -113,3 +115,20 @@ def test_install_registers_scrubber_once() -> None:
     assert install_privacy_filters(provider) is True
     processors = provider._active_span_processor._span_processors
     assert [type(p) for p in processors] == [QueryStringScrubber]
+
+
+def test_app_factory_installs_the_scrubber(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The container entry point, as run under `opentelemetry-instrument` (global provider)."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(trace, "get_tracer_provider", lambda: provider)
+
+    app = app_factory()
+    with TestClient(app) as c:
+        assert c.get("/api/nope?email=someone%40example.com").status_code == 404
+    spans = exporter.get_finished_spans()
+    server = [s for s in spans if s.kind == SpanKind.SERVER]
+    assert len(server) == 1
+    assert (server[0].attributes or {})["url.query"] == "REDACTED"
+    assert "someone" not in repr([dict(s.attributes or {}) for s in spans])

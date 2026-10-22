@@ -19,13 +19,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: focus-app:local
+    # No `image:` name: Compose tags the build `<project>-app`, so parallel stacks
+    # (other worktrees, COMPOSE_PROJECT_NAME) don't overwrite each other's image.
     environment:
       # The app reaches Postgres by service name. Built from the POSTGRES_* values,
       # so the host-side DATABASE_URL in .env (localhost) does not apply here.
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-focus}:${POSTGRES_PASSWORD:-focus}@db:5432/${POSTGRES_DB:-focus}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       READINESS_TIMEOUT_SECONDS: ${READINESS_TIMEOUT_SECONDS:-2}
+      # Run `alembic upgrade head` before the server starts (image entrypoint).
+      MIGRATE_ON_START: ${MIGRATE_ON_START:-1}
       # OpenTelemetry: traces, metrics and logs over OTLP/HTTP to the lgtm container.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://lgtm:4318
       OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf

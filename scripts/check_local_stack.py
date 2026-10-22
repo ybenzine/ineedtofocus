@@ -7,14 +7,17 @@
 2. Sends a request (unique path) whose query string and cookie carry a secret marker.
 3. Polls Grafana (from grafana/otel-lgtm) until it has, for service `ineedtofocus`:
    traces (Tempo), metrics (Prometheus) and logs (Loki).
-4. Fails if the marker shows up in any trace or log: query strings and cookies must
-   never reach telemetry (_docs/observability.md).
+4. Fails if the marker shows up in the probe's trace or in any log line or log attribute
+   from the last hour, or if any log carries an unredacted Postgres `DETAIL: Key (...)`
+   line: query strings, cookies and row values must never reach telemetry
+   (_docs/observability.md).
 
 Ports: APP_PORT (8000) and GRAFANA_PORT (3000), from the environment or .env. Stdlib only.
 """
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -43,6 +46,8 @@ SERVICE = "ineedtofocus"
 APP = f"http://localhost:{setting('APP_PORT', '8000')}"
 GRAFANA = f"http://localhost:{setting('GRAFANA_PORT', '3000')}"
 PROXY = f"{GRAFANA}/api/datasources/proxy/uid"
+# Postgres quotes row values in DETAIL lines (e.g. an email); the app redacts them.
+UNSCRUBBED_DETAIL = re.compile(r"DETAIL:\s+Key \(")
 TIMEOUT_S = float(os.environ.get("CHECK_TIMEOUT_SECONDS", "90"))
 
 
@@ -137,14 +142,21 @@ def main() -> None:
         if marker in body:
             leaks.append(f"trace {trace_id}")
         redacted = redacted or "REDACTED" in body
-    _, logs = get(
-        f"{PROXY}/loki/loki/api/v1/query_range?"
-        + urllib.parse.urlencode(
-            {"query": f'{{service_name="{SERVICE}"}} |= "{marker}"'}
-        )
+    # All of the service's recent log lines, no line filter: a `|= "..."` filter only
+    # matches the body, and a leak can sit in attributes (structured metadata such as
+    # exception_message / exception_stacktrace), which Loki returns with each stream.
+    logs = json.dumps(
+        get_json(
+            f"{PROXY}/loki/loki/api/v1/query_range",
+            query=f'{{service_name="{SERVICE}"}}',
+            since="1h",
+            limit="5000",
+        )["data"]["result"]
     )
-    if marker in json.dumps(json.loads(logs).get("data", {}).get("result", [])):
-        leaks.append("logs")
+    if marker in logs:
+        leaks.append("logs (this run's marker)")
+    if UNSCRUBBED_DETAIL.search(logs):
+        leaks.append("logs (an unredacted Postgres 'DETAIL: Key (...)' line)")
     if leaks:
         sys.exit(f"FAIL  query string or cookie reached telemetry: {', '.join(leaks)}")
     if not redacted:
