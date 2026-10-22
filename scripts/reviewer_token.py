@@ -1,15 +1,22 @@
-#!/usr/bin/env -S uv run --quiet --script
+#!/usr/bin/env -S uv run --quiet --locked --script
 # /// script
 # requires-python = ">=3.12"
-# dependencies = ["pyjwt[crypto]>=2.8,<3"]
+# dependencies = ["pyjwt[crypto]==2.15.1", "cryptography==50.0.2"]
+#
+# [tool.uv]
+# exclude-newer = "2026-10-21T00:00:00Z"
 # ///
+# Dependencies are pinned here and locked, with hashes, in reviewer_token.py.lock next to this
+# file (`uv lock --script scripts/reviewer_token.py`). `make lint-scripts` and
+# `make test-scripts` install the same pins. To upgrade, bump the pins and exclude-newer,
+# re-lock, and commit both files.
 """Mint a short-lived installation token for the reviewer GitHub App (#70).
 
-    uv run --quiet --script scripts/reviewer_token.py
+    uv run --quiet --locked --script scripts/reviewer_token.py
 
 Prints the installation token on stdout and nothing else, so it can only be captured:
 
-    GH_TOKEN="$(uv run --quiet --script scripts/reviewer_token.py)" gh pr review ...
+    GH_TOKEN="$(uv run --quiet --locked --script scripts/reviewer_token.py)" gh pr review ...
 
 The reviewer agent doesn't call this directly: scripts/reviewer-review.sh does, and passes the
 token to `gh` without it ever reaching a terminal, a log or a file. Refuses to print the token
@@ -22,9 +29,11 @@ Reads (defaults match .env.example; the IDs are public, the key is not):
                              (default ~/.config/ineedtofocus/reviewer-app.pem)
 
 How: signs a 10-minute JWT (RS256, PyJWT) with the key, then exchanges it for an installation
-token scoped to this repository with Pull requests write and Contents read. The token expires
-after one hour. Nothing secret is ever written to stderr: errors name the key path and
-GitHub's error message, never the key, the JWT or the token.
+token scoped to this repository with Pull requests write and Contents write. The token expires
+after one hour. Contents write is there only so the App's approval counts toward the review that
+branch protection requires (GitHub counts approvals from identities with write access).
+Nothing secret is ever written to stderr: errors name the key path and GitHub's error message,
+never the key, the JWT or the token.
 
 Exit codes: 0 token printed · 1 GitHub or network error, or an unusable key ·
 2 bad configuration or usage · 3 key file missing or unreadable (callers fall back to a
@@ -52,9 +61,11 @@ DEFAULT_APP_ID = "5420413"
 DEFAULT_INSTALLATION_ID = "173980330"
 DEFAULT_KEY_PATH = "~/.config/ineedtofocus/reviewer-app.pem"
 API_URL = "https://api.github.com"
-# The token works on this repository only, with only what a review needs.
+# The token works on this repository only, with only what an approving review needs. Contents
+# write makes the approval count toward branch protection's required review (#70); the accepted
+# cost is that a leaked token could push to unprotected branches for up to an hour.
 TOKEN_REPOSITORIES = ["ineedtofocus"]
-TOKEN_PERMISSIONS = {"pull_requests": "write", "contents": "read"}
+TOKEN_PERMISSIONS = {"pull_requests": "write", "contents": "write"}
 # GitHub accepts a JWT valid for at most 10 minutes; iat is backdated for clock drift.
 JWT_BACKDATE_SECONDS = 60
 JWT_LIFETIME_SECONDS = 540
@@ -126,7 +137,7 @@ def make_jwt(app_id: str, key: bytes, now: int) -> str:
     }
     try:
         return jwt.encode(payload, key, algorithm="RS256")
-    except Exception as exc:  # noqa: BLE001 - the message could echo key material; drop it
+    except Exception as exc:  # broad on purpose: the message could echo key material; drop it
         raise TokenError(
             f"the reviewer App key is not a usable RSA private key ({type(exc).__name__})"
         ) from None
@@ -196,7 +207,10 @@ def main(
     err = stderr if stderr is not None else sys.stderr
     parser = argparse.ArgumentParser(
         description="Print an installation token for the reviewer GitHub App on stdout.",
-        epilog='Capture it: GH_TOKEN="$(uv run --quiet --script scripts/reviewer_token.py)" gh ...',
+        epilog=(
+            "Capture it: "
+            'GH_TOKEN="$(uv run --quiet --locked --script scripts/reviewer_token.py)" gh ...'
+        ),
     )
     parser.parse_args(argv)
     try:

@@ -197,7 +197,7 @@ def test_requests_a_token_scoped_to_this_repo_for_reviews() -> None:
     assert isinstance(request.data, bytes)
     assert json.loads(request.data) == {
         "repositories": ["ineedtofocus"],
-        "permissions": {"pull_requests": "write", "contents": "read"},
+        "permissions": {"pull_requests": "write", "contents": "write"},
     }
 
 

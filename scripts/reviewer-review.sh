@@ -55,7 +55,7 @@ post() { # <flag> <event>: post the review with whatever credentials gh has in i
 }
 
 status=0
-token="$(uv run --quiet --script "$here/reviewer_token.py")" || status=$?
+token="$(uv run --quiet --locked --script "$here/reviewer_token.py")" || status=$?
 
 case "$status" in
   0)

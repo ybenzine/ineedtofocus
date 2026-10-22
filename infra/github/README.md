@@ -36,20 +36,22 @@ The reviewer agent posts every PR review as a GitHub App's bot, so it can submit
 
 | | |
 |---|---|
-| App | Owned by `ybenzine`, installed on `ybenzine/ineedtofocus` only. No webhook. Repository permissions: Pull requests read & write, Contents read, Metadata read |
+| App | Owned by `ybenzine`, installed on `ybenzine/ineedtofocus` only. No webhook. Repository permissions: Pull requests read & write, **Contents read & write**, Metadata read. Contents write is needed only so the bot's approval counts: GitHub counts an approval toward required reviews only from an identity with write access to the repository |
 | App ID / installation ID | `5420413` / `173980330`. Public; they're the defaults of `REVIEWER_APP_ID` / `REVIEWER_INSTALLATION_ID` in [`.env.example`](../../.env.example) |
 | Private key | `~/.config/ineedtofocus/reviewer-app.pem`, mode 600, on Yacine's machine only (`REVIEWER_APP_KEY_PATH`). Never in the repo, a comment or a log. `.claude/settings.json` denies Claude's file tools on `~/.config/ineedtofocus/` |
-| Token | [`scripts/reviewer_token.py`](../../scripts/reviewer_token.py) signs a 10-minute JWT with the key (PyJWT, RS256) and exchanges it for an installation token: this repository only, Pull requests write and Contents read, valid for one hour. It prints the token on stdout and nothing else, refuses to print it to a terminal, and its errors never contain the key, the JWT or the token |
+| Token | [`scripts/reviewer_token.py`](../../scripts/reviewer_token.py) signs a 10-minute JWT with the key (PyJWT, RS256; dependencies pinned in the script and locked with hashes in `scripts/reviewer_token.py.lock`, run with `uv run --locked`) and exchanges it for an installation token: this repository only, Pull requests write and Contents write, valid for one hour. It prints the token on stdout and nothing else, refuses to print it to a terminal, and its errors never contain the key, the JWT or the token |
 | Posting a review | [`scripts/reviewer-review.sh`](../../scripts/reviewer-review.sh) `<pr> approve\|request-changes\|comment <body-file>` mints a token and runs `gh pr review <pr> --approve\|--request-changes\|--comment --body-file <body-file>` with it in `GH_TOKEN`, for that one process. `REVIEWER_REVIEW_API=rest` posts through `gh api …/pulls/<pr>/reviews` instead, where GraphQL is unreachable |
 
-The same thing by hand (the token only ever lives in the command substitution):
+The same thing by hand, for a human at a shell (the token only ever lives in the command substitution). Claude Code asks before running the token script directly, since its stdout is the token:
 
 ```sh
-GH_TOKEN="$(uv run --quiet --script scripts/reviewer_token.py)" \
+GH_TOKEN="$(uv run --quiet --locked --script scripts/reviewer_token.py)" \
   gh pr review <pr> --approve --body-file /tmp/review-<pr>.md
 ```
 
 **Fallback when the key is missing or unreadable:** `reviewer-review.sh` posts the review as a COMMENT from the default gh login and says so. A comment can't approve, so the PR can't merge. The lead stops with `⛔ Needs Yacine:` and Yacine restores the key: App settings → *Private keys* → *Generate a private key*, saved to the path above with `chmod 600`. The reviewer then posts its review again through the App. Any other token failure (GitHub refused the token, no network) posts nothing, so it gets looked at instead of silently downgrading the review.
+
+**Accepted cost of Contents write:** a leaked token (it lives one hour) or a leaked key could push to any unprotected branch of this repository, or open and approve a PR. It can't touch `main`: branch protection requires the CI checks on every change to `main`, with administrators included, and `dismiss_stale_reviews` drops an approval when new commits land. The key stays on Yacine's machine, tokens are minted per review and never written anywhere, and the token script asks before running directly in Claude Code. If the key may have leaked, delete it in the App's settings (that also stops new tokens) and generate a new one.
 
 **Rotating the key:** generate a new key in the App's settings, replace the file, then delete the old key there. Nothing else holds a copy.
 

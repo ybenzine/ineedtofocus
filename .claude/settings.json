@@ -103,8 +103,6 @@
       "Bash(git remote -v*)",
       "Bash(scripts/reviewer-review.sh *)",
       "Bash(./scripts/reviewer-review.sh *)",
-      "Bash(scripts/reviewer_token.py*)",
-      "Bash(uv run --quiet --script scripts/reviewer_token.py*)",
       "Bash(gh pr review *)"
     ],
     "ask": [
@@ -123,7 +121,12 @@
       "Bash(gh api *environments*)",
       "Bash(gh api *rulesets*)",
       "Bash(gh api *collaborators*)",
-      "Bash(gh api *invitations*)"
+      "Bash(gh api *invitations*)",
+      "Bash(scripts/reviewer_token.py*)",
+      "Bash(./scripts/reviewer_token.py*)",
+      "Bash(uv run *reviewer_token.py*)",
+      "Bash(python *reviewer_token.py*)",
+      "Bash(python3 *reviewer_token.py*)"
     ],
     "deny": [
       "Bash(gh repo delete *)",

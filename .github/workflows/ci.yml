@@ -51,6 +51,8 @@ jobs:
         run: make lint-backend
       - name: eslint, prettier --check, tsc (strict)
         run: make lint-frontend
+      - name: ruff, ruff format --check, mypy (strict) on scripts/
+        run: make lint-scripts
 
   backend-unit:
     name: Backend unit tests

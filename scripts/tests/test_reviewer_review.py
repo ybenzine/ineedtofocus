@@ -15,7 +15,7 @@ FAKE_TOKEN = "ghs_fake_token_for_tests"
 REVIEW_CMD = ["pr", "review", "71", "--repo", "ybenzine/ineedtofocus"]
 
 FAKE_UV = """#!/usr/bin/env bash
-# Stands in for `uv run --quiet --script scripts/reviewer_token.py`.
+# Stands in for `uv run --quiet --locked --script scripts/reviewer_token.py`.
 printf '%s\\n' "$*" > "$FAKE_DIR/uv.args"
 if [[ "$FAKE_UV_EXIT" == 0 ]]; then echo "$FAKE_TOKEN"; else echo "simulated failure" >&2; fi
 exit "$FAKE_UV_EXIT"
@@ -76,7 +76,7 @@ def test_posts_the_review_as_the_app(fakes: Path, body_file: Path, verdict: str,
     assert result.returncode == 0, result.stderr
     assert gh_args(fakes) == [*REVIEW_CMD, flag, "--body-file", str(body_file)]
     assert (fakes / "gh.token").read_text() == FAKE_TOKEN
-    assert "--script" in (fakes / "uv.args").read_text()
+    assert "--locked --script" in (fakes / "uv.args").read_text()
     # The token goes to gh's environment only, never to the output.
     assert FAKE_TOKEN not in result.stdout + result.stderr
     assert "as the reviewer App" in result.stdout

@@ -13,9 +13,10 @@
 | `make test-backend-integration` | `backend/tests/integration/` only, with `-rs` (prints why anything skipped) |
 | `make test-frontend` | `vitest run` in `frontend/` |
 | `make test-e2e` | Playwright against the running stack (`make up` first); fails until #23 adds the suites |
-| `make test-scripts` | `scripts/tests/`: the repo tooling, e.g. the reviewer App token and review scripts (#70), in a throwaway `uv` environment. No network or real key: GitHub, `uv` and `gh` are faked |
+| `make test-scripts` | `scripts/tests/`: the repo tooling, e.g. the reviewer App token and review scripts (#70), with the backend's locked pytest plus the token script's pinned dependencies. No network or real key: GitHub, `uv` and `gh` are faked |
 | `make lint-backend` | `ruff check`, `ruff format --check`, `mypy` (strict) |
 | `make lint-frontend` | `eslint`, `prettier --check`, `tsc -b` (strict) |
+| `make lint-scripts` | `ruff check`, `ruff format --check`, `mypy` (strict) on `scripts/*.py` and `scripts/tests/`, with the backend's tools and config. `create_backlog.py` (the one-off board seeding script) is excluded |
 
 Add `JUNIT_DIR=reports` to any `test-*` target except `test-e2e` to also write a JUnit XML report to `reports/<suite>.xml` (git-ignored). Playwright end-to-end tests join `make test` with #23.
 
@@ -25,7 +26,7 @@ Add `JUNIT_DIR=reports` to any `test-*` target except `test-e2e` to also write a
 
 | Job (check name) | Runs | Notes |
 |---|---|---|
-| `Lint and type-check` | `make lint-backend`, `make lint-frontend` | |
+| `Lint and type-check` | `make lint-backend`, `make lint-frontend`, `make lint-scripts` | |
 | `Backend unit tests` | `make test-backend-unit`, then `make test-scripts` | The script tests ride in this job so the five required check names stay the same |
 | `Backend integration tests` | `make test-backend-integration` against a `postgres:17-alpine` service | Connects as `focus`, a role with `CREATEDB` but not superuser. **Fails if any test skipped**, since a skip means the database was never reached (`scripts/check_junit.py --no-skips`) |
 | `Frontend unit tests` | `make test-frontend` | |
