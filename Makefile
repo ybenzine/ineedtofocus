@@ -10,11 +10,19 @@ UV      := uv --directory backend
 NPM     := npm --prefix frontend
 COMPOSE := docker compose
 
-.PHONY: help install up down logs check-stack test test-backend test-frontend \
-	migrate lint lint-backend lint-frontend fmt fmt-backend fmt-frontend hooks
+.PHONY: help install up down logs check-stack test test-backend test-backend-unit \
+	test-backend-integration test-frontend test-e2e migrate lint lint-backend lint-frontend \
+	fmt fmt-backend fmt-frontend hooks
+
+# Set JUNIT_DIR (e.g. `make test-backend-unit JUNIT_DIR=reports`) to also write JUnit
+# XML reports there. CI does this and uploads them as workflow artifacts.
+JUNIT_DIR ?=
+junit_xml = $(abspath $(JUNIT_DIR))/$(1).xml
+pytest_junit = $(if $(JUNIT_DIR),--junitxml=$(call junit_xml,$(1)))
+vitest_junit = $(if $(JUNIT_DIR),--reporter=default --reporter=junit --outputFile.junit=$(call junit_xml,$(1)))
 
 help: ## List the available targets
-	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-25s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 # --- Dependencies -------------------------------------------------------------
 
@@ -51,11 +59,24 @@ migrate: backend/.venv ## Apply database migrations (alembic upgrade head) to DA
 
 test: test-backend test-frontend ## Run every test suite
 
-test-backend: backend/.venv ## Backend tests (pytest)
+test-backend: backend/.venv ## Backend tests, unit + integration (pytest)
 	$(UV) run pytest
 
+test-backend-unit: backend/.venv ## Backend unit tests only
+	$(UV) run pytest tests/unit $(call pytest_junit,backend-unit)
+
+test-backend-integration: backend/.venv ## Backend integration tests only (Postgres at DATABASE_URL)
+	$(UV) run pytest tests/integration -rs $(call pytest_junit,backend-integration)
+
 test-frontend: frontend/node_modules ## Frontend unit tests (Vitest)
-	$(NPM) test
+	$(NPM) test -- $(call vitest_junit,frontend-unit)
+
+test-e2e: frontend/node_modules ## Playwright end-to-end tests against the running stack (`make up` first)
+	@if ! compgen -G 'frontend/playwright.config.*' > /dev/null; then \
+		echo 'No Playwright suites yet: frontend/playwright.config.* lands with #23.' >&2; \
+		exit 1; \
+	fi
+	$(NPM) exec --no -- playwright test
 
 # --- Lint and format ----------------------------------------------------------
 
@@ -78,5 +99,5 @@ fmt-backend: backend/.venv
 fmt-frontend: frontend/node_modules
 	$(NPM) run fmt
 
-hooks: ## Install the git pre-commit hooks (.pre-commit-config.yaml)
+hooks: install ## Install the git pre-commit hooks (.pre-commit-config.yaml)
 	uvx pre-commit install
