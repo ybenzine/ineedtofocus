@@ -23,7 +23,7 @@ Changing protection is a [human gate](../../_docs/process.md#human-gates): the p
 | Deletion | Blocked | `main` can't be deleted |
 | Required approving reviews | 1 | Every PR needs an approval before it merges. All agents share Yacine's account, which authors the PRs and so can't approve them; the approval comes from the **reviewer GitHub App**'s bot ([below](#reviewer-github-app-70)). The reviewer agent's `Verdict: Approve` review is that approval |
 | Dismiss stale approvals on new commits (`dismiss_stale_reviews`) | On | What merges is exactly what the reviewer approved. A push after the approval (a late fix, a merge from `main`) dismisses it, and the lead runs the reviewer again. The cost is one more reviewer round in that case, which the process asks for anyway |
-| Require approval of the most recent push (`require_last_push_approval`) | Off | Redundant here: stale approvals are dismissed, and the pusher (the shared account) can never approve |
+| Require approval of the most recent push (`require_last_push_approval`) | On | The latest push to a PR must be approved by someone other than whoever pushed it. In the normal flow the shared account pushes and the bot approves, so nothing changes. But if the bot's token leaks and is used to push to a PR branch, the bot's own approval no longer counts, and the shared account can't approve its own PR, so that PR can't merge. Stale-approval dismissal alone wouldn't stop this: the bot could push and then approve again |
 | Code owner reviews | Off | No `CODEOWNERS`; the reviewer agent reviews everything |
 
 Because the required checks apply to administrators too, a direct push to `main` is rejected as well: its commit has no passing checks and no approval. A request-changes review from the bot also blocks the merge until the bot approves a later round.
@@ -51,7 +51,20 @@ GH_TOKEN="$(uv run --quiet --locked --script scripts/reviewer_token.py)" \
 
 **Fallback when the key is missing or unreadable:** `reviewer-review.sh` posts the review as a COMMENT from the default gh login and says so. A comment can't approve, so the PR can't merge. The lead stops with `⛔ Needs Yacine:` and Yacine restores the key: App settings → *Private keys* → *Generate a private key*, saved to the path above with `chmod 600`. The reviewer then posts its review again through the App. Any other token failure (GitHub refused the token, no network) posts nothing, so it gets looked at instead of silently downgrading the review.
 
-**Accepted cost of Contents write:** a leaked token (it lives one hour) or a leaked key could push to any unprotected branch of this repository, or open and approve a PR. It can't touch `main`: branch protection requires the CI checks on every change to `main`, with administrators included, and `dismiss_stale_reviews` drops an approval when new commits land. The key stays on Yacine's machine, tokens are minted per review and never written anywhere, and the token script asks before running directly in Claude Code. If the key may have leaked, delete it in the App's settings (that also stops new tokens) and generate a new one.
+**Accepted cost of Contents write:** a leaked token (it lives one hour), or a leaked key that can mint new tokens, can:
+- push to any branch except `main`, including open PR branches (but not workflow files: the App has no Workflows permission);
+- open, approve and merge PRs through the API.
+
+What keeps such a token from getting code into `main` is branch protection, not the token's scope:
+- **Last-push approval by a different actor** (`require_last_push_approval`): if the bot pushes to a PR branch, its own approval of that PR doesn't count, and the shared account can't approve its own PRs. So a PR the bot pushed to can't merge until the shared account pushes again and the reviewer re-approves the new commit (stale approvals are dismissed).
+- **The five required CI checks**, which only a GitHub Actions run can satisfy.
+- **Administrators included** (`enforce_admins`): nobody, including the owner, can bypass the two rules above.
+
+The residual risk is narrower but real. With a leaked token, an attacker can approve any open PR whose last push came from the shared account, and merge it once CI is green, skipping the reviewer agent. Getting the attacker's own code into such a PR still needs the shared account itself.
+
+- **Tags and releases:** Contents write also lets a leaked token create tags and releases. Prod deploys (#27–#30) therefore must not trigger on a tag or release unless the run goes through the approval-gated `production` environment, or tag creation is restricted by a tag ruleset.
+
+To limit exposure, the key stays on Yacine's machine, a token is minted per review and never written anywhere, and the token script asks before running directly in Claude Code. If the key may have leaked, delete it in the App's settings (that also stops new tokens) and generate a new one.
 
 **Rotating the key:** generate a new key in the App's settings, replace the file, then delete the old key there. Nothing else holds a copy.
 
