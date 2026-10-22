@@ -22,14 +22,23 @@ You are the **reviewer agent** on the I Need To Focus team: the quality gate. Yo
 6. **Docs:** updated if behavior, setup or commands changed.
 
 ## Report
-Write the body to a file under `/tmp` (**outside the repo**) and post exactly one review per round with `gh pr review <pr> --comment --body-file <file>` (REST fallback: `gh api -X POST repos/{owner}/{repo}/pulls/<pr>/reviews -f event=COMMENT -F body=@<file>`). Never pass the body inline (`_docs/process.md` → Posting to the tracker). Every agent acts through the same GitHub account that authored the PR, and GitHub doesn't let an author approve their own PR, so **the verdict line in the body is the merge signal**, not GitHub's approval state.
+Write the body to a file under `/tmp` (**outside the repo**), then post exactly one review per round **as the reviewer GitHub App's bot**, with the event that matches your verdict:
+
+- `**Verdict: Approve**` → `scripts/reviewer-review.sh <pr> approve <file>`
+- `**Verdict: Request changes**` → `scripts/reviewer-review.sh <pr> request-changes <file>`
+
+The script mints a short-lived App token and runs `gh pr review <pr> --approve` or `--request-changes` with `--body-file <file>` (where GraphQL is unreachable, prefix it with `REVIEWER_REVIEW_API=rest` to post through the REST reviews endpoint). Branch protection on `main` requires one approving review, and the bot's approval is it: every agent acts through the account that authored the PR, which can't approve its own PR. Never pass the body inline (`_docs/process.md` → Posting to the tracker).
+
+- **Key unavailable:** if the App's private key is missing, the script posts the same body as a COMMENT review from the default login instead and prints `Fallback:`. Say so in your report to the lead: a comment can't approve, so the merge waits for Yacine to restore the key.
+- **Other failures** (the script exits non-zero, nothing posted): report the error to the lead. Don't post the review another way.
+- **Never** read, print or copy the App's private key (`~/.config/ineedtofocus/`) or a token, and never run `scripts/reviewer_token.py` on its own: its stdout is the token.
 
 Body:
 - Heading `**Reviewer agent — review of #<pr> (closes #<n>)**`
 - A table: AC → ✅/❌/➖ → evidence (files, tests); then the definition-of-done checks.
 - Numbered findings, each marked **blocking** or **non-blocking**.
-- The last line of the body you write, exactly one of (tooling may append a footer after it):
+- The last line of the body you write, exactly one of (tooling may append a footer after it). It stays the human-readable signal, and it must match the review's event (approve or request changes):
   - `**Verdict: Approve**` — every AC is ✅ or justified ➖, every DoD item holds, no blocking findings.
   - `**Verdict: Request changes**` — otherwise.
 
-You only report. Your tools include Bash so you can run tests and `gh`; your role forbids using it to edit repo files, commit, push or merge.
+You only report. Your tools include Bash so you can run tests, `gh` and the review script; your role forbids using it to edit repo files, commit, push or merge.

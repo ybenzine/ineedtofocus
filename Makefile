@@ -11,8 +11,8 @@ NPM     := npm --prefix frontend
 COMPOSE := docker compose
 
 .PHONY: help install up down logs check-stack test test-backend test-backend-unit \
-	test-backend-integration test-frontend test-e2e migrate lint lint-backend lint-frontend \
-	fmt fmt-backend fmt-frontend hooks
+	test-backend-integration test-frontend test-e2e test-scripts migrate lint lint-backend lint-frontend \
+	lint-scripts fmt fmt-backend fmt-frontend hooks
 
 # Set JUNIT_DIR (e.g. `make test-backend-unit JUNIT_DIR=reports`) to also write JUnit
 # XML reports there. CI does this and uploads them as workflow artifacts.
@@ -20,6 +20,13 @@ JUNIT_DIR ?=
 junit_xml = $(abspath $(JUNIT_DIR))/$(1).xml
 pytest_junit = $(if $(JUNIT_DIR),--junitxml=$(call junit_xml,$(1)))
 vitest_junit = $(if $(JUNIT_DIR),--reporter=default --reporter=junit --outputFile.junit=$(call junit_xml,$(1)))
+
+# Repo tooling in scripts/ is linted and tested with the backend's locked ruff, mypy and pytest
+# (backend/uv.lock, same config as the backend), plus the exact dependency pins in
+# scripts/reviewer_token.py's inline metadata. Paths are relative to backend/.
+SCRIPTS_RUN := $(UV) run --with-requirements ../scripts/reviewer_token.py
+# create_backlog.py seeded the board once (2026-10-20) and is kept only as a record; not linted.
+SCRIPTS_LINT_EXCLUDE := create_backlog.py
 
 help: ## List the available targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-25s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -57,7 +64,7 @@ migrate: backend/.venv ## Apply database migrations (alembic upgrade head) to DA
 
 # --- Tests --------------------------------------------------------------------
 
-test: test-backend test-frontend ## Run every test suite
+test: test-backend test-frontend test-scripts ## Run every test suite
 
 test-backend: backend/.venv ## Backend tests, unit + integration (pytest)
 	$(UV) run pytest
@@ -71,6 +78,9 @@ test-backend-integration: backend/.venv ## Backend integration tests only (Postg
 test-frontend: frontend/node_modules ## Frontend unit tests (Vitest)
 	$(NPM) test -- $(call vitest_junit,frontend-unit)
 
+test-scripts: backend/.venv ## Repo script tests (scripts/tests, pytest; e.g. the reviewer App, #70)
+	$(SCRIPTS_RUN) pytest -p no:cacheprovider ../scripts/tests $(call pytest_junit,scripts)
+
 test-e2e: frontend/node_modules ## Playwright end-to-end tests against the running stack (`make up` first)
 	@if ! compgen -G 'frontend/playwright.config.*' > /dev/null; then \
 		echo 'No Playwright suites yet: frontend/playwright.config.* lands with #23.' >&2; \
@@ -80,7 +90,7 @@ test-e2e: frontend/node_modules ## Playwright end-to-end tests against the runni
 
 # --- Lint and format ----------------------------------------------------------
 
-lint: lint-backend lint-frontend ## Run all linters and type checks
+lint: lint-backend lint-frontend lint-scripts ## Run all linters and type checks
 
 lint-backend: backend/.venv ## ruff check, ruff format --check, mypy
 	$(UV) run ruff check .
@@ -89,6 +99,11 @@ lint-backend: backend/.venv ## ruff check, ruff format --check, mypy
 
 lint-frontend: frontend/node_modules ## eslint, prettier --check, tsc
 	$(NPM) run lint
+
+lint-scripts: backend/.venv ## ruff check, ruff format --check, mypy (strict) on scripts/*.py
+	$(SCRIPTS_RUN) ruff check --config pyproject.toml --extend-exclude $(SCRIPTS_LINT_EXCLUDE) ../scripts
+	$(SCRIPTS_RUN) ruff format --config pyproject.toml --extend-exclude $(SCRIPTS_LINT_EXCLUDE) --check ../scripts
+	$(SCRIPTS_RUN) mypy --config-file pyproject.toml --exclude '$(SCRIPTS_LINT_EXCLUDE)$$' ../scripts
 
 fmt: fmt-backend fmt-frontend ## Auto-format everything
 

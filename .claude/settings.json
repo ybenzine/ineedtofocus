@@ -100,7 +100,10 @@
       "Bash(gh secret list*)",
       "Bash(gh workflow run rollback.yml *)",
       "Bash(git rev-parse *)",
-      "Bash(git remote -v*)"
+      "Bash(git remote -v*)",
+      "Bash(scripts/reviewer-review.sh *)",
+      "Bash(./scripts/reviewer-review.sh *)",
+      "Bash(gh pr review *)"
     ],
     "ask": [
       "Bash(ssh *)",
@@ -118,7 +121,12 @@
       "Bash(gh api *environments*)",
       "Bash(gh api *rulesets*)",
       "Bash(gh api *collaborators*)",
-      "Bash(gh api *invitations*)"
+      "Bash(gh api *invitations*)",
+      "Bash(scripts/reviewer_token.py*)",
+      "Bash(./scripts/reviewer_token.py*)",
+      "Bash(uv run *reviewer_token.py*)",
+      "Bash(python *reviewer_token.py*)",
+      "Bash(python3 *reviewer_token.py*)"
     ],
     "deny": [
       "Bash(gh repo delete *)",
@@ -135,6 +143,8 @@
       "Read(.env)",
       "Read(.env.*)",
       "Read(!.env.example)",
+      "Read(~/.config/ineedtofocus/**)",
+      "Edit(~/.config/ineedtofocus/**)",
       "Bash(rm -r*)",
       "Bash(rm -R*)",
       "Bash(rm -fr*)",

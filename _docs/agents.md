@@ -125,7 +125,7 @@ Every step leaves a trace on the issue and the board, so the board is the record
 |---|---|---|
 | Start | `🟡 <agent> agent — started` comment; card → In progress | `gh issue comment`; `scripts/board-status.sh <n> "In progress"` |
 | PR opened | `🔵 <agent> agent — PR open: #<pr>` comment; card → In review | `gh pr create`; `scripts/board-status.sh <n> "In review"` |
-| Review | PR review with a per-AC table ending in `Verdict: Approve` / `Verdict: Request changes` | `gh pr review --comment` (reviewer subagent) |
+| Review | PR review from the reviewer App's bot (approve or request changes) with a per-AC table ending in `Verdict: Approve` / `Verdict: Request changes` | `scripts/reviewer-review.sh` → `gh pr review --approve` / `--request-changes` (reviewer subagent) |
 | Verified | `🧪 qa agent — verified on dev` comment, or a `bug` issue | `gh issue comment` / `gh issue create` (QA subagent) |
 | Accepted | `accepted` label + `🟢 product manager agent — accepted` comment, or issue reopened with `🔴 not accepted` (QA posts the acceptance on the product manager's own issues) | `gh issue edit --add-label accepted` (product manager subagent; QA subagent for the product manager's own issues) |
 | Done | Issue checkboxes ticked; `✅ <agent> agent — done` comment; card → Done | `gh issue edit`; board workflow on close |
