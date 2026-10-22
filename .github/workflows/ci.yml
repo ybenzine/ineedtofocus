@@ -1,0 +1,214 @@
+# CI: lint, type-check and every test suite on each pull request and each push to main.
+#
+# The job names below are the required status checks on `main` (branch protection,
+# infra/github/main-branch-protection.json). Renaming a job means updating that file
+# and the protection settings in the same PR, or every PR stalls on a missing check.
+#
+# Each job goes through the same `make` targets as local work (Makefile). Test jobs write
+# JUnit XML to reports/ and upload it as a workflow artifact, even when tests fail.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # One run per PR (a new push cancels the old run); runs on main are never cancelled.
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  UV_VERSION: "0.11.4" # same as the Dockerfile
+  NODE_VERSION: "24" # same as the Dockerfile
+  FORCE_COLOR: "1"
+
+jobs:
+  lint:
+    name: Lint and type-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: make install
+      - name: ruff, ruff format --check, mypy (strict)
+        run: make lint-backend
+      - name: eslint, prettier --check, tsc (strict)
+        run: make lint-frontend
+
+  backend-unit:
+    name: Backend unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: make test-backend-unit JUNIT_DIR=reports
+      - name: Summarise the report
+        if: ${{ !cancelled() }}
+        run: python3 scripts/check_junit.py reports/backend-unit.xml --title "Backend unit tests" --min-tests 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: test-reports-backend-unit
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+  backend-integration:
+    name: Backend integration tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine # same as compose.yaml
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres # throwaway CI container, not a secret
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    env:
+      # The tests connect as `focus`, a role with CREATEDB but not superuser: each test
+      # creates and drops its own focus_test_<random> database (_docs/testing.md).
+      DATABASE_URL: postgresql+asyncpg://focus:focus@localhost:5432/focus
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Create the test role (LOGIN CREATEDB, no superuser)
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$PG_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 \
+            -c "CREATE ROLE focus LOGIN PASSWORD 'focus' NOSUPERUSER CREATEDB" \
+            -c "CREATE DATABASE focus OWNER focus"
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: make test-backend-integration JUNIT_DIR=reports
+      - name: Fail if any integration test skipped (a skip means no database was used)
+        if: ${{ !cancelled() }}
+        run: >-
+          python3 scripts/check_junit.py reports/backend-integration.xml
+          --title "Backend integration tests" --min-tests 1 --no-skips
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: test-reports-backend-integration
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+  frontend-unit:
+    name: Frontend unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: make test-frontend JUNIT_DIR=reports
+      - name: Summarise the report
+        if: ${{ !cancelled() }}
+        run: python3 scripts/check_junit.py reports/frontend-unit.xml --title "Frontend unit tests" --min-tests 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: test-reports-frontend-unit
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+  e2e:
+    name: End-to-end (Compose stack)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      # Where Playwright (#23) reaches the app started by `make up`.
+      PLAYWRIGHT_BASE_URL: http://localhost:8000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Start the stack (build the app image, wait until healthy)
+        run: make up
+      - name: Check health, frontend and telemetry (no query strings or cookies leak)
+        run: make check-stack
+      - name: Look for Playwright suites
+        id: suites
+        run: |
+          if compgen -G 'frontend/playwright.config.*' > /dev/null; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            msg="Playwright did NOT run: there are no suites yet (frontend/playwright.config.* lands with #23). This job only checked the stack with make check-stack."
+            echo "::warning title=Playwright not run::$msg"
+            printf '### End-to-end\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.suites.outputs.found == 'true'
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install Playwright and its browser
+        if: steps.suites.outputs.found == 'true'
+        run: |
+          make frontend/node_modules
+          npm --prefix frontend exec --no -- playwright install --with-deps chromium
+      - name: Run Playwright against the stack
+        if: steps.suites.outputs.found == 'true'
+        run: make test-e2e
+      - name: Save the stack's logs
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p reports
+          docker compose ps --all > reports/compose-ps.txt 2>&1 || true
+          docker compose logs --no-color --timestamps > reports/compose.log 2>&1 || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: test-reports-e2e
+          path: |
+            reports/
+            frontend/playwright-report/
+            frontend/test-results/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Stop the stack
+        if: always()
+        run: docker compose down --volumes --remove-orphans

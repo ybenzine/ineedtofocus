@@ -9,5 +9,6 @@ Deployment and runtime configuration. The local development stack is `compose.ya
 | `caddy/` | Shared Caddy reverse proxy, HTTPS for both host names | #27 |
 | `otel-collector/` | OpenTelemetry Collector forwarding to Grafana Cloud | #31, #32 |
 | `grafana/` | Exported dashboards and alert rules | #32, #33 |
+| `github/` (exists) | GitHub repository settings kept as code: branch protection on `main` ([README](github/README.md)) | #5 |
 
 See [_docs/deployment.md](../_docs/deployment.md) and [_docs/tech_stack.md §2–4](../_docs/tech_stack.md).

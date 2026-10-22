@@ -3,7 +3,9 @@
 #
 # Ruff, ESLint and Prettier run as local hooks through the project's own
 # toolchains (uv for backend/, npm for frontend/), so the versions match
-# `make lint` and CI exactly.
+# `make lint` and CI exactly. `npm exec --no` never downloads a package: without
+# `make install` (which `make hooks` runs first) the hook fails instead of
+# fetching an unpinned eslint or prettier.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -35,12 +37,12 @@ repos:
         pass_filenames: false
       - id: eslint
         name: eslint (frontend)
-        entry: npm --prefix frontend exec -- eslint --config frontend/eslint.config.js --fix --max-warnings 0
+        entry: npm --prefix frontend exec --no -- eslint --config frontend/eslint.config.js --fix --max-warnings 0
         language: system
         files: ^frontend/.*\.(ts|tsx|js|jsx)$
       - id: prettier
         name: prettier (frontend)
-        entry: npm --prefix frontend exec -- prettier --write --ignore-unknown
+        entry: npm --prefix frontend exec --no -- prettier --write --ignore-unknown
         language: system
         files: ^frontend/
         exclude: ^frontend/(package-lock\.json|public/)
