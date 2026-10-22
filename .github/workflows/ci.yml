@@ -69,6 +69,11 @@ jobs:
       - name: Summarise the report
         if: ${{ !cancelled() }}
         run: python3 scripts/check_junit.py reports/backend-unit.xml --title "Backend unit tests" --min-tests 1
+      - name: Repo script tests (scripts/tests)
+        run: make test-scripts JUNIT_DIR=reports
+      - name: Summarise the script test report
+        if: ${{ !cancelled() }}
+        run: python3 scripts/check_junit.py reports/scripts.xml --title "Repo script tests" --min-tests 1
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:

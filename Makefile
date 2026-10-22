@@ -11,7 +11,7 @@ NPM     := npm --prefix frontend
 COMPOSE := docker compose
 
 .PHONY: help install up down logs check-stack test test-backend test-backend-unit \
-	test-backend-integration test-frontend test-e2e migrate lint lint-backend lint-frontend \
+	test-backend-integration test-frontend test-e2e test-scripts migrate lint lint-backend lint-frontend \
 	fmt fmt-backend fmt-frontend hooks
 
 # Set JUNIT_DIR (e.g. `make test-backend-unit JUNIT_DIR=reports`) to also write JUnit
@@ -57,7 +57,7 @@ migrate: backend/.venv ## Apply database migrations (alembic upgrade head) to DA
 
 # --- Tests --------------------------------------------------------------------
 
-test: test-backend test-frontend ## Run every test suite
+test: test-backend test-frontend test-scripts ## Run every test suite
 
 test-backend: backend/.venv ## Backend tests, unit + integration (pytest)
 	$(UV) run pytest
@@ -70,6 +70,12 @@ test-backend-integration: backend/.venv ## Backend integration tests only (Postg
 
 test-frontend: frontend/node_modules ## Frontend unit tests (Vitest)
 	$(NPM) test -- $(call vitest_junit,frontend-unit)
+
+# Tests for the repo tooling in scripts/ (e.g. the reviewer App token, #70). They run in a
+# throwaway uv environment with the same dependency as scripts/reviewer_token.py.
+test-scripts: ## Repo script tests (scripts/tests, pytest)
+	uv run --no-project --python 3.12 --with 'pyjwt[crypto]>=2.8,<3' --with 'pytest>=8,<10' \
+		pytest -p no:cacheprovider scripts/tests $(call pytest_junit,scripts)
 
 test-e2e: frontend/node_modules ## Playwright end-to-end tests against the running stack (`make up` first)
 	@if ! compgen -G 'frontend/playwright.config.*' > /dev/null; then \
