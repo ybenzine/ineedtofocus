@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertPlayer } from './sounds/alerts.ts'
 import AccountBar from './auth/AccountBar.tsx'
+import { notifySessionExpired, signedInUserId } from './auth/localData.ts'
 import ScreenNav from './nav/ScreenNav.tsx'
 import { type ScreenId } from './nav/screens.ts'
 import { httpSettingsApi } from './settings/api.ts'
-import { SettingsPreferencesStore, SettingsAlertVolumeStore } from './settings/adapters.ts'
+import { SettingsAlertVolumeStore, SettingsPreferencesStore } from './settings/adapters.ts'
 import { SettingsContext, useSettingsState } from './settings/SettingsContext.ts'
 import SettingsScreen from './settings/SettingsScreen.tsx'
 import { SettingsStore } from './settings/store.ts'
@@ -13,36 +14,29 @@ import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
 import type { AudioSource } from './setup/options.ts'
 import SessionSummary from './timerscreen/SessionSummary.tsx'
 import TimerScreen from './timerscreen/TimerScreen.tsx'
-import {
-  LocalActiveSessionStore,
-  TimerController,
-  type SessionRecord,
-  type TimerUpdate,
-} from './timer/index.ts'
+import { createAppServices, type AppServices } from './services.ts'
+import type { TimerController, TimerUpdate } from './timer/index.ts'
 
 export interface AppProps {
-  /** Injectable for tests; the app uses the device's localStorage by default. */
+  /**
+   * The timer, session store and sync (`main.tsx` creates them once). Without them the app
+   * makes its own: the active session in localStorage, finished sessions in IndexedDB, synced
+   * to the server (F13).
+   */
+  services?: AppServices
+  /** For tests: just a timer, with nothing stored or synced beyond what it is given. */
   controller?: TimerController
   /** Settings with their device cache and sync; the app uses the Settings API by default. */
   settings?: SettingsStore
   /** Overrides the settings-backed last-used Pomodoro config and tag. */
   preferences?: PreferencesStore
+  /** How often a finished session that couldn't be saved on the device is tried again. */
+  pendingRetryMs?: number
   /** Injectable for tests; plays the chime and the end bell (#16). */
   alerts?: AlertPlayer
 }
 
-// The session store (IndexedDB, #19) isn't built yet; until it is, finished records are dropped.
-// #19 replaces this.
-function saveRecordPlaceholder(record: SessionRecord): void {
-  void record
-}
-
-function createController(): TimerController {
-  return new TimerController({
-    store: new LocalActiveSessionStore(),
-    saveRecord: saveRecordPlaceholder,
-  })
-}
+export const PENDING_RETRY_MS = 10_000
 
 type View =
   | { name: 'loading' }
@@ -52,14 +46,27 @@ type View =
   | { name: 'summary'; update: TimerUpdate }
 
 /** How long a first look at the server's settings may hold up the setup screen. */
-const SETTINGS_WAIT_MS = 1500
+export const SETTINGS_WAIT_MS = 1500
 
-function createSettings(): SettingsStore {
-  return new SettingsStore({ api: httpSettingsApi, storage: window.localStorage })
-}
-
+/**
+ * One settings store per signed-in mount (AuthGate renders the app only while someone is signed
+ * in), bound to that user, so nothing of theirs outlives them or reaches the next account.
+ */
 export default function App(props: AppProps) {
-  const settings = useMemo(() => props.settings ?? createSettings(), [props.settings])
+  const { settings: given } = props
+  const settings = useMemo(
+    () =>
+      given ??
+      new SettingsStore({
+        api: httpSettingsApi,
+        storage: window.localStorage,
+        owner: signedInUserId(),
+        currentOwner: signedInUserId,
+        onUnauthorized: notifySessionExpired,
+      }),
+    [given],
+  )
+  useEffect(() => () => settings.dispose(), [settings])
   return (
     <SettingsContext.Provider value={settings}>
       <AppBody {...props} settings={settings} />
@@ -68,12 +75,18 @@ export default function App(props: AppProps) {
 }
 
 function AppBody({
+  services: given,
   controller,
   settings,
   preferences,
   alerts,
+  pendingRetryMs = PENDING_RETRY_MS,
 }: AppProps & { settings: SettingsStore }) {
-  const timer = useMemo(() => controller ?? createController(), [controller])
+  const services = useMemo<AppServices>(
+    () => given ?? (controller ? { controller, sync: null, hook: null } : createAppServices()),
+    [given, controller],
+  )
+  const timer = services.controller
   const prefs = useMemo(
     () => preferences ?? new SettingsPreferencesStore(settings),
     [preferences, settings],
@@ -99,31 +112,64 @@ function AppBody({
   // Pick up a session that was running when the app closed (AC6.4), or show how one that ended
   // while the app was closed finished (AC6.5).
   useEffect(() => {
-    // Sync settings whenever the connection returns (AC13.3).
-    return settings.start()
-  }, [settings])
-
-  useEffect(() => {
     let cancelled = false
-    // The setup screen reads the last-used config and tag once, so give the server's copy a
-    // moment to arrive first (another device may have changed it); offline it is skipped.
-    let timeout: ReturnType<typeof setTimeout> | undefined
-    const settingsReady = Promise.race([
-      settings.refresh(),
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(resolve, SETTINGS_WAIT_MS)
-      }),
-    ]).finally(() => clearTimeout(timeout))
-    void Promise.all([timer.restore(), settingsReady]).then(([update]) => {
-      if (cancelled) return
-      if (update.snapshot) setView({ name: 'timer' })
-      else if (update.outcome) setView({ name: 'summary', update })
-      else setView({ name: 'setup' })
+    void timer.restore().then(async (update) => {
+      if (update.snapshot) {
+        if (!cancelled) setView({ name: 'timer' })
+      } else if (update.outcome) {
+        if (!cancelled) setView({ name: 'summary', update })
+      } else {
+        // Only the setup screen needs the server's last-used config and tag, which it reads
+        // once: give them a moment to arrive (another device may have changed them). Offline,
+        // or slow, it opens from the device copy.
+        let timeout: ReturnType<typeof setTimeout> | undefined
+        await Promise.race([
+          settings.refresh(),
+          new Promise<void>((resolve) => {
+            timeout = setTimeout(resolve, SETTINGS_WAIT_MS)
+          }),
+        ])
+        clearTimeout(timeout)
+        if (!cancelled) setView({ name: 'setup' })
+      }
     })
     return () => {
       cancelled = true
     }
   }, [timer, settings])
+
+  // Sync settings at launch (when not waited for above) and whenever the connection returns.
+  useEffect(() => settings.start(), [settings])
+
+  // Send what is on the device now, when the connection returns, and on backoff (AC13.3).
+  // Runs only while someone is signed in: AuthGate renders the app only then (#9).
+  useEffect(() => services.sync?.start(), [services])
+
+  // A finished session that couldn't be saved on the device yet (a stalled IndexedDB) stays in
+  // the timer's own store; keep trying, and drop the "not saved yet" note once it is saved.
+  const recordPending = view.name === 'summary' && view.update.recordPending
+  useEffect(() => {
+    if (!recordPending) return
+    let busy = false
+    const id = window.setInterval(() => {
+      if (busy) return
+      busy = true
+      void timer
+        .retryPending()
+        .then((saved) => {
+          if (!saved) return
+          setView((current) =>
+            current.name === 'summary'
+              ? { name: 'summary', update: { ...current.update, recordPending: false } }
+              : current,
+          )
+        })
+        .finally(() => {
+          busy = false
+        })
+    }, pendingRetryMs)
+    return () => window.clearInterval(id)
+  }, [recordPending, timer, pendingRetryMs])
 
   async function start(request: SessionRequest) {
     void player.unlock() // the Start press is the user gesture browsers require before audio

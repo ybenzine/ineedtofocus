@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { AlertPlayer } from '../sounds/alerts.ts'
 import { SettingsAlertVolumeStore } from './adapters.ts'
@@ -105,7 +105,7 @@ describe('SettingsScreen', () => {
     expect(screen.getByText(/follow this device.s time zone/)).toBeInTheDocument()
   })
 
-  it('says when changes are waiting to sync', () => {
+  it('says when changes are waiting to sync', async () => {
     const store = new SettingsStore({
       api: {
         get: () => Promise.reject(new Error('offline')),
@@ -115,6 +115,21 @@ describe('SettingsScreen', () => {
     renderScreen(store)
     expect(within(screen.getByRole('status')).queryByText(/sync/)).toBeNull()
     fireEvent.change(screen.getByLabelText('Week starts on'), { target: { value: '2' } })
-    expect(screen.getByRole('status')).toHaveTextContent(/sync when you.re back online/)
+    expect(await screen.findByText(/sync when you.re back online/)).toBeInTheDocument()
+  })
+
+  it('does not show the note while an ordinary save is in flight', () => {
+    const store = new SettingsStore({
+      api: { get: () => new Promise(() => undefined), patch: () => new Promise(() => undefined) },
+    })
+    renderScreen(store)
+    fireEvent.change(screen.getByLabelText('Week starts on'), { target: { value: '2' } })
+    expect(screen.getByRole('status')).toHaveTextContent('')
+  })
+
+  it('follows a synced alert volume arriving while Settings is open', () => {
+    const { store } = renderScreen()
+    act(() => store.update({ alert_volume: 12 }))
+    expect(screen.getByLabelText('Alert volume')).toHaveValue('12')
   })
 })

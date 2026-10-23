@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import App from './App.tsx'
+import App, { SETTINGS_WAIT_MS } from './App.tsx'
 import { DEFAULT_SETTINGS, SettingsError } from './settings/api.ts'
 import { SettingsStore } from './settings/store.ts'
 import { MemoryActiveSessionStore, TimerController } from './timer/index.ts'
@@ -59,5 +59,21 @@ describe('App with settings (#22)', () => {
     renderWith(settings)
     await screen.findByRole('button', { name: 'Start' })
     expect(screen.getByRole('radio', { name: 'Nap' })).toBeChecked()
+  })
+
+  it('opens setup from the device copy when the server is slow', async () => {
+    vi.useFakeTimers()
+    try {
+      const api = { get: vi.fn(() => new Promise<never>(() => undefined)), patch: vi.fn() }
+      const settings = new SettingsStore({ api })
+      settings.update({ last_tag: 'read' })
+      renderWith(settings)
+      await act(() => vi.advanceTimersByTimeAsync(SETTINGS_WAIT_MS - 100))
+      expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument()
+      await act(() => vi.advanceTimersByTimeAsync(200))
+      expect(screen.getByRole('radio', { name: 'Read' })).toBeChecked()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -17,6 +17,13 @@ pytestmark = pytest.mark.integration
 PARIS = "Europe/Paris"
 
 
+@pytest.fixture(autouse=True)
+def _fixed_now(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests save sessions at fixed dates, some later than today; the sessions API only
+    accepts times up to now + 24 h (#98), so pin the server clock after all of them."""
+    monkeypatch.setattr("app.sessions._now", lambda: dt.datetime(2030, 1, 1, tzinfo=dt.UTC))
+
+
 def save(c: TestClient, started_at: str, minutes: int, tag: str = "work", **over: Any) -> str:
     """Save a countdown session that starts at `started_at` (UTC, ISO) and lasts `minutes`."""
     start = dt.datetime.fromisoformat(started_at).replace(tzinfo=dt.UTC)

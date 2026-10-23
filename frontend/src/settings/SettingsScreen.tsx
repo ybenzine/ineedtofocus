@@ -13,9 +13,10 @@ const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 
 
 export default function SettingsScreen({ player }: { player: AlertPlayer }) {
   const store = useSettingsStore()
-  const { values, pending } = useSettingsState()
+  const { values, pending, stalled } = useSettingsState()
   const id = useId()
-  const waiting = Object.keys(pending).length > 0
+  // Only when a send failed or the device is offline, not during every ordinary save.
+  const waiting = Object.keys(pending).length > 0 && (stalled || !navigator.onLine)
   const canKeepAwake = wakeLockSupported()
 
   return (
@@ -41,7 +42,7 @@ export default function SettingsScreen({ player }: { player: AlertPlayer }) {
         </p>
       </div>
 
-      <SoundPreview player={player} />
+      <SoundPreview player={player} volume={values.alert_volume} />
 
       <div className="field">
         <label htmlFor={`${id}-bg`}>Background audio volume</label>

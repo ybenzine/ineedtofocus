@@ -10,6 +10,7 @@ import {
   OWNER_KEY,
   PENDING_LOGOUT_KEY,
   USER_KEY,
+  notifySessionExpired,
   registerLocalDataHook,
   type LocalDataHook,
 } from './localData.ts'
@@ -66,7 +67,13 @@ function fill(email: string, password: string) {
 }
 
 function seedUserData() {
-  localStorage.setItem(SETTINGS_KEY, '{"tag":"work"}')
+  localStorage.setItem(
+    SETTINGS_KEY,
+    JSON.stringify({ owner: 'u', values: { alert_volume: 40 }, pending: { week_start_day: 1 } }),
+  )
+  for (const legacy of ['preferences', 'keepAwake', 'alertVolume']) {
+    localStorage.setItem(`ineedtofocus.${legacy}`, '1')
+  }
   localStorage.setItem('someone.elses.key', 'keep me')
 }
 
@@ -237,6 +244,9 @@ describe('sign out', () => {
     for (const key of [SETTINGS_KEY, USER_KEY, OWNER_KEY]) {
       expect(localStorage.getItem(key)).toBeNull()
     }
+    for (const legacy of ['preferences', 'keepAwake', 'alertVolume']) {
+      expect(localStorage.getItem(`ineedtofocus.${legacy}`)).toBeNull()
+    }
     expect(localStorage.getItem('someone.elses.key')).toBe('keep me')
     expect(sessionStorage.getItem('anything')).toBe('x')
   })
@@ -244,7 +254,7 @@ describe('sign out', () => {
   it('runs registered hooks: try to sync, count, then clear', async () => {
     const hook: LocalDataHook = {
       trySync: vi.fn().mockResolvedValue(undefined),
-      countUnsynced: vi.fn().mockResolvedValue(0),
+      countUnsynced: vi.fn().mockResolvedValue({ sessions: 0, edits: 0 }),
       clear: vi.fn().mockResolvedValue(undefined),
     }
     const unregister = registerLocalDataHook(hook)
@@ -259,13 +269,15 @@ describe('sign out', () => {
   it('asks before deleting what a registered hook reports as unsynced', async () => {
     const hook: LocalDataHook = {
       trySync: vi.fn().mockResolvedValue(undefined),
-      countUnsynced: vi.fn().mockResolvedValue(3),
+      countUnsynced: vi.fn().mockResolvedValue({ sessions: 3, edits: 0 }),
       clear: vi.fn().mockResolvedValue(undefined),
     }
     const unregister = registerLocalDataHook(hook)
     await signedIn(makeApi({ me: vi.fn().mockResolvedValue(user) }))
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
-    expect(await screen.findByText(/3 finished sessions haven't been saved/)).toBeInTheDocument()
+    expect(
+      await screen.findByText("3 sessions haven't synced and will be deleted from this device."),
+    ).toBeInTheDocument()
     expect(hook.clear).not.toHaveBeenCalled()
     unregister()
   })
@@ -293,9 +305,7 @@ describe('sign out', () => {
     seedUserData()
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(
-      await screen.findByText(
-        "1 finished session hasn't been saved and will be deleted from this device.",
-      ),
+      await screen.findByText("1 session hasn't synced and will be deleted from this device."),
     ).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
 
@@ -323,6 +333,99 @@ describe('sign out', () => {
     await signedIn(makeApi({ me: vi.fn().mockResolvedValue(user) }), controller)
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+  })
+
+  it('mentions queued edits as well as sessions', async () => {
+    const hook: LocalDataHook = {
+      trySync: vi.fn().mockResolvedValue(undefined),
+      countUnsynced: vi.fn().mockResolvedValue({ sessions: 2, edits: 1 }),
+      clear: vi.fn().mockResolvedValue(undefined),
+    }
+    const unregister = registerLocalDataHook(hook)
+    await signedIn(makeApi({ me: vi.fn().mockResolvedValue(user) }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(
+      await screen.findByText(
+        "2 sessions haven't synced and will be deleted from this device. Some changes to sessions haven't synced either.",
+      ),
+    ).toBeInTheDocument()
+    unregister()
+  })
+
+  it('asks about queued edits alone', async () => {
+    const hook: LocalDataHook = {
+      trySync: vi.fn().mockResolvedValue(undefined),
+      countUnsynced: vi.fn().mockResolvedValue({ sessions: 0, edits: 2 }),
+      clear: vi.fn().mockResolvedValue(undefined),
+    }
+    const unregister = registerLocalDataHook(hook)
+    await signedIn(makeApi({ me: vi.fn().mockResolvedValue(user) }))
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(
+      await screen.findByText(
+        "Some changes to sessions haven't synced and will be deleted from this device.",
+      ),
+    ).toBeInTheDocument()
+    expect(hook.clear).not.toHaveBeenCalled()
+    unregister()
+  })
+
+  it('"Sign out anyway" re-checks for a timer started in another tab and clears nothing', async () => {
+    const hook: LocalDataHook = {
+      trySync: vi.fn().mockResolvedValue(undefined),
+      countUnsynced: vi.fn().mockResolvedValue({ sessions: 1, edits: 0 }),
+      clear: vi.fn().mockResolvedValue(undefined),
+    }
+    const unregister = registerLocalDataHook(hook)
+    const api = makeApi({ me: vi.fn().mockResolvedValue(user) })
+    await signedIn(api)
+    seedUserData()
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await screen.findByRole('button', { name: 'Sign out anyway' })
+
+    // Meanwhile another tab starts a session.
+    const { controller: otherTab } = makeController()
+    await otherTab.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out anyway' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'End your session before signing out.',
+    )
+    expect(api.signOut).not.toHaveBeenCalled()
+    expect(hook.clear).not.toHaveBeenCalled()
+    expect(localStorage.getItem(ACTIVE_SESSION_KEY)).not.toBeNull()
+    expect(localStorage.getItem(SETTINGS_KEY)).not.toBeNull()
+    unregister()
+  })
+
+  it('finishes signing out when a hook fails to clear, and logs nothing', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const failing: LocalDataHook = {
+      trySync: vi.fn().mockResolvedValue(undefined),
+      countUnsynced: vi.fn().mockResolvedValue({ sessions: 0, edits: 0 }),
+      clear: vi.fn().mockRejectedValue(new Error('secret goal text')),
+    }
+    const other: LocalDataHook = {
+      trySync: vi.fn().mockResolvedValue(undefined),
+      countUnsynced: vi.fn().mockResolvedValue({ sessions: 0, edits: 0 }),
+      clear: vi.fn().mockResolvedValue(undefined),
+    }
+    const unregisterFailing = registerLocalDataHook(failing)
+    const unregisterOther = registerLocalDataHook(other)
+    await signedIn(makeApi({ me: vi.fn().mockResolvedValue(user) }))
+    seedUserData()
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+    expect(other.clear).toHaveBeenCalled()
+    expect(localStorage.getItem(SETTINGS_KEY)).toBeNull()
+    expect(localStorage.getItem(USER_KEY)).toBeNull()
+    expect(log).not.toHaveBeenCalled()
+    expect(warn).not.toHaveBeenCalled()
+    unregisterFailing()
+    unregisterOther()
+    log.mockRestore()
+    warn.mockRestore()
   })
 
   it('keeps the user signed in with a message when the server fails', async () => {
@@ -396,6 +499,16 @@ describe('offline sign out', () => {
     expect(signOut).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps the marker on any other error (not only network or 5xx)', async () => {
+    localStorage.setItem(PENDING_LOGOUT_KEY, '1')
+    const signOut = vi.fn().mockRejectedValue(new AuthError('rate_limited', 'slow down'))
+    renderGate(makeApi({ signOut }))
+    await screen.findByRole('heading', { name: 'Sign in' })
+    await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
+    expect(localStorage.getItem(PENDING_LOGOUT_KEY)).not.toBeNull()
+    expect(screen.getByText(OFFLINE_SIGN_OUT_NOTICE)).toBeInTheDocument()
+  })
+
   it('runs the queued logout before a sign-in request, and blocks sign-in while it fails', async () => {
     localStorage.setItem(PENDING_LOGOUT_KEY, '1')
     const order: string[] = []
@@ -433,6 +546,32 @@ describe('offline sign out', () => {
 })
 
 describe('local data belongs to one user', () => {
+  it('a 401 from sync re-checks the sign-in: expired shows sign-in and keeps the data', async () => {
+    const me = vi.fn().mockResolvedValueOnce(user).mockResolvedValue(null)
+    renderGate(makeApi({ me }))
+    await screen.findByText('the timer app')
+    seedUserData()
+    act(() => {
+      notifySessionExpired()
+    })
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+    expect(me).toHaveBeenCalledTimes(2)
+    expect(localStorage.getItem(USER_KEY)).toBeNull()
+    expect(localStorage.getItem(OWNER_KEY)).toBe(user.id)
+    expect(localStorage.getItem(SETTINGS_KEY)).not.toBeNull()
+  })
+
+  it('a 401 from sync while the server is unreachable leaves the user signed in', async () => {
+    const me = vi.fn().mockResolvedValueOnce(user).mockRejectedValue(offline)
+    renderGate(makeApi({ me }))
+    await screen.findByText('the timer app')
+    act(() => {
+      notifySessionExpired()
+    })
+    await waitFor(() => expect(me).toHaveBeenCalledTimes(2))
+    expect(screen.getByText('the timer app')).toBeInTheDocument()
+  })
+
   it('keeps the data when /me returns 401 for a remembered user', async () => {
     localStorage.setItem(USER_KEY, JSON.stringify(user))
     localStorage.setItem(OWNER_KEY, user.id)

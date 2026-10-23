@@ -197,6 +197,50 @@ def test_serves_frontend_with_spa_fallback(tmp_path: Path) -> None:
         assert "spa" in c.get("/..%2f..%2fetc/passwd").text  # no traversal out of dist
 
 
+def test_missing_static_files_are_404_not_index_html(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path, dist=True)) as c:
+        for path in (
+            "/assets/index-abc123.js",
+            "/assets/nested/missing",
+            "/missing.css",
+            "/icon.png",
+            "/rain.wav",
+            "/manifest.webmanifest",
+            "/sw.js",
+        ):
+            r = c.get(path)
+            assert r.status_code == 404, path
+            assert "spa" not in r.text, path
+            assert r.json()["error"]["code"] == "not_found", path
+        assert c.get("/assets/app.js").status_code == 200  # existing files still served
+
+
+def test_existing_root_files_with_extension_are_still_served(tmp_path: Path) -> None:
+    app = make_app(tmp_path, dist=True)
+    (tmp_path / "dist" / "sw.js").write_text("self.skipWaiting()")
+    (tmp_path / "dist" / "manifest.webmanifest").write_text('{"name":"x"}')
+    with TestClient(app) as c:
+        assert c.get("/sw.js").text == "self.skipWaiting()"
+        assert c.get("/manifest.webmanifest").json() == {"name": "x"}
+
+
+def test_extensionless_routes_still_get_index_html(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path, dist=True)) as c:
+        for path in ("/history", "/settings", "/history/week"):
+            r = c.get(path)
+            assert r.status_code == 200, path
+            assert "spa" in r.text, path
+
+
+def test_api_and_health_unchanged_with_frontend(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path, dist=True)) as c:
+        assert c.get("/healthz").status_code == 200
+        assert c.get("/readyz").status_code == 200
+        r = c.get("/api/unknown.js")
+        assert r.status_code == 404
+        assert r.json()["error"]["code"] == "not_found"
+
+
 def test_unknown_and_url_keys_are_not_echoed_in_422(client: TestClient) -> None:
     secret = "https://youtube.com/watch?v=abc"
     r = client.post("/api/_strict", json={"name": "x", secret: 1})

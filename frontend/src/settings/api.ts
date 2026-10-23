@@ -57,15 +57,18 @@ export type SettingsErrorKind = 'network' | 'unauthorized' | 'invalid' | 'server
 
 export class SettingsError extends Error {
   readonly kind: SettingsErrorKind
-  constructor(kind: SettingsErrorKind, message: string) {
+  /** For `invalid`: the settings the server named as rejected; empty when it didn't say. */
+  readonly fields: string[]
+  constructor(kind: SettingsErrorKind, message: string, fields: string[] = []) {
     super(message)
     this.kind = kind
+    this.fields = fields
   }
 }
 
 export interface SettingsApi {
-  get(): Promise<Settings>
-  patch(patch: SettingsPatch): Promise<Settings>
+  get(signal?: AbortSignal): Promise<Settings>
+  patch(patch: SettingsPatch, signal?: AbortSignal): Promise<Settings>
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -114,12 +117,30 @@ export function parseSettings(value: unknown): Settings {
   }
 }
 
-async function call(method: 'GET' | 'PATCH', body?: SettingsPatch): Promise<Settings> {
+/** Names of the settings a 422 body points at (`error.details[].field`, last path segment). */
+async function rejectedFields(response: Response): Promise<string[]> {
+  try {
+    const body = (await response.json()) as { error?: { details?: { field?: unknown }[] | null } }
+    const fields = (body.error?.details ?? []).flatMap((detail) =>
+      typeof detail.field === 'string' ? [detail.field.split('.').pop() ?? ''] : [],
+    )
+    return fields.filter((field) => (SETTINGS_KEYS as readonly string[]).includes(field))
+  } catch {
+    return []
+  }
+}
+
+async function call(
+  method: 'GET' | 'PATCH',
+  body?: SettingsPatch,
+  signal?: AbortSignal,
+): Promise<Settings> {
   let response: Response
   try {
     response = await fetch('/api/settings', {
       method,
       credentials: 'same-origin',
+      signal,
       headers: body ? { 'Content-Type': 'application/json' } : undefined,
       body: body ? JSON.stringify(body) : undefined,
     })
@@ -127,7 +148,13 @@ async function call(method: 'GET' | 'PATCH', body?: SettingsPatch): Promise<Sett
     throw new SettingsError('network', "Can't reach the server.")
   }
   if (response.status === 401) throw new SettingsError('unauthorized', 'Not signed in.')
-  if (response.status === 422) throw new SettingsError('invalid', 'The server rejected a value.')
+  if (response.status === 422) {
+    throw new SettingsError(
+      'invalid',
+      'The server rejected a value.',
+      await rejectedFields(response),
+    )
+  }
   if (!response.ok) throw new SettingsError('server', 'The server could not save settings.')
   try {
     return parseSettings(await response.json())
@@ -137,6 +164,6 @@ async function call(method: 'GET' | 'PATCH', body?: SettingsPatch): Promise<Sett
 }
 
 export const httpSettingsApi: SettingsApi = {
-  get: () => call('GET'),
-  patch: (patch) => call('PATCH', patch),
+  get: (signal) => call('GET', undefined, signal),
+  patch: (patch, signal) => call('PATCH', patch, signal),
 }
