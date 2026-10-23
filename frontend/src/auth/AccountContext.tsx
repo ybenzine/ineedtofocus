@@ -3,9 +3,11 @@ import type { User } from './api.ts'
 
 export interface Account {
   user: User
-  /** Empty when there is nothing to report. */
-  signOutError: string
-  signOut: () => Promise<void>
+  /**
+   * Ends the session on the server and clears this user's data from the device. Resolves to an
+   * error message if the user must stay signed in, or `null` once signed out.
+   */
+  signOut: () => Promise<string | null>
 }
 
 export const AccountContext = createContext<Account | null>(null)

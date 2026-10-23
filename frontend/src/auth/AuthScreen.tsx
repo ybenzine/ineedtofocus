@@ -6,11 +6,20 @@ type Mode = 'signin' | 'signup'
 interface Props {
   api: AuthApi
   onSignedIn: (user: User) => void
+  /** Shown above the form, e.g. after an offline sign-out. */
+  notice?: string
+  /** Runs before each sign-in or sign-up request; a returned message stops the request. */
+  beforeSubmit?: () => Promise<string | null>
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-export default function AuthScreen({ api, onSignedIn }: Props) {
+export default function AuthScreen({
+  api,
+  onSignedIn,
+  notice,
+  beforeSubmit = () => Promise.resolve(null),
+}: Props) {
   const [mode, setMode] = useState<Mode>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -52,6 +61,13 @@ export default function AuthScreen({ api, onSignedIn }: Props) {
 
     setBusy(true)
     try {
+      // A sign-out that never reached the server is finished first.
+      const blocked = await beforeSubmit()
+      if (blocked) {
+        setFormError(blocked)
+        setBusy(false)
+        return
+      }
       const user =
         mode === 'signup'
           ? await api.signUp(trimmed, password)
@@ -79,6 +95,7 @@ export default function AuthScreen({ api, onSignedIn }: Props) {
   return (
     <main>
       <h1>I Need To Focus</h1>
+      {notice && <p role="status">{notice}</p>}
       <h2 ref={headingRef} tabIndex={-1}>
         {signUp ? 'Create your account' : 'Sign in'}
       </h2>

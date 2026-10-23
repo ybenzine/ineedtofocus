@@ -71,6 +71,15 @@ describe('httpAuthApi', () => {
   })
 })
 
+describe('httpAuthApi sign-out', () => {
+  it('treats 401 as already signed out and 5xx as a failure', async () => {
+    reply(401, {})
+    await expect(httpAuthApi.signOut()).resolves.toBeUndefined()
+    reply(500, {})
+    expect((await failure(httpAuthApi.signOut())).kind).toBe('server')
+  })
+})
+
 describe('httpAuthApi availability', () => {
   it('maps a 5xx to a server error', async () => {
     reply(503, {})

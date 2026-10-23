@@ -1,13 +1,16 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { AccountContext, type Account } from './AccountContext.tsx'
 import { AuthError, httpAuthApi, type AuthApi, type User } from './api.ts'
 import AuthScreen from './AuthScreen.tsx'
 import {
   cacheUser,
+  claimLocalData,
   clearLocalUserData,
+  clearPendingLogout,
   forgetCachedUser,
-  hasUnsavedSession,
+  hasPendingLogout,
   loadCachedUser,
+  setPendingLogout,
   USER_KEY,
 } from './localData.ts'
 
@@ -16,25 +19,56 @@ interface Props {
   api?: AuthApi
 }
 
+export const OFFLINE_SIGN_OUT_NOTICE =
+  "You're signed out on this device. Your account will be fully signed out the next time this device is online."
+
 /**
  * Shows the sign-in screen until the user is signed in, then the app (AC1.2).
  * If the server can't be reached (offline, timeout, 5xx) but this device remembers a signed-in
  * user, the app opens anyway so the timers keep working offline (F13). The app shows the
  * account bar itself, on its setup screen, through `AccountContext`.
+ *
+ * Local data is bound to the user id: a different user signing in first removes the previous
+ * owner's data. A sign-out that couldn't reach the server leaves a `pendingLogout` marker; while
+ * it is set the device is never treated as signed in and `/me` is not called.
  */
 export default function AuthGate({ children, api = httpAuthApi }: Props) {
   const [user, setUser] = useState<User | null>(null)
-  const [checking, setChecking] = useState(true)
-  const [signOutError, setSignOutError] = useState('')
+  const [checking, setChecking] = useState(() => !hasPendingLogout())
+  const [logoutPending, setLogoutPending] = useState(hasPendingLogout)
+
+  /** Ends the server session left over from an offline sign-out. True once none is left. */
+  const flushLogout = useCallback(async (): Promise<boolean> => {
+    if (!hasPendingLogout()) return true
+    try {
+      await api.signOut()
+    } catch (error) {
+      if (error instanceof AuthError && (error.kind === 'network' || error.kind === 'server')) {
+        return false
+      }
+    }
+    clearPendingLogout()
+    setLogoutPending(false)
+    return true
+  }, [api])
 
   useEffect(() => {
     let cancelled = false
+    if (hasPendingLogout()) {
+      void Promise.resolve().then(flushLogout)
+      return
+    }
     api
       .me()
       .then((current) => {
         if (cancelled) return
-        if (current) cacheUser(current)
-        else forgetCachedUser()
+        if (current) {
+          claimLocalData(current)
+          cacheUser(current)
+        } else {
+          // Expired or revoked elsewhere: keep the data for its owner (AC1.3).
+          forgetCachedUser()
+        }
         setUser(current)
       })
       .catch((error: unknown) => {
@@ -49,43 +83,45 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
     return () => {
       cancelled = true
     }
-  }, [api])
+  }, [api, flushLogout])
 
-  // Signing out in one tab removes the remembered user (or clears storage); the others follow.
   useEffect(() => {
+    // Signing out in one tab removes the remembered user; the others follow.
     function onStorage(event: StorageEvent) {
-      if (event.key === null || (event.key === USER_KEY && event.newValue === null)) {
-        setUser(null)
-      }
+      if (event.key === USER_KEY && event.newValue === null) setUser(null)
+    }
+    function onOnline() {
+      void flushLogout()
     }
     window.addEventListener('storage', onStorage)
-    return () => window.removeEventListener('storage', onStorage)
-  }, [])
+    window.addEventListener('online', onOnline)
+    return () => {
+      window.removeEventListener('storage', onStorage)
+      window.removeEventListener('online', onOnline)
+    }
+  }, [flushLogout])
 
   const account = useMemo<Account | null>(() => {
     if (!user) return null
     return {
       user,
-      signOutError,
       signOut: async () => {
-        setSignOutError('')
-        if (hasUnsavedSession()) {
-          setSignOutError(
-            'A session is still running or waiting to be saved on this device. Finish it before signing out.',
-          )
-          return
-        }
         try {
           await api.signOut()
-        } catch {
-          setSignOutError("Couldn't sign out. Check your connection and try again.")
-          return
+        } catch (error) {
+          if (!(error instanceof AuthError && error.kind === 'network')) {
+            return "Couldn't sign out. Try again."
+          }
+          // Offline: sign out on this device now and finish on the server when back online.
+          setPendingLogout()
+          setLogoutPending(true)
         }
         await clearLocalUserData()
         setUser(null)
+        return null
       },
     }
-  }, [user, signOutError, api])
+  }, [user, api])
 
   if (checking) {
     return (
@@ -98,7 +134,14 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
     return (
       <AuthScreen
         api={api}
+        notice={logoutPending ? OFFLINE_SIGN_OUT_NOTICE : ''}
+        beforeSubmit={async () =>
+          (await flushLogout())
+            ? null
+            : "Can't finish signing out yet. Connect to the internet, then try again."
+        }
         onSignedIn={(next) => {
+          claimLocalData(next)
           cacheUser(next)
           setUser(next)
         }}

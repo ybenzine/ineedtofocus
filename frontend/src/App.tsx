@@ -102,7 +102,7 @@ export default function App({ controller, preferences }: AppProps) {
 
   return (
     <main>
-      <AccountBar />
+      <AccountBar controller={timer} />
       {notice && <p role="status">{notice}</p>}
       <SessionSetup preferences={prefs} onStart={start} />
     </main>

@@ -21,8 +21,7 @@ async function runningStore() {
 describe('App account bar', () => {
   const account = {
     user: { id: 'u', email: 'a@b.co', created_at: '' },
-    signOutError: '',
-    signOut: () => Promise.resolve(),
+    signOut: () => Promise.resolve(null),
   }
   function renderSignedIn(store = new MemoryActiveSessionStore()) {
     const controller = new TimerController({ store, saveRecord: () => undefined })

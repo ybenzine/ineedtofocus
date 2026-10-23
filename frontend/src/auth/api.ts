@@ -85,6 +85,8 @@ async function credentials(path: string, email: string, password: string): Promi
   return (await response.json()) as User
 }
 
+export const SIGNOUT_TIMEOUT_MS = 10000
+
 export const httpAuthApi: AuthApi = {
   async me() {
     const response = await call('/api/auth/me', undefined, ME_TIMEOUT_MS)
@@ -95,7 +97,7 @@ export const httpAuthApi: AuthApi = {
   signUp: (email, password) => credentials('/api/auth/signup', email, password),
   signIn: (email, password) => credentials('/api/auth/signin', email, password),
   async signOut() {
-    const response = await call('/api/auth/signout', { method: 'POST' })
+    const response = await call('/api/auth/signout', { method: 'POST' }, SIGNOUT_TIMEOUT_MS)
     if (!response.ok && response.status !== 401) throw await toError(response)
   },
 }
