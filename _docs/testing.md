@@ -14,11 +14,13 @@
 | `make test-frontend` | `vitest run` in `frontend/` |
 | `make test-e2e` | Playwright against the running stack (`make up` first); fails until #23 adds the suites |
 | `make test-scripts` | `scripts/tests/`: the repo tooling, e.g. the reviewer App token and review scripts (#70), with the backend's locked pytest plus the token script's pinned dependencies. No network or real key: GitHub, `uv` and `gh` are faked |
+| `make test-server` | `infra/server/tests/run.sh`: runs the Droplet setup script `infra/server/bootstrap.sh` (#25) in a fresh `ubuntu:24.04` container three times. Checks packages, Docker and Compose, unattended-upgrades config, the `deploy` user (docker, no sudo), file permissions and the sshd config, then makes real SSH logins: the CI key runs only its forced command, root and keys in `~deploy/.ssh` are refused, the admin user still gets in. The second run must change nothing; the third must flag a deploy key without a forced command. Needs Docker and network (apt); about 30 s. No systemd in a container, so service management is the one part only tested on the Droplet |
 | `make lint-backend` | `ruff check`, `ruff format --check`, `mypy` (strict) |
 | `make lint-frontend` | `eslint`, `prettier --check`, `tsc -b` (strict) |
 | `make lint-scripts` | `ruff check`, `ruff format --check`, `mypy` (strict) on `scripts/*.py` and `scripts/tests/`, with the backend's tools and config. `create_backlog.py` (the one-off board seeding script) is excluded |
+| `make lint-shell` | `shellcheck` (pinned `shellcheck-py`, run through `uvx`) on every tracked `*.sh` |
 
-Add `JUNIT_DIR=reports` to any `test-*` target except `test-e2e` to also write a JUnit XML report to `reports/<suite>.xml` (git-ignored). Playwright end-to-end tests join `make test` with #23.
+Add `JUNIT_DIR=reports` to any `test-*` target except `test-e2e` and `test-server` to also write a JUnit XML report to `reports/<suite>.xml` (git-ignored). Playwright end-to-end tests join `make test` with #23.
 
 ## CI
 
@@ -26,8 +28,8 @@ Add `JUNIT_DIR=reports` to any `test-*` target except `test-e2e` to also write a
 
 | Job (check name) | Runs | Notes |
 |---|---|---|
-| `Lint and type-check` | `make lint-backend`, `make lint-frontend`, `make lint-scripts` | |
-| `Backend unit tests` | `make test-backend-unit`, then `make test-scripts` | The script tests ride in this job so the five required check names stay the same |
+| `Lint and type-check` | `make lint-backend`, `make lint-frontend`, `make lint-scripts`, `make lint-shell` | |
+| `Backend unit tests` | `make test-backend-unit`, then `make test-scripts` and `make test-server` | The script and server bootstrap tests ride in this job so the five required check names stay the same |
 | `Backend integration tests` | `make test-backend-integration` against a `postgres:17-alpine` service | Connects as `focus`, a role with `CREATEDB` but not superuser. **Fails if any test skipped**, since a skip means the database was never reached (`scripts/check_junit.py --no-skips`) |
 | `Frontend unit tests` | `make test-frontend` | |
 | `End-to-end (Compose stack)` | `make up`, `make check-stack`, then `make test-e2e` when `frontend/playwright.config.*` exists | Until #23 lands, Playwright doesn't run. The job then posts a "Playwright not run" warning and job summary, and only checks the stack: health, frontend, telemetry and no query strings or cookies in telemetry. `PLAYWRIGHT_BASE_URL` is `http://localhost:8000` |
