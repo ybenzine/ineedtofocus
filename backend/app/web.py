@@ -1,6 +1,6 @@
 """Serve the built frontend from the same origin as the API."""
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, Response
@@ -26,7 +26,9 @@ def mount_frontend(app: FastAPI, dist: Path) -> None:
         candidate = (root / path).resolve()
         if path and candidate.is_file() and candidate.is_relative_to(root):
             return FileResponse(candidate)
-        return FileResponse(index)
+        if path.startswith("assets/") or PurePosixPath(path).suffix:
+            return None  # a missing static file is a 404, never HTML (service worker, MIME)
+        return FileResponse(index)  # extensionless client-side route
 
     not_found = app.router.default
 
