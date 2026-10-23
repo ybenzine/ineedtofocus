@@ -153,7 +153,7 @@ A rollback is the same `up -d --wait` with the previous tag and no migration ste
 
 ### App settings fixed by the Compose file
 
-- `COOKIE_SECURE=1`: the session cookie is always `Secure` (#8). It isn't read from the server `.env`, so it can't be turned off there.
+- `COOKIE_SECURE=1`: the session cookie is always `Secure` (#8). It isn't read from the server `.env`, so a `COOKIE_SECURE=0` copied there from the local defaults has no effect. The smoke test signs in through Caddy and checks `Secure; HttpOnly; SameSite=Lax`.
 - `MIGRATE_ON_START=0`: deploys migrate as their own step.
 - `uvicorn --proxy-headers` (image CMD) with `FORWARDED_ALLOW_IPS` set to Caddy's fixed address on that environment's edge network (`172.16.10.2` prod, `172.16.20.2` dev), never `*`. The app therefore takes `X-Forwarded-For`/`-Proto` only from Caddy, and Caddy overwrites whatever a client sends. The sign-in rate limiter sees the real client address, and a request that doesn't come through Caddy can't spoof one. The smoke test checks both.
 - `OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=<env>,service.version=<sha>`, so telemetry shows which deploy produced it.

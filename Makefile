@@ -13,7 +13,7 @@ COMPOSE := docker compose
 .PHONY: help install up down logs check-stack test test-backend test-backend-unit \
 	test-backend-integration test-frontend test-e2e test-scripts test-server test-infra test-prod-stack \
 	migrate lint lint-backend \
-	lint-frontend lint-scripts lint-shell fmt fmt-backend fmt-frontend hooks
+	lint-frontend lint-scripts lint-shell openapi fmt fmt-backend fmt-frontend hooks
 
 # Set JUNIT_DIR (e.g. `make test-backend-unit JUNIT_DIR=reports`) to also write JUnit
 # XML reports there. CI does this and uploads them as workflow artifacts.
@@ -66,6 +66,9 @@ check-stack: ## Check the running stack: health, frontend, telemetry in Grafana
 
 migrate: backend/.venv ## Apply database migrations (alembic upgrade head) to DATABASE_URL
 	$(UV) run alembic upgrade head
+
+openapi: backend/.venv ## Regenerate _docs/api/openapi.json (commit it with any API change)
+	$(UV) run python -m app.openapi_export
 
 # --- Tests --------------------------------------------------------------------
 

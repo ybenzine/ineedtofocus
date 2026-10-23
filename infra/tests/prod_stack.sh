@@ -11,6 +11,8 @@
 #     from Caddy's internal CA here, Let's Encrypt on the server) and redirects http;
 #   - each host reaches its own environment: with the dev app stopped, dev answers 502
 #     and prod still answers 200;
+#   - sign-up and sign-in through Caddy set the session cookie Secure, HttpOnly and
+#     SameSite=Lax (#8);
 #   - the app trusts X-Forwarded-* from Caddy's address only: through Caddy it sees
 #     https, while a request straight from another container with spoofed headers
 #     doesn't get them honoured;
@@ -180,6 +182,23 @@ ok "routing: with the dev app stopped, dev answers 502 and prod still 200"
 dev up -d --wait app > /dev/null 2>&1
 expect 200 dev.ineedtofoc.us /healthz
 ok "routing: dev is back after restarting its app"
+
+# The session cookie behind Caddy (#8): sign up and sign in over HTTPS through Caddy;
+# both answers must set focus_session with Secure, HttpOnly and SameSite=Lax.
+email="smoke-$RANDOM$RANDOM@example.com"
+password=$(openssl rand -hex 12)
+credentials="{\"email\": \"$email\", \"password\": \"$password\"}"
+for step in signup:201 signin:200; do
+  expect "${step#*:}" ineedtofoc.us "/api/auth/${step%%:*}" -D "$work/headers" \
+    -H 'Content-Type: application/json' --data "$credentials"
+  cookie=$(grep -i '^set-cookie: focus_session=' "$work/headers" | tr -d '\r') ||
+    fail "${step%%:*} through Caddy set no focus_session cookie"
+  for attribute in Secure HttpOnly 'SameSite=lax'; do
+    grep -qi "; *$attribute\(;\|$\)" <<< "$cookie" ||
+      fail "${step%%:*}: session cookie lacks $attribute: ${cookie%%=*}=...${cookie#*;}"
+  done
+done
+ok "sign-up and sign-in through Caddy set focus_session with Secure, HttpOnly, SameSite=Lax"
 
 # Proxy trust and telemetry, read from the traces that reach the fake Grafana Cloud.
 # Caddy talks plain http to the app; the app records url.scheme=https only when it
