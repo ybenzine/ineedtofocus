@@ -46,6 +46,7 @@ export class FakeSessionsServer {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     const path = new URL(url, 'http://localhost').pathname
     const method = init?.method ?? 'GET'
+    this.requests.push(`${method} ${path}`)
     const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {}
 
     if (this.mode === 'offline') throw new TypeError('Failed to fetch')
@@ -57,14 +58,44 @@ export class FakeSessionsServer {
       response = this.#sync(body)
     } else {
       const match = /^\/api\/sessions\/([^/]+)$/.exec(path)
+      const action = /^\/api\/sessions\/([^/]+)\/(archive|restore)$/.exec(path)
       if (method === 'PATCH' && match) response = this.#edit(decodeURIComponent(match[1]), body)
-      else response = json(404, errorBody('not_found', 'Not found'))
+      else if (method === 'POST' && action) {
+        response = this.#setArchived(decodeURIComponent(action[1]), action[2] === 'archive')
+      } else if (method === 'GET' && path === '/api/sessions/archived') {
+        const sessions = [...this.sessions.keys()]
+          .filter((id) => this.sessions.get(id)?.archivedAt != null)
+          .map((id) => this.#out(id))
+          .sort((x, y) => String(y.archived_at).localeCompare(String(x.archived_at)))
+        response = json(200, { sessions })
+      } else if (method === 'DELETE' && path === '/api/sessions/archived') {
+        const ids = [...this.sessions.keys()].filter(
+          (id) => this.sessions.get(id)?.archivedAt != null,
+        )
+        for (const id of ids) this.sessions.delete(id)
+        response = json(200, { deleted: ids.length })
+      } else response = json(404, errorBody('not_found', 'Not found'))
     }
     if (this.mode === 'lose-reply') {
       this.mode = 'up'
       throw new TypeError('Network connection was lost')
     }
     return response
+  }
+
+  /** Every request made, as `METHOD path`. */
+  readonly requests: string[] = []
+  #clock = 0
+
+  #setArchived(id: string, archived: boolean): Response {
+    const stored = this.sessions.get(id)
+    if (!stored) return json(404, errorBody('not_found', 'Session not found'))
+    this.#clock += 1
+    if (archived && stored.archivedAt === null) {
+      stored.archivedAt = new Date(Date.UTC(2026, 9, 23, 12, 0, this.#clock)).toISOString()
+    }
+    if (!archived) stored.archivedAt = null
+    return json(200, this.#out(id))
   }
 
   /** Archives a session, as if from another device. */

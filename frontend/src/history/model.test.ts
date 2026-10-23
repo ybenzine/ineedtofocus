@@ -5,8 +5,11 @@ import {
   bucketUnitFor,
   emptyData,
   localDate,
+  applyChanges,
   mergeSessions,
+  oneLine,
   periodFor,
+  removeSessions,
   shiftAnchor,
 } from './model.ts'
 
@@ -124,5 +127,46 @@ describe('mergeSessions', () => {
     ])
     expect(merged.start).toBe('2026-08-05')
     expect(merged.end).toBe('2026-10-05')
+  })
+})
+
+describe('removeSessions', () => {
+  it('takes archived sessions out of the list, totals, tags and bars', () => {
+    const keep = session({ tag: 'work', focusSeconds: 600 })
+    const gone = session({ tag: 'nap', focusSeconds: 300 })
+    const base = mergeSessions(
+      emptyData('day', 'UTC', 1, { start: '2026-10-21', end: '2026-10-21' }),
+      [keep, gone],
+      [],
+    )
+    const next = removeSessions(base, new Set([gone.id]))
+    expect(next.sessionCount).toBe(1)
+    expect(next.totalFocusSeconds).toBe(600)
+    expect(next.tags.map((t) => t.tag)).toEqual(['work'])
+    expect(next.buckets[0]).toMatchObject({ focusSeconds: 600, sessions: 1 })
+    expect(next.sessions).toEqual([keep])
+    expect(removeSessions(base, new Set(['other']))).toBe(base)
+  })
+})
+
+describe('applyChanges', () => {
+  it('shows an unconfirmed edit and moves its time between tags', () => {
+    const edited = session({ tag: 'work', focusSeconds: 600 })
+    const base = mergeSessions(
+      emptyData('day', 'UTC', 1, { start: '2026-10-21', end: '2026-10-21' }),
+      [edited],
+      [],
+    )
+    const next = applyChanges(base, new Map([[edited.id, { tag: 'read' as const, goal: 'New' }]]))
+    expect(next.sessions[0]).toMatchObject({ tag: 'read', goal: 'New' })
+    expect(next.tags).toEqual([{ tag: 'read', focusSeconds: 600, sessions: 1 }])
+    expect(next.totalFocusSeconds).toBe(600)
+    expect(applyChanges(base, new Map())).toBe(base)
+  })
+})
+
+describe('oneLine', () => {
+  it('turns line breaks into single spaces (AC7.3)', () => {
+    expect(oneLine('a\nb\r\n  c')).toBe('a b c')
   })
 })

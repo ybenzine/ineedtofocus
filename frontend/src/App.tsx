@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertPlayer } from './sounds/alerts.ts'
 import AccountBar from './auth/AccountBar.tsx'
+import ArchiveScreen from './archive/ArchiveScreen.tsx'
 import HistoryScreen from './history/HistoryScreen.tsx'
 import { notifySessionExpired, signedInUserId } from './auth/localData.ts'
 import ScreenNav from './nav/ScreenNav.tsx'
@@ -125,7 +126,7 @@ function AppBody({
         void settings.refresh()
         if (!cancelled) setView({ name: 'summary', update })
       } else if (screenFromPath(window.location.pathname) !== 'setup') {
-        // A deep link (`/history`, `/settings`): those screens don't wait for the server's copy.
+        // A deep link (`/history`, `/archive`, `/settings`): those screens don't wait for the server's copy.
         void settings.refresh()
         if (!cancelled) setView({ name: screenFromPath(window.location.pathname) })
       } else {
@@ -152,13 +153,16 @@ function AppBody({
   // effect above (waited for only when the setup screen opens).
   useEffect(() => settings.start(), [settings])
 
-  // The back and forward buttons move between the screens that have URLs (`/history`, `/settings`). They
+  // The back and forward buttons move between the screens that have URLs (`/history`, `/archive`, `/settings`). They
   // never take over a running timer or a summary.
   useEffect(() => {
     function onPopState() {
       const screen = screenFromPath(window.location.pathname)
       setView((current) =>
-        current.name === 'setup' || current.name === 'history' || current.name === 'settings'
+        current.name === 'setup' ||
+        current.name === 'history' ||
+        current.name === 'archive' ||
+        current.name === 'settings'
           ? { name: screen }
           : current,
       )
@@ -254,7 +258,21 @@ function AppBody({
       <main className="dark-screen history-screen">
         <AccountBar controller={timer} />
         <ScreenNav current="history" onNavigate={goTo} />
-        <HistoryScreen sessions={services.sessions} onNewSession={() => goTo('setup')} />
+        <HistoryScreen
+          sessions={services.sessions}
+          sync={services.sync}
+          onNewSession={() => goTo('setup')}
+        />
+      </main>
+    )
+  }
+
+  if (view.name === 'archive') {
+    return (
+      <main className="dark-screen history-screen">
+        <AccountBar controller={timer} />
+        <ScreenNav current="archive" onNavigate={goTo} />
+        <ArchiveScreen sessions={services.sessions} />
       </main>
     )
   }

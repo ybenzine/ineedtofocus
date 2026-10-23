@@ -96,6 +96,7 @@ main {
 
 .screen-nav {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   padding: 0 1rem;
 }
@@ -476,6 +477,52 @@ main.history-screen {
 }
 
 .history-badge-error {
+  border-color: #ff8a80;
+  color: #ff8a80;
+}
+
+.history-row-actions,
+.history-edit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.history-row-actions button,
+.history-edit button,
+.archive button {
+  font: inherit;
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.history-edit .field {
+  flex: 1 1 14rem;
+}
+
+.history-undo:empty {
+  display: none;
+}
+
+.archive-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding: 1rem;
+  border: 1px solid #ff8a80;
+  border-radius: 0.5rem;
+}
+
+.archive-confirm p {
+  flex-basis: 100%;
+}
+
+.archive .danger {
   border-color: #ff8a80;
   color: #ff8a80;
 }
