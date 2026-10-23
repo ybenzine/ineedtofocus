@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertPlayer, LocalAlertVolumeStore } from './sounds/alerts.ts'
+import { AlertPlayer } from './sounds/alerts.ts'
 import AccountBar from './auth/AccountBar.tsx'
-import { LocalPreferencesStore, type PreferencesStore } from './setup/preferences.ts'
+import ScreenNav from './nav/ScreenNav.tsx'
+import { type ScreenId } from './nav/screens.ts'
+import { httpSettingsApi } from './settings/api.ts'
+import { SettingsPreferencesStore, SettingsAlertVolumeStore } from './settings/adapters.ts'
+import { SettingsContext, useSettingsState } from './settings/SettingsContext.ts'
+import SettingsScreen from './settings/SettingsScreen.tsx'
+import { SettingsStore } from './settings/store.ts'
+import { type PreferencesStore } from './setup/preferences.ts'
 import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
 import type { AudioSource } from './setup/options.ts'
 import SessionSummary from './timerscreen/SessionSummary.tsx'
@@ -16,6 +23,9 @@ import {
 export interface AppProps {
   /** Injectable for tests; the app uses the device's localStorage by default. */
   controller?: TimerController
+  /** Settings with their device cache and sync; the app uses the Settings API by default. */
+  settings?: SettingsStore
+  /** Overrides the settings-backed last-used Pomodoro config and tag. */
   preferences?: PreferencesStore
   /** Injectable for tests; plays the chime and the end bell (#16). */
   alerts?: AlertPlayer
@@ -37,16 +47,42 @@ function createController(): TimerController {
 type View =
   | { name: 'loading' }
   | { name: 'setup' }
+  | { name: 'settings' }
   | { name: 'timer' }
   | { name: 'summary'; update: TimerUpdate }
 
-export default function App({ controller, preferences, alerts }: AppProps) {
-  const timer = useMemo(() => controller ?? createController(), [controller])
-  const prefs = useMemo(() => preferences ?? new LocalPreferencesStore(), [preferences])
-  const player = useMemo(
-    () => alerts ?? new AlertPlayer({ volume: new LocalAlertVolumeStore() }),
-    [alerts],
+/** How long a first look at the server's settings may hold up the setup screen. */
+const SETTINGS_WAIT_MS = 1500
+
+function createSettings(): SettingsStore {
+  return new SettingsStore({ api: httpSettingsApi, storage: window.localStorage })
+}
+
+export default function App(props: AppProps) {
+  const settings = useMemo(() => props.settings ?? createSettings(), [props.settings])
+  return (
+    <SettingsContext.Provider value={settings}>
+      <AppBody {...props} settings={settings} />
+    </SettingsContext.Provider>
   )
+}
+
+function AppBody({
+  controller,
+  settings,
+  preferences,
+  alerts,
+}: AppProps & { settings: SettingsStore }) {
+  const timer = useMemo(() => controller ?? createController(), [controller])
+  const prefs = useMemo(
+    () => preferences ?? new SettingsPreferencesStore(settings),
+    [preferences, settings],
+  )
+  const player = useMemo(
+    () => alerts ?? new AlertPlayer({ volume: new SettingsAlertVolumeStore(settings) }),
+    [alerts, settings],
+  )
+  const { values } = useSettingsState()
   const [view, setView] = useState<View>({ name: 'loading' })
   // Only the setup choice is known here; after a reload the audio source is not remembered yet
   // (audio playback and its persistence arrive with #17 and #18).
@@ -63,8 +99,22 @@ export default function App({ controller, preferences, alerts }: AppProps) {
   // Pick up a session that was running when the app closed (AC6.4), or show how one that ended
   // while the app was closed finished (AC6.5).
   useEffect(() => {
+    // Sync settings whenever the connection returns (AC13.3).
+    return settings.start()
+  }, [settings])
+
+  useEffect(() => {
     let cancelled = false
-    void timer.restore().then((update) => {
+    // The setup screen reads the last-used config and tag once, so give the server's copy a
+    // moment to arrive first (another device may have changed it); offline it is skipped.
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const settingsReady = Promise.race([
+      settings.refresh(),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, SETTINGS_WAIT_MS)
+      }),
+    ]).finally(() => clearTimeout(timeout))
+    void Promise.all([timer.restore(), settingsReady]).then(([update]) => {
       if (cancelled) return
       if (update.snapshot) setView({ name: 'timer' })
       else if (update.outcome) setView({ name: 'summary', update })
@@ -73,7 +123,7 @@ export default function App({ controller, preferences, alerts }: AppProps) {
     return () => {
       cancelled = true
     }
-  }, [timer])
+  }, [timer, settings])
 
   async function start(request: SessionRequest) {
     void player.unlock() // the Start press is the user gesture browsers require before audio
@@ -120,11 +170,29 @@ export default function App({ controller, preferences, alerts }: AppProps) {
     )
   }
 
+  const navigate = (screen: ScreenId) =>
+    setView(screen === 'settings' ? { name: 'settings' } : { name: 'setup' })
+
+  if (view.name === 'settings') {
+    return (
+      <main>
+        <AccountBar controller={timer} />
+        <ScreenNav current="settings" onNavigate={navigate} />
+        <SettingsScreen player={player} />
+      </main>
+    )
+  }
+
   return (
     <main>
       <AccountBar controller={timer} />
+      <ScreenNav current="setup" onNavigate={navigate} />
       {notice && <p role="status">{notice}</p>}
-      <SessionSetup preferences={prefs} onStart={start} />
+      <SessionSetup
+        preferences={prefs}
+        defaultReminderMinutes={values.default_reminder_minutes}
+        onStart={start}
+      />
     </main>
   )
 }

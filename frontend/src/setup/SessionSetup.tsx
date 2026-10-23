@@ -31,6 +31,8 @@ export interface SessionRequest {
 
 export interface SessionSetupProps {
   preferences: PreferencesStore
+  /** Pre-selected reminder for the unlimited timer (AC12.4); off when absent. */
+  defaultReminderMinutes?: ReminderMinutes | null
   onStart: (request: SessionRequest) => void | Promise<void>
 }
 
@@ -78,7 +80,11 @@ function NumberField({ label, unit, value, range, error, onChange }: NumberField
   )
 }
 
-export default function SessionSetup({ preferences, onStart }: SessionSetupProps) {
+export default function SessionSetup({
+  preferences,
+  defaultReminderMinutes = null,
+  onStart,
+}: SessionSetupProps) {
   const [remembered] = useState(() => preferences.load())
   const [mode, setMode] = useState<Mode>('countdown')
   const [tag, setTag] = useState<Tag>(remembered.tag)
@@ -90,7 +96,9 @@ export default function SessionSetup({ preferences, onStart }: SessionSetupProps
   const [blocks, setBlocks] = useState(String(remembered.pomodoro.blocks))
   const [longBreakOn, setLongBreakOn] = useState(remembered.pomodoro.longBreakEnabled)
   const [longBreak, setLongBreak] = useState(String(remembered.pomodoro.longBreakMinutes))
-  const [reminder, setReminder] = useState<string>('off')
+  const [reminder, setReminder] = useState<string>(
+    defaultReminderMinutes === null ? 'off' : String(defaultReminderMinutes),
+  )
   const [starting, setStarting] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const groupId = useId()

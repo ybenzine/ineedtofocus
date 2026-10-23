@@ -1,6 +1,4 @@
-import { ALERT_VOLUME_KEY } from '../sounds/alerts.ts'
-import { PREFERENCES_KEY } from '../setup/preferences.ts'
-import { KEEP_AWAKE_KEY } from '../timerscreen/wakeLock.ts'
+import { SETTINGS_KEY } from '../settings/store.ts'
 import { ACTIVE_SESSION_KEY, parseStoredTimer } from '../timer/store.ts'
 import type { User } from './api.ts'
 
@@ -9,7 +7,7 @@ export const USER_KEY = 'ineedtofocus.user'
 export const OWNER_KEY = 'ineedtofocus.owner'
 
 /** Data that belongs to one user. Cleared on sign-out and when a different user signs in. */
-const USER_DATA_KEYS = [PREFERENCES_KEY, KEEP_AWAKE_KEY, ACTIVE_SESSION_KEY, ALERT_VOLUME_KEY]
+const USER_DATA_KEYS = [SETTINGS_KEY, ACTIVE_SESSION_KEY]
 
 /**
  * What other modules (the session store, #19) register so sign-out can handle the data they
@@ -93,7 +91,7 @@ export function forgetCachedUser(): void {
 
 /**
  * Binds the device's local data to `user`. If it belonged to someone else, that user's
- * preferences, keep-awake setting and active session (with any unsaved finished session) are
+ * settings (with any edits not yet sent) and active session (with any unsaved finished session) are
  * removed first, so they are never shown to or saved into this account.
  */
 export function claimLocalData(user: User): void {
