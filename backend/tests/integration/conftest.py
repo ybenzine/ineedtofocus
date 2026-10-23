@@ -15,6 +15,7 @@ import pytest
 from alembic.config import Config
 from sqlalchemy import text
 from sqlalchemy.engine import URL, make_url
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import Settings
@@ -37,6 +38,28 @@ async def _admin(server: URL, sql: str) -> None:
         await engine.dispose()
 
 
+async def _drop(server: URL, name: str) -> None:
+    """Drop a throwaway database, waiting out Postgres' own background workers.
+
+    Every engine the tests open is disposed before this runs (the app lifespan disposes its
+    engine; `_query` and `_admin` dispose theirs), so no test connection is left. What can
+    remain is an autovacuum/autoanalyze worker: a freshly migrated and populated database
+    soon crosses the analyze threshold, and the worker holds a connection to it for a few
+    milliseconds. `DROP DATABASE ... WITH (FORCE)` tries to terminate every connection, and
+    the non-superuser test role may not terminate that worker ("permission denied to
+    terminate process"). The worker exits on its own, so retry briefly.
+    """
+    sql = f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'
+    for attempt in range(50):
+        try:
+            await _admin(server, sql)
+            return
+        except DBAPIError as exc:
+            if "permission denied to terminate process" not in str(exc) or attempt == 49:
+                raise
+            await asyncio.sleep(0.2)
+
+
 @pytest.fixture(scope="session")
 def server_url() -> URL:
     url = make_url(Settings().database_url)
@@ -55,7 +78,7 @@ def test_db_url(server_url: URL) -> Iterator[str]:
     try:
         yield server_url.set(database=name).render_as_string(hide_password=False)
     finally:
-        run(_admin(server_url, f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
+        run(_drop(server_url, name))
 
 
 @pytest.fixture
