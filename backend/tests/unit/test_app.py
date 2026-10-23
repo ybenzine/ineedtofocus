@@ -239,6 +239,11 @@ def test_log_scrub_redacts_postgres_detail_line() -> None:
     assert out.startswith("duplicate key") and out.endswith("more")
 
 
+def test_cookie_secure_defaults_to_true_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("COOKIE_SECURE", raising=False)
+    assert Settings().cookie_secure is True
+
+
 def test_log_scrub_redacts_sqlalchemy_bound_parameters() -> None:
     from app.logging_config import scrub
 

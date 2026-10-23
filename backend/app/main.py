@@ -14,6 +14,7 @@ from app.config import Settings, get_settings
 from app.db import ReadinessCheck, create_engine, database_check
 from app.errors import fix_openapi, register_error_handlers
 from app.health import router as health_router
+from app.history_api import router as history_router
 from app.logging_config import configure_logging
 from app.rate_limit import FailureLimiter
 from app.sessions import router as sessions_router
@@ -56,12 +57,18 @@ def create_app(
         settings.signin_max_failures_per_client,
         settings.signin_window_seconds,
     )
+    app.state.signup_limiter = FailureLimiter(
+        settings.signup_max_per_client,
+        settings.signup_max_per_client,
+        settings.signup_window_seconds,
+    )
     register_error_handlers(app)
     fix_openapi(app)
     app.include_router(health_router)
     app.include_router(auth_router)
     app.include_router(sessions_router)
     app.include_router(settings_router)
+    app.include_router(history_router)
     mount_frontend(app, settings.frontend_dist)
     return app
 
