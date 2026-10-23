@@ -163,10 +163,10 @@ def _check_youtube_url(value: str) -> str:
         raise ValueError("Enter a valid YouTube link")
     try:
         parts = urlsplit(value)
-        raw_host = parts.hostname or ""
-        if not raw_host.isascii():  # before lowercasing: U+212A (Kelvin) lowercases to "k"
+        # urlsplit lowercases the host (U+212A Kelvin becomes "k"), so check the raw text.
+        if not parts.netloc.isascii():
             raise ValueError
-        host = raw_host.lower()
+        host = (parts.hostname or "").lower()
         port = parts.port
     except ValueError:
         raise ValueError("Enter a valid YouTube link") from None

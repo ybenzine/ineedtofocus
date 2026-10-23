@@ -335,7 +335,8 @@ def test_ac8_6_accepts_youtube_links(client: TestClient, url: str) -> None:
         "https://www.youtube.com/watch?v=a\u200bbc",
         "https://www.youtube.com/watch?v=a\u00a0bc",
         "https://www.youtu\u212aube.com/watch",
-        "https://www.yo\u0075tube.com\u3002evil.example/x",
+        "https://www.youtube-nocoo\u212aie.com/embed/x",
+        "https://www.youtube.com\u3002evil.example/x",
         "https://www.y\u00f6utube.com/watch",
         pytest.param("https://www.youtube.com/" + "a" * 2048, id="too-long"),
     ],
@@ -400,7 +401,8 @@ def test_first_gets_for_a_new_user_race_to_one_row(
     async def gated(db: Any, user: Any) -> Any:
         nonlocal barrier
         barrier = barrier or asyncio.Barrier(2)
-        await barrier.wait()
+        async with asyncio.timeout(5):
+            await barrier.wait()
         return await real(db, user)
 
     monkeypatch.setattr(settings_api, "_get_or_create", gated)
