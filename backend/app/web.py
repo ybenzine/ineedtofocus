@@ -4,13 +4,15 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, Response
+from starlette.types import Receive, Scope, Send
 
 
 def mount_frontend(app: FastAPI, dist: Path) -> None:
     """Serve `dist` with SPA fallback to index.html. No-op when the build is absent.
 
-    Implemented as a fallback for requests no route matched (see errors.py), not as a
-    catch-all route, so API routes registered after `create_app()` are never shadowed.
+    Implemented as the router's "no route matched" handler, not as a catch-all route, so
+    API routes registered after `create_app()` are never shadowed, and a 404 that a route
+    raises itself stays a JSON 404.
     """
     index = dist / "index.html"
     if not index.is_file():
@@ -26,4 +28,14 @@ def mount_frontend(app: FastAPI, dist: Path) -> None:
             return FileResponse(candidate)
         return FileResponse(index)
 
-    app.state.spa_fallback = fallback
+    not_found = app.router.default
+
+    async def default(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http" and scope["method"] == "GET":
+            response = fallback(scope["path"])
+            if response is not None:
+                await response(scope, receive, send)
+                return
+        await not_found(scope, receive, send)
+
+    app.router.default = default

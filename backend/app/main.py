@@ -6,13 +6,16 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from opentelemetry.sdk.trace import TracerProvider
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app import __version__
+from app.auth import router as auth_router
 from app.config import Settings, get_settings
 from app.db import ReadinessCheck, create_engine, database_check
 from app.errors import fix_openapi, register_error_handlers
 from app.health import router as health_router
 from app.logging_config import configure_logging
+from app.rate_limit import FailureLimiter
 from app.telemetry import install_privacy_filters, telemetry_config
 from app.web import mount_frontend
 
@@ -44,9 +47,17 @@ def create_app(
     app.state.readiness_check = readiness_check or database_check(
         engine, settings.readiness_timeout_seconds
     )
+    app.state.settings = settings
+    app.state.sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    app.state.signin_limiter = FailureLimiter(
+        settings.signin_max_failures,
+        settings.signin_max_failures_per_client,
+        settings.signin_window_seconds,
+    )
     register_error_handlers(app)
     fix_openapi(app)
     app.include_router(health_router)
+    app.include_router(auth_router)
     mount_frontend(app, settings.frontend_dist)
     return app
 

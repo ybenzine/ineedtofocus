@@ -23,7 +23,13 @@ from tests.integration.conftest import run
 
 pytestmark = pytest.mark.integration
 
-TABLES = {"users", "user_settings", "focus_sessions", "youtube_recent_links"}
+TABLES = {
+    "users",
+    "user_settings",
+    "focus_sessions",
+    "youtube_recent_links",
+    "auth_sessions",
+}
 
 
 async def _tables(url: str) -> set[str]:

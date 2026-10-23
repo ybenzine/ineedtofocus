@@ -6,7 +6,6 @@ Validation errors are 422 with `details` listing `{field, message, type}`.
 
 import logging
 import re
-from collections.abc import Callable
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -26,6 +25,7 @@ _CODES = {
     405: "method_not_allowed",
     409: "conflict",
     422: "validation_error",
+    429: "rate_limited",
     503: "unavailable",
 }
 
@@ -64,6 +64,8 @@ def _field(loc: tuple[Any, ...], error_type: str) -> str:
     Segments that are not plain identifiers (e.g. a URL used as a dict key) become
     `<key>`, and the name of an unexpected extra field becomes `<unknown>`.
     """
+    if error_type == "json_invalid":
+        return "body"  # loc is the parser's character offset, not a field
     skip = ("body", "query", "path", "header", "cookie")
     out = [
         str(p) if isinstance(p, int) or _SAFE_SEGMENT.fullmatch(str(p)) else "<key>"
@@ -89,16 +91,7 @@ def register_error_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(StarletteHTTPException)
-    async def http(request: Request, exc: StarletteHTTPException) -> Response:
-        # SPA fallback: unmatched GETs outside /api get the frontend. It runs only after
-        # routing failed, so routes registered at any time are never shadowed.
-        fallback: Callable[[str], Response | None] | None = getattr(
-            request.app.state, "spa_fallback", None
-        )
-        if fallback is not None and exc.status_code == 404 and request.method == "GET":
-            response = fallback(request.url.path)
-            if response is not None:
-                return response
+    async def http(_: Request, exc: StarletteHTTPException) -> Response:
         return JSONResponse(
             status_code=exc.status_code,
             content=error_body(_CODES.get(exc.status_code, "error"), str(exc.detail)),
@@ -120,13 +113,27 @@ def fix_openapi(app: FastAPI) -> None:
     def openapi() -> dict[str, Any]:
         if app.openapi_schema:
             return app.openapi_schema
-        schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            openapi_version=app.openapi_version,
+            summary=app.summary,
+            description=app.description,
+            terms_of_service=app.terms_of_service,
+            contact=app.contact,
+            license_info=app.license_info,
+            routes=app.routes,
+            webhooks=app.webhooks.routes,
+            tags=app.openapi_tags,
+            servers=app.servers,
+        )
         ref = {"$ref": "#/components/schemas/ErrorResponse"}
         schemas = schema.setdefault("components", {}).setdefault("schemas", {})
-        schemas.setdefault(
-            "ErrorResponse",
-            ErrorResponse.model_json_schema(ref_template="#/components/schemas/{model}"),
-        )
+        # Register ErrorResponse and its nested models whether or not a route uses them.
+        error_schema = ErrorResponse.model_json_schema(ref_template="#/components/schemas/{model}")
+        for name, nested in error_schema.pop("$defs", {}).items():
+            schemas.setdefault(name, nested)
+        schemas.setdefault("ErrorResponse", error_schema)
         for item in schema["paths"].values():
             for op in item.values():
                 resp = op.get("responses", {}).get("422")
