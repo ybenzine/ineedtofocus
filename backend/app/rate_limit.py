@@ -37,20 +37,31 @@ class FailureLimiter:
             self._failures.pop(key, None)
         return q
 
-    def retry_after(self, client: str, email: str) -> int | None:
-        """Seconds until another attempt is allowed, or None if one is allowed now."""
+    def try_acquire(self, client: str, email: str) -> int | None:
+        """Count a sign-in attempt, atomically (no await between check and count).
+
+        Returns None when the attempt may proceed (it is now counted), or the seconds to
+        wait when over the limit (then nothing is counted). Call `succeeded` on success.
+        """
+        keys = self._keys(client, email)
         waits = []
-        for key, limit in zip(self._keys(client, email), self._limits, strict=True):
+        for key, limit in zip(keys, self._limits, strict=True):
             q = self._recent(key)
             if len(q) >= limit:
                 waits.append(q[0] + self._window - self._clock())
-        return max(1, int(max(waits)) + 1) if waits else None
-
-    def record_failure(self, client: str, email: str) -> None:
+        if waits:
+            return max(1, int(max(waits)) + 1)
         now = self._clock()
-        for key in self._keys(client, email):
+        for key in keys:
             self._failures.setdefault(key, deque()).append(now)
+        return None
 
-    def reset(self, client: str, email: str) -> None:
-        """A successful sign-in clears the pair's count (the per-client count keeps ageing)."""
-        self._failures.pop(self._keys(client, email)[0], None)
+    def succeeded(self, client: str, email: str) -> None:
+        """Refund a successful attempt: clear the pair's count and this attempt's client count."""
+        pair_key, client_key = self._keys(client, email)
+        self._failures.pop(pair_key, None)
+        q = self._failures.get(client_key)
+        if q:
+            q.pop()
+            if not q:
+                self._failures.pop(client_key, None)

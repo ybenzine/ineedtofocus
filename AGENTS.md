@@ -52,6 +52,7 @@ All entry points go through `make` (`make help` lists them). Needs Docker with C
 | `make test` | Run every test suite: backend unit + integration, frontend unit, Playwright end-to-end (Playwright arrives with #23) |
 | `make lint` | Linters and type checks for backend (ruff, mypy) and frontend (ESLint, Prettier, tsc) |
 | `make fmt` | Auto-format |
+| `make openapi` | Regenerate `_docs/api/openapi.json` (commit it with any API change) |
 | `make hooks` | Install the pre-commit hooks (ruff, ESLint, Prettier, hygiene checks) |
 
 ## Conventions

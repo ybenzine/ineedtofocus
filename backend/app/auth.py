@@ -124,10 +124,10 @@ async def sign_up(
 async def sign_in(
     body: SignInRequest, request: Request, response: Response, db: DbSession
 ) -> UserOut:
-    """Sign in with email and password (AC1.2); failed attempts are rate limited."""
+    """Sign in with email and password (AC1.2); rate limited (attempts are counted before any await)."""
     limiter = request.app.state.signin_limiter
     client = _client(request)
-    wait = limiter.retry_after(client, body.email)
+    wait = limiter.try_acquire(client, body.email)
     if wait is not None:
         raise HTTPException(
             429, "Too many sign-in attempts. Try again later.", headers={"Retry-After": str(wait)}
@@ -135,9 +135,8 @@ async def sign_in(
     user = await db.scalar(select(User).where(User.email == body.email))
     ok = await verify_password(body.password, user.password_hash if user else None)
     if user is None or not ok:
-        limiter.record_failure(client, body.email)
         raise HTTPException(401, "Incorrect email or password")
-    limiter.reset(client, body.email)
+    limiter.succeeded(client, body.email)
     await _start_session(request, response, db, user)
     return UserOut(id=user.id, email=user.email, created_at=user.created_at)
 

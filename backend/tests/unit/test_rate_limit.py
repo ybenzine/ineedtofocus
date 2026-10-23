@@ -18,35 +18,39 @@ def make(clock: Clock) -> FailureLimiter:
     return FailureLimiter(3, 5, 60.0, clock)
 
 
-def test_blocks_after_max_failures_then_recovers_when_window_passes() -> None:
+def test_blocks_after_max_attempts_then_recovers_when_window_passes() -> None:
     clock = Clock()
     lim = make(clock)
     for _ in range(3):
-        assert lim.retry_after("1.1.1.1", "a@x.io") is None
-        lim.record_failure("1.1.1.1", "a@x.io")
-    wait = lim.retry_after("1.1.1.1", "a@x.io")
+        assert lim.try_acquire("1.1.1.1", "a@x.io") is None
+    wait = lim.try_acquire("1.1.1.1", "a@x.io")
     assert wait is not None and 1 <= wait <= 61
     clock.now += 61
-    assert lim.retry_after("1.1.1.1", "a@x.io") is None
+    assert lim.try_acquire("1.1.1.1", "a@x.io") is None
 
 
 def test_other_email_from_same_client_is_not_blocked_until_client_limit() -> None:
     lim = make(Clock())
     for _ in range(3):
-        lim.record_failure("c", "a@x.io")
-    assert lim.retry_after("c", "b@x.io") is None
-    for _ in range(2):
-        lim.record_failure("c", "b@x.io")
-    assert lim.retry_after("c", "zzz@x.io") is not None  # 5 failures from this client
+        assert lim.try_acquire("c", "a@x.io") is None
+    assert lim.try_acquire("c", "b@x.io") is None  # 4th for the client
+    assert lim.try_acquire("c", "b@x.io") is None  # 5th
+    assert lim.try_acquire("c", "zzz@x.io") is not None  # client limit of 5 reached
 
 
-def test_other_clients_are_unaffected_and_success_resets_pair() -> None:
+def test_other_clients_are_unaffected_and_success_refunds() -> None:
     lim = make(Clock())
     for _ in range(3):
-        lim.record_failure("c1", "a@x.io")
-    assert lim.retry_after("c2", "a@x.io") is None
-    lim.reset("c1", "a@x.io")
-    assert lim.retry_after("c1", "a@x.io") is None
+        lim.try_acquire("c1", "a@x.io")
+    assert lim.try_acquire("c2", "a@x.io") is None
+    assert lim.try_acquire("c1", "a@x.io") is not None  # blocked: nothing counted
+    lim2 = make(Clock())
+    for _ in range(2):
+        lim2.try_acquire("c1", "a@x.io")
+    assert lim2.try_acquire("c1", "a@x.io") is None
+    lim2.succeeded("c1", "a@x.io")
+    for _ in range(3):
+        assert lim2.try_acquire("c1", "a@x.io") is None
 
 
 def test_ac1_5_password_is_hashed_with_argon2_and_verifies() -> None:

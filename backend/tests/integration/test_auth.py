@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, contextmanager
 from typing import Any
 
@@ -32,6 +33,7 @@ def make_client(alembic_config: Config, test_db_url: str) -> MakeClient:
 
     @contextmanager
     def make(**overrides: Any) -> Iterator[TestClient]:
+        overrides.setdefault("cookie_secure", False)  # tests talk plain http
         app = create_app(Settings(database_url=test_db_url, **overrides))
 
         # A stand-in for the data endpoints that later issues add (AC1.2, AC1.3).
@@ -214,7 +216,11 @@ def test_rate_limit_on_failed_signins(
         good = {"email": "ada@example.com", "password": PASSWORD}
         assert c.post("/api/auth/signin", json=good).status_code == 429
         # Another account from the same client is not locked out by those failures.
-        assert signup(c, "other@example.com").status_code == 201
+        signup_other = signup(c, "other@example.com")  # sign-up is not limited
+        assert signup_other.status_code == 201
+        c.post("/api/auth/signout")
+        other = {"email": "other@example.com", "password": PASSWORD}
+        assert c.post("/api/auth/signin", json=other).status_code == 200
 
 
 def test_successful_signin_resets_failure_count(
@@ -233,7 +239,6 @@ def test_successful_signin_resets_failure_count(
 
 def test_expired_session_is_rejected(client: TestClient, test_db_url: str) -> None:
     signup(client)
-    run(_scalar(test_db_url, "SELECT 1"))
     engine = create_async_engine(test_db_url)
 
     async def expire() -> None:
@@ -256,3 +261,17 @@ def test_deleting_a_user_removes_their_sign_ins(client: TestClient, test_db_url:
 
     run(delete_user())
     assert run(_scalar(test_db_url, "SELECT count(*) FROM auth_sessions")) == [(0,)]
+
+
+def test_burst_of_concurrent_signins_cannot_exceed_the_limit(make_client: MakeClient) -> None:
+    limit = 5
+    with make_client(signin_max_failures=limit) as c:
+        signup(c)
+        c.post("/api/auth/signout")
+        bad = {"email": "ada@example.com", "password": "wrong-password"}
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            codes = list(
+                pool.map(lambda _: c.post("/api/auth/signin", json=bad).status_code, range(30))
+            )
+        assert codes.count(401) <= limit
+        assert codes.count(401) + codes.count(429) == 30
