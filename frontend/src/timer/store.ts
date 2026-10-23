@@ -1,6 +1,6 @@
 // Keeps the one active session on the device so it survives reloads and reopening (AC6.4).
 
-import { validateConfig, type TimerConfig } from './config.ts'
+import { TAGS, validateConfig, type TimerConfig } from './config.ts'
 import { SESSION_SCHEMA_VERSION, type ActiveSession, type SessionRecord } from './engine.ts'
 
 export interface StoredTimer {
@@ -20,8 +20,6 @@ export interface ActiveSessionStore {
 
 export const ACTIVE_SESSION_KEY = 'ineedtofocus.activeSession'
 
-const TAGS = ['work', 'study', 'nap', 'read', 'meditation', 'exercise']
-
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -34,7 +32,8 @@ function isSession(value: unknown): value is ActiveSession {
   if (!isObject(value)) return false
   if (value.version !== SESSION_SCHEMA_VERSION) return false
   if (typeof value.id !== 'string' || value.id === '') return false
-  if (typeof value.tag !== 'string' || !TAGS.includes(value.tag)) return false
+  if (typeof value.tag !== 'string' || !(TAGS as readonly string[]).includes(value.tag))
+    return false
   if (value.goal !== null && typeof value.goal !== 'string') return false
   if (!isNumber(value.startedAt) || !isNumber(value.observedActiveMs)) return false
   if (
