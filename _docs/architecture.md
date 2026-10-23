@@ -60,6 +60,10 @@ The OpenAPI document exported from FastAPI lives at `_docs/api/openapi.json` (ad
 - **Never lost.** A finished session's record stays in the store as `pendingRecord` until `saveRecord` (the IndexedDB session store, #19) has accepted it; failures leave it there and it is handed over again by `retryPending()`, `restore()` or the next `start()`. Sessions under 1 minute of focus are discarded with a message instead.
 - **12-hour limit.** The unlimited timer stops at 12 hours of focus time (paused time excluded, like its reminders).
 
+## Session setup screen (#14)
+
+`frontend/src/setup/` holds the setup form: mode and settings (validated with the timer engine's `validateConfig` and limits), tag, optional goal (120 chars) and background-audio choice (None / Rain / YouTube; selection only, playback is #17/#18). Start creates the session through `TimerController`. The last-used tag and Pomodoro configuration are remembered through a `PreferencesStore`; for now it is backed by `localStorage`, and #12/#22 will back it with the Settings API.
+
 ## Key decisions
 
 | Decision | Why | Where |
