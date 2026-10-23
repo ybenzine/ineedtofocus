@@ -1,6 +1,6 @@
 # Deployment
 
-> **Status: in progress.** Server setup is scripted (#25), the images and production Compose are defined (#27), and merges to `main` deploy to dev (#28). Prod deploys and rollback are filled in by the DevOps agent with #29 and #30. The plan is in [tech_stack.md §2–3](tech_stack.md).
+> **Status: in progress.** Server setup is scripted (#25), the images and production Compose are defined (#27), merges to `main` deploy to dev (#28), and prod deploys are a manual, approved workflow (#29). Automatic revert and rollback are filled in by the DevOps agent with #30. The plan is in [tech_stack.md §2–3](tech_stack.md).
 
 ## Environments
 
@@ -81,7 +81,7 @@ Each GitHub environment gets its own key pair. The private key goes into that en
 restrict,command="/opt/focus/bin/focus-ci <profile>" ssh-ed25519 AAAA... focus-ci-<environment>
 ```
 
-`restrict` turns off PTYs and forwarding for that key; `command=` makes sshd run that script whatever the client asks for (the client's request is in `$SSH_ORIGINAL_COMMAND`). The profile is fixed by this root-owned line, so a key can never pick another one. The `dev` profile is #28's ([Deploy to dev](#deploy-to-dev-28)); #29 (prod) and #30 (rollback) add theirs.
+`restrict` turns off PTYs and forwarding for that key; `command=` makes sshd run that script whatever the client asks for (the client's request is in `$SSH_ORIGINAL_COMMAND`). The profile is fixed by this root-owned line, so a key can never pick another one. The `dev` profile is #28's ([Deploy to dev](#deploy-to-dev-28)), `prod` is #29's ([Deploy to prod](#deploy-to-prod-29)); #30 (rollback) adds its own.
 
 ### Upkeep
 
@@ -213,13 +213,14 @@ A failed step stops the deploy and exits non-zero, which turns the job red. The 
 
 `/opt/focus/bin/focus-ci <profile>` (source `infra/server/focus-ci.sh`) accepts exactly these requests in `$SSH_ORIGINAL_COMMAND`, matched whole, in the C locale:
 
-| Request | Profile `dev` | Does |
-|---|---|---|
-| `deploy <40 lowercase hex> sha256:<64 lowercase hex>` | yes | The deploy above |
-| `rollback` | yes | Starts the record's previous release again by digest, no migration, same checks. Rolling back again goes further back, not forward |
-| `status` | yes | Prints the record |
+| Request | Profile `dev` | Profile `prod` (#29) | Does |
+|---|---|---|---|
+| `deploy <40 lowercase hex> sha256:<64 lowercase hex>` | yes | yes, only a sha and digest dev ran successfully | The deploy above, on that profile's environment |
+| `rollback` | yes | no (#30's own key) | Starts the record's previous release again by digest, no migration, same checks. Rolling back again goes further back, not forward |
+| `status` | yes | yes | Prints that environment's record |
+| `candidate` or `candidate <40 lowercase hex>` | no | yes | Read-only: the tag and digest of dev's current release, or the last digest of that sha dev ran successfully ([Deploy to prod](#deploy-to-prod-29)) |
 
-Anything else gets exit status 2 and `focus-ci: refused`, before anything runs: another verb, extra or malformed arguments, a shell, scp or sftp, a newline, or an unknown profile. Requests are logged to syslog (`journalctl -t focus-ci`). Every `docker` and `compose.sh` call runs under `env -i` with only `PATH`, `HOME` and `APP_TAG`, so nothing from the SSH session (such as `LC_*`, which sshd accepts) can override `infra/env/<env>.env`. #29 and #30 add profiles (prod deploy; prod rollback restricted to recorded releases) and the automatic revert in the same `case`.
+Anything else gets exit status 2 and `focus-ci: refused`, before anything runs: another verb, a verb the profile doesn't have, extra or malformed arguments, a shell, scp or sftp, a newline, or an unknown profile. Requests are logged to syslog (`journalctl -t focus-ci`). Every `docker` and `compose.sh` call runs under `env -i` with only `PATH`, `HOME` and `APP_TAG`, so nothing from the SSH session (such as `LC_*`, which sshd accepts) can override `infra/env/<env>.env`. #30 adds the prod rollback profile (restricted to recorded releases) and the automatic revert in the same `case`.
 
 **Serialization.** Every deploy and rollback takes `flock /opt/focus/deploy.lock` (waits up to 15 minutes), across environments, and `install.sh` takes the same lock. The memory budget counts one migration container at a time ([Memory](#memory-dev-cant-starve-prod)). In GitHub, `deploy-dev` has its own concurrency group (`deploy-dev`, no cancelling of the running deploy). Deploys of different environments don't share one group: GitHub cancels a *pending* job when another one joins the group, so a dev deploy queued behind a prod deploy would cancel a pending prod rollback. The server lock is what orders them. When merges queue up, the group keeps only the newest pending deploy: an intermediate commit's `Deploy to dev` shows as cancelled and dev goes straight to the newest commit. That's intended.
 
@@ -254,7 +255,7 @@ Nothing is stored at repo level. The key can only run the `dev` profile: deploy,
 - The revision label check only proves the image *claims* to be built from `<sha>`. Anyone able to push to that package can set any label, and any workflow run in this repo that asks for `packages: write` can push there, including runs on PR branches. So the checks don't prove an image was built on `main`. That guarantee comes from the workflow: `deploy-dev` deploys only the digest `publish` pushed for a `main` commit that passed CI. The key itself is held only by the `main`-only `dev` environment.
 - An image runs as dev's app, with the root-installed `compose.prod.yml`: no volumes, ports, Docker socket, privileges or host network, on dev's own networks and database. Host disk and process limits come with #117.
 
-**The local `:<sha>` tag is host-wide.** Both environments' Compose projects resolve `ghcr.io/ybenzine/ineedtofocus:<sha>` from the same local image store, and `focus-ci` moves that tag (`docker tag …@<digest> …:<sha>`) on every deploy and rollback. `focus-ci` therefore never trusts an existing local tag. It re-tags from the digest it was given or has recorded, under the lock, and then checks the running container's image. Anything else that starts an app container must do the same: #29's prod deploy, #30's auto-revert and rollback, and any manual `compose.sh prod up` from a runbook.
+**The local `:<sha>` tag is host-wide.** Both environments' Compose projects resolve `ghcr.io/ybenzine/ineedtofocus:<sha>` from the same local image store, and `focus-ci` moves that tag (`docker tag …@<digest> …:<sha>`) on every deploy and rollback. `focus-ci` therefore never trusts an existing local tag. It re-tags from the digest it was given or has recorded, under the lock, and then checks the running container's image. Anything else that starts an app container must do the same. The prod deploy (#29) does, through the same `deploy` code. #30's auto-revert and rollback must, and so must any manual `compose.sh prod up` from a runbook.
 
 The `main`-only branch policy keeps workflows on other branches from reading the key. GitHub creates the `dev` environment, with no secrets, the first time the job runs; until the secrets are added the job skips.
 
@@ -283,8 +284,88 @@ The `main`-only branch policy keeps workflows on other branches from reading the
 - **Rotate the key:** repeat steps 2–6, then remove the old line from `/etc/ssh/authorized_keys/deploy`.
 - **Roll dev back by hand** until #30's workflow exists: dev's key is only in GitHub, so use the server: `sudo -u deploy env -i SSH_ORIGINAL_COMMAND=rollback /opt/focus/bin/focus-ci dev`. That is what the key would run.
 
+## Deploy to prod (#29)
+
+Prod deploys are manual and approved by Yacine. `.github/workflows/deploy-prod.yml` (workflow `deploy-prod`) starts only from **Actions** → **deploy-prod** → **Run workflow**, on branch `main`, with one optional input, `tag`. No push, tag or release starts it: the reviewer App can create tags (#70). The gate is the `production` environment's required approval.
+
+**Today that gate doesn't hold against agents.** Agents run `gh` logged in as Yacine, who is the environment's required reviewer and a repo administrator. `.claude/settings.json` denies `gh workflow run deploy-prod*`, and the workflow is named `deploy-prod` so that starting it by name matches the same rule. Those rules match command text only, and three paths get past them:
+
+- **`gh workflow run <numeric workflow id>`** starts it. The ask rules may prompt, but nothing denies it.
+- **`gh run rerun <any past deploy-prod run>`** is allowed (`gh run *`). A full re-run re-runs `plan`, which picks dev's current release.
+- **`gh api -X POST repos/ybenzine/ineedtofocus/actions/runs/<id>/pending_deployments` with `state=approved`** is allowed (`gh api *`). It approves the waiting job as Yacine, so prod gets that release without him.
+
+Together, those last two are a full prod deploy with no human in the loop. #126 adds interim deny rules for these paths. Like every rule in that file, they only prevent mistakes. The fix is #127: agents get a credential that can't approve deployments. Until #127 lands, the approval is a gate against people and leaked tokens other than Yacine's, not against agents. Until #126 is merged, **don't add the `production` secrets** ([One-time setup](#one-time-setup-yacine-1), step 5). Without them the deploy job skips and nothing reaches prod.
+
+**Prod gets what dev ran.** Leave `tag` empty to deploy the release dev runs now, or give a full commit sha (40 lowercase hex) that dev ran successfully at some point. "Successfully" means two things. The `plan` job requires a `dev` GitHub deployment of that sha that reached `success`, so `deploy-dev` passed its smoke tests. The server requires an ok line in dev's `releases.log`, so focus-ci's checks passed. An explicit sha lets you deploy, for example, a release dev ran before newer merges reached it. Going back is a rollback, not a deploy (#30): a deploy migrates, and an older image can't run `alembic upgrade head` on a schema a newer one migrated. That deploy stops at the `migrate` step with nothing changed. Either way the workflow deploys a digest, never a registry tag. That digest is read from dev's own records on the server. It's normally the one `publish` pushed and `deploy-dev` deployed; [Credentials](#credentials-1) covers when it might not be. The server checks it again before deploying: `focus-ci prod` refuses a sha and digest that have no successful line in `/opt/focus/dev/releases.log`. So a tag re-pushed to the registry, or a digest nobody deployed to dev, can't reach prod.
+
+| Step | Where | What |
+|---|---|---|
+| Plan | job `plan`, runner, no credentials | Checks the input: empty, or 40 lowercase hex. Empty means dev's newest successful GitHub deployment. Checks that the commit is on `main` (compare API), that a `CI` run on `main` passed for it, and that a `dev` deployment of it reached `success` (dev's smoke tests passed). Writes the commit to the summary and passes the sha on. Yacine approves that one commit |
+| Approval | job `deploy`, environment `production` | Waits for Yacine: the run page shows **Review deployments**. Read the plan's summary, then tick `production` → **Approve and deploy**, or **Reject**. The environment's branch rule only lets runs from `main` in |
+| Gate | runner | Neither `DEPLOY_SSH_KEY` nor `DEPLOY_KNOWN_HOSTS` in `production`: skips with a notice, green, nothing changes on prod. Only one of them: fails red. Both: deploys |
+| Resolve | runner, `focus-ci prod`: `candidate` | Empty input: `candidate`, dev's current release. If dev's record doesn't show the planned sha, the job stops and deploys nothing, since that's not what was approved. Either dev moved after the plan (a newer deploy, or a rollback), or dev's latest deploy passed the server checks but failed its smoke tests, so the plan skipped it. A sha: `candidate <sha>`, the last digest of that commit dev ran successfully. Read-only: no docker call, no lock, no write. A dev key put in `production` by mistake can't run it, so the job stops here |
+| Deploy | server, `focus-ci prod`: `deploy <sha> sha256:<digest>` | Under the deploy lock: the `promote` check above, then the same steps as dev on `focus-prod`. It pulls by digest when the host doesn't have it and checks the revision label. It re-tags the host-wide `:<sha>` from the digest, which dev's deploys may have moved. Then it migrates, runs `up -d --wait`, checks that the app container runs exactly that digest and that `/readyz` answers, and records the release |
+| Record | runner | `status` reads `/opt/focus/prod/release` back; the job fails unless it shows `env=prod` and this tag and digest. Then the key is deleted from the runner, before any repository code runs |
+| Smoke | runner | `scripts/smoke_deploy.py https://ineedtofoc.us`, the same checks as dev's |
+| Summary | runner | Tag, image digest, when dev ran it, when prod got it, rollback target (the previous tag), infra revision, smoke results |
+
+The prod record and log have the same format as dev's ([The release record](#the-release-record)), in `/opt/focus/prod/`. A failed step stops the deploy and turns the job red. The record keeps the last good release, and the attempt is logged with the step that failed (`step=promote` when dev never ran it). If the failure came after `up`, prod may be running the new image unhealthy. The automatic revert is #30; until then, roll back by hand (below).
+
+**One prod deploy at a time.** The `deploy` job has its own concurrency group, `deploy-prod`, which never cancels a running deploy. A second run waits; a third one replaces the waiting second one, so the newest request wins. Reject runs you won't approve rather than leaving them waiting, since a waiting run can hold the group. The group isn't shared with `deploy-dev` or #30's `rollback.yml`, because GitHub cancels a *pending* job when another one joins its group. Deploys of both environments are ordered on the server by `/opt/focus/deploy.lock` instead.
+
+### Credentials
+
+| Where | What | Who sets it |
+|---|---|---|
+| GitHub environment `production` (required reviewer: Yacine; deployment branches: `main` only; administrators can't bypass) | `DEPLOY_SSH_KEY`: the private half of the `focus-ci-prod` key. `DEPLOY_KNOWN_HOSTS`: the Droplet's host key line (the same line as dev's) | Yacine |
+| `/etc/ssh/authorized_keys/deploy` | `restrict,command="/opt/focus/bin/focus-ci prod" ssh-ed25519 … focus-ci-prod` | Yacine (sudo) |
+
+Nothing is stored at repo level, and the `plan` job holds no credential. Every job that reads a secret other than `GITHUB_TOKEN` runs in an environment (`scripts/tests/test_ci_workflow.py` checks every workflow). Only a job of an approved run, on `main`, can read the prod key. Today an agent can approve that run as Yacine, though (see the gap above; #126, #127). Until #127, a workflow edit merged by an agent can reach the prod key without Yacine. Even then, the key can only run `focus-ci prod`, whose limits hold whatever the workflow says.
+
+The prod key itself sits on the runner's disk only from **Set up the deploy key** to just after **Read the server's release record**. It's deleted before `scripts/smoke_deploy.py`, the first repository code the job runs, and again in the final `always()` step.
+
+What each key can do:
+
+- **Prod key** (`focus-ci prod`): deploy to prod a release dev ran successfully, read prod's record, and read dev's record and log (`candidate`). It can't deploy or roll back dev, roll prod back (#30's key does that), open a shell or change the compose files. If it leaked, the worst it could do is redeploy to prod a release dev once ran (an older one stops at `migrate` once prod's schema is newer). That's not new code, but only as long as dev runs only `publish`'s images, and the server doesn't enforce that (next point).
+- **What the approval binds: a commit, not bytes.** Yacine approves a commit. The digest comes from dev's `releases.log`, which records whatever the dev key asked for. The dev key is usable without a reviewer by any `dev`-environment job on `main`. Any run that asks for `packages: write` can push an image labelled with any commit, PR-branch runs included. So an agent-merged workflow change could deploy to dev an image built outside `publish` and labelled with commit X. Approving X for prod would then deploy those bytes. Build provenance attestations from `publish`, verified before the prod deploy, close this: #128.
+- **Dev key** (`focus-ci dev`): can't do anything on prod. `candidate` is refused, and its `deploy`, `rollback` and `status` act only on `focus-dev` and `/opt/focus/dev/`.
+
+`make test-server` checks both directions behind the real sshd, along with hostile requests, the promotion check, the re-tagging of a `:<sha>` that dev moved, the lock, the clean environment and the record.
+
+### One-time setup (Yacine)
+
+Dev must be deployed first ([Deploy to dev → One-time setup](#one-time-setup-yacine)), since prod takes its releases from dev.
+
+**Wait for #126 before the key.** Step 1 and the environment settings in step 5 can be done any time. Steps 2–4, the secrets in step 5, and steps 6–8 wait until #126 is merged, so the interim deny rules for starting, re-running and approving prod deploys are in place. #127 is recommended first too: it's the actual fix (see the gap at the top of this section). Without the secrets, the deploy job skips and nothing reaches prod.
+
+1. **Install `infra/` at the merge commit of #29**, which updates `focus-ci`: `ssh -t yacine@159.223.188.176 'sudo /opt/focus/infra/server/install.sh <merge sha>'`. The diff shows `server/focus-ci.sh` and `server/install.sh`. Read it, then type `yes`.
+2. **Create the key pair** on your machine, for CI only: `ssh-keygen -t ed25519 -N '' -C focus-ci-prod -f /tmp/focus-ci-prod`
+3. **Authorize it**, pinned to the prod profile:
+   `ssh -t yacine@159.223.188.176 "echo 'restrict,command=\"/opt/focus/bin/focus-ci prod\" $(cat /tmp/focus-ci-prod.pub)' | sudo tee -a /etc/ssh/authorized_keys/deploy > /dev/null"`
+   Then `ssh yacine@159.223.188.176 "sudo stat -c '%a %U:%G' /etc/ssh/authorized_keys/deploy; sudo grep -c 'focus-ci prod' /etc/ssh/authorized_keys/deploy"` should print `640 root:deploy` and `1`.
+4. **Get the host key line** as for dev: `ssh yacine@159.223.188.176 'printf "159.223.188.176 %s\n" "$(cut -d" " -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)"'`
+5. **Set up the `production` environment** before adding any secret: repo **Settings** → **Environments** → `production`, or **New environment** → `production` if it isn't listed.
+   - **Required reviewers**: tick it, add `ybenzine`, and leave **Prevent self-review** unticked, since you start the runs yourself.
+   - **Allow administrators to bypass configured protection rules**: untick it. Agents use your `gh` login, which is an administrator.
+   - **Wait timer**: off.
+   - **Deployment branches and tags** → **Selected branches and tags** → **Add deployment branch or tag rule** → Ref type **Branch** (not Tag) → name pattern `main` → **Add rule**.
+   - **Save protection rules**.
+   - **Environment secrets** (only once #126 is merged, see above) → **Add environment secret**, twice: `DEPLOY_SSH_KEY`, the whole of `/tmp/focus-ci-prod` (`-----BEGIN OPENSSH PRIVATE KEY-----` to `-----END …-----`), and `DEPLOY_KNOWN_HOSTS`, the line from step 4. Not as repository secrets.
+6. **Delete the local key files**: `rm /tmp/focus-ci-prod /tmp/focus-ci-prod.pub`.
+7. **Check**, read-only:
+   `gh api repos/ybenzine/ineedtofocus/environments/production --jq '{reviewers: [.protection_rules[] | select(.type == "required_reviewers") | .reviewers[].reviewer.login], branches: .deployment_branch_policy, admins_bypass: .can_admins_bypass}'`
+   should print `{"admins_bypass":false,"branches":{"custom_branch_policies":true,"protected_branches":false},"reviewers":["ybenzine"]}`.
+   `gh api repos/ybenzine/ineedtofocus/environments/production/deployment-branch-policies --jq '.branch_policies[] | {name, type}'` should print only `{"name":"main","type":"branch"}`, and `gh secret list` (repository secrets) should list no `DEPLOY_*`.
+8. **First deploy:** **Actions** → **deploy-prod** → **Run workflow** → branch `main`, `tag` empty → **Run workflow**. When `plan` is done, read its summary, then **Review deployments** → `production` → **Approve and deploy**. The job should go green with the release and passing smoke tests in its summary, and `https://ineedtofoc.us/healthz` should answer `{"status":"ok"}`.
+
+### Upkeep
+
+- **Rotate the key:** repeat steps 2–6, then remove the old `focus-ci-prod` line from `/etc/ssh/authorized_keys/deploy`.
+- **Roll prod back by hand** until #30's workflow exists. The prod profile has no `rollback` (#30 adds a separate key for it), and a `deploy` of an older release fails at `migrate`. So on the server, take `previous_tag` and `previous_digest` from `sudo cat /opt/focus/prod/release`, re-tag from the digest (dev may have moved the tag) and start it without migrating:
+  `sudo -u deploy env -i PATH=/usr/bin:/bin HOME=/home/deploy sh -c 'docker tag ghcr.io/ybenzine/ineedtofocus@<previous_digest> ghcr.io/ybenzine/ineedtofocus:<previous_tag> && APP_TAG=<previous_tag> /opt/focus/infra/compose.sh prod up -d --wait --pull never'`
+  The record isn't updated by this, so note it on the incident; #30's rollback does all of it and records it.
+
 ## Sections to write
 
-- Deploy to prod — #29
 - Health checks, auto-revert and rollback — #30
-- Credential separation for the prod and rollback keys — #29, #30 (dev's is in [Deploy to dev → Credentials](#credentials))
+- Credential separation for the rollback key — #30 (dev's is in [Deploy to dev → Credentials](#credentials), prod's in [Deploy to prod → Credentials](#credentials-1))
