@@ -1,0 +1,29 @@
+# Exporters when Grafana Cloud is configured (GRAFANA_CLOUD_OTLP_ENDPOINT is set in the
+# server's /opt/focus/<env>/.env). Merged over config.yaml; see that file.
+#
+# Grafana Cloud's OTLP gateway takes HTTP basic auth: the stack's instance ID as the
+# user and an access-policy token with metrics/logs/traces write scopes as the
+# password (#32). Both come from the environment and are never logged.
+
+extensions:
+  basicauth/grafana_cloud:
+    client_auth:
+      username: ${env:GRAFANA_CLOUD_INSTANCE_ID}
+      password: ${env:GRAFANA_CLOUD_OTLP_TOKEN}
+
+exporters:
+  otlphttp/grafana_cloud:
+    # e.g. https://otlp-gateway-prod-us-east-0.grafana.net/otlp (/v1/traces etc. appended)
+    endpoint: ${env:GRAFANA_CLOUD_OTLP_ENDPOINT}
+    auth:
+      authenticator: basicauth/grafana_cloud
+
+service:
+  extensions: [health_check, basicauth/grafana_cloud]
+  pipelines:
+    traces:
+      exporters: [otlphttp/grafana_cloud]
+    metrics:
+      exporters: [otlphttp/grafana_cloud]
+    logs:
+      exporters: [otlphttp/grafana_cloud]

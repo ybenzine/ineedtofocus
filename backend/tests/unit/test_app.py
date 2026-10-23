@@ -242,3 +242,17 @@ def test_log_scrub_redacts_postgres_detail_line() -> None:
 def test_cookie_secure_defaults_to_true_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COOKIE_SECURE", raising=False)
     assert Settings().cookie_secure is True
+
+
+def test_log_scrub_redacts_sqlalchemy_bound_parameters() -> None:
+    from app.logging_config import scrub
+
+    msg = (
+        "(sqlalchemy.dialects.postgresql.asyncpg.Error) <class 'asyncpg.CheckViolationError'>: x\n"
+        "[SQL: INSERT INTO focus_sessions (goal) VALUES ($1)]\n"
+        "[parameters: ('ship the secret plan',)]\n"
+        "(Background on this error at: https://sqlalche.me/e/21/dbapi)"
+    )
+    out = scrub(msg)
+    assert "secret" not in out
+    assert "Background on this error" in out

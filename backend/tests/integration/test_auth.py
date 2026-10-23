@@ -318,6 +318,14 @@ def test_cookie_uses_host_prefix_when_secure(make_client: MakeClient) -> None:
         cookie = signup(c).headers["set-cookie"]
         assert cookie.startswith("__Host-focus_session=")
         assert "path=/" in cookie.lower() and "domain" not in cookie.lower()
+        token = c.cookies.get("__Host-focus_session")
+        assert token
+        c.cookies.clear()
+        # Replayed over the test client's http: send the cookie by hand.
+        ok = c.get("/api/auth/me", headers={"Cookie": f"__Host-focus_session={token}"})
+        assert ok.status_code == 200
+        old = c.get("/api/auth/me", headers={"Cookie": f"focus_session={token}"})
+        assert old.status_code == 401
         out = c.post("/api/auth/signout").headers["set-cookie"]
         assert out.startswith("__Host-focus_session=")
     with make_client(cookie_secure=False) as c:

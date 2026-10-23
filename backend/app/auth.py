@@ -91,6 +91,7 @@ async def _start_session(request: Request, response: Response, db: DbSession, us
         select(AuthSession.token_hash)
         .where(AuthSession.expires_at <= func.now())
         .limit(EXPIRED_CLEANUP_BATCH)
+        .with_for_update(skip_locked=True)  # never wait on, or deadlock with, another cleanup
     )
     await db.execute(delete(AuthSession).where(AuthSession.token_hash.in_(expired)))
     db.add(

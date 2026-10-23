@@ -202,6 +202,28 @@ describe('SessionSetup long break', () => {
   })
 })
 
+describe('SessionSetup accessibility', () => {
+  it('announces validation hints politely and ties them to their field', () => {
+    setup()
+    const duration = screen.getByLabelText('Duration')
+    const hint = document.getElementById(duration.getAttribute('aria-describedby') ?? '')
+    expect(hint).toHaveAttribute('aria-live', 'polite')
+    expect(hint).toHaveTextContent('1–240 min')
+    type('Duration', '0')
+    expect(hint).toHaveTextContent(/./)
+    expect(duration).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it('ties the goal field to its character counter', () => {
+    setup()
+    const goal = screen.getByLabelText('What are you focusing on? (optional)')
+    const counter = document.getElementById(goal.getAttribute('aria-describedby') ?? '')
+    expect(counter).toHaveTextContent('0/120')
+    fireEvent.change(goal, { target: { value: 'Write' } })
+    expect(counter).toHaveTextContent('5/120')
+  })
+})
+
 describe('parsePreferences', () => {
   it('falls back to Work and the defaults for missing or corrupt data', () => {
     expect(parsePreferences(null)).toEqual(DEFAULT_PREFERENCES)
