@@ -16,6 +16,7 @@ from app.errors import fix_openapi, register_error_handlers
 from app.health import router as health_router
 from app.logging_config import configure_logging
 from app.rate_limit import FailureLimiter
+from app.sessions import router as sessions_router
 from app.telemetry import install_privacy_filters, telemetry_config
 from app.web import mount_frontend
 
@@ -58,6 +59,7 @@ def create_app(
     fix_openapi(app)
     app.include_router(health_router)
     app.include_router(auth_router)
+    app.include_router(sessions_router)
     mount_frontend(app, settings.frontend_dist)
     return app
 

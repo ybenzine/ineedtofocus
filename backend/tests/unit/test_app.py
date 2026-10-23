@@ -237,3 +237,17 @@ def test_log_scrub_redacts_postgres_detail_line() -> None:
     out = scrub(msg)
     assert "a@b.c" not in out
     assert out.startswith("duplicate key") and out.endswith("more")
+
+
+def test_log_scrub_redacts_sqlalchemy_bound_parameters() -> None:
+    from app.logging_config import scrub
+
+    msg = (
+        "(sqlalchemy.dialects.postgresql.asyncpg.Error) <class 'asyncpg.CheckViolationError'>: x\n"
+        "[SQL: INSERT INTO focus_sessions (goal) VALUES ($1)]\n"
+        "[parameters: ('ship the secret plan',)]\n"
+        "(Background on this error at: https://sqlalche.me/e/21/dbapi)"
+    )
+    out = scrub(msg)
+    assert "secret" not in out
+    assert "Background on this error" in out

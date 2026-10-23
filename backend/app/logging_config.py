@@ -20,8 +20,16 @@ _RESERVED = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 _PG_DETAIL = re.compile(r"^DETAIL:.*$", re.MULTILINE)
 
 
+# SQLAlchemy appends the statement's bound values to DBAPI errors ("[parameters: (...)]"),
+# which carry goals, emails and password hashes.
+_SQL_PARAMETERS = re.compile(
+    r"\[parameters: .*?\](?=\n\(Background on this error|\n\n|\Z)", re.DOTALL
+)
+
+
 def scrub(text: str) -> str:
-    return _PG_DETAIL.sub("DETAIL: [redacted]", text)
+    text = _PG_DETAIL.sub("DETAIL: [redacted]", text)
+    return _SQL_PARAMETERS.sub("[parameters: redacted]", text)
 
 
 class JsonFormatter(logging.Formatter):
