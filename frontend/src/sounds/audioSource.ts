@@ -4,6 +4,49 @@
 import { AUDIO_SOURCES, type AudioSource } from '../setup/options.ts'
 
 export const AUDIO_SOURCE_KEY = 'ineedtofocus.audioSource'
+/** The YouTube link of the active session (#18), kept and cleared with the audio source. */
+export const YOUTUBE_LINK_KEY = 'ineedtofocus.youtubeLink'
+
+export interface YoutubeLinkStore {
+  load(): string | null
+  save(url: string): void
+}
+
+export class LocalYoutubeLinkStore implements YoutubeLinkStore {
+  readonly #storage: Storage
+
+  constructor(storage: Storage = window.localStorage) {
+    this.#storage = storage
+  }
+
+  load(): string | null {
+    try {
+      return this.#storage.getItem(YOUTUBE_LINK_KEY)
+    } catch {
+      return null
+    }
+  }
+
+  save(url: string): void {
+    try {
+      this.#storage.setItem(YOUTUBE_LINK_KEY, url)
+    } catch {
+      // The link is lost on reload; the session itself is unaffected.
+    }
+  }
+}
+
+export class MemoryYoutubeLinkStore implements YoutubeLinkStore {
+  #url: string | null = null
+
+  load(): string | null {
+    return this.#url
+  }
+
+  save(url: string): void {
+    this.#url = url
+  }
+}
 
 export interface AudioSourceStore {
   load(): AudioSource
@@ -40,6 +83,7 @@ export class LocalAudioSourceStore implements AudioSourceStore {
   clear(): void {
     try {
       this.#storage.removeItem(AUDIO_SOURCE_KEY)
+      this.#storage.removeItem(YOUTUBE_LINK_KEY)
     } catch {
       // Nothing to clear.
     }

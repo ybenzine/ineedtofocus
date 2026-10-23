@@ -479,3 +479,31 @@ main.history-screen {
   border-color: #ff8a80;
   color: #ff8a80;
 }
+
+.youtube-player {
+  width: 100%;
+  max-width: 24rem;
+  aspect-ratio: 16 / 9;
+  min-height: 12.5rem;
+  margin: 0 auto;
+  background: #000;
+}
+
+.youtube-player iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+.youtube-controls {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.youtube-recent {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
