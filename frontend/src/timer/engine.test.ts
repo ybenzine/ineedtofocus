@@ -321,6 +321,48 @@ describe('Pomodoro (F3)', () => {
     expect(saved(stopSession(end.session, now())).focusSeconds).toBe(20 * 60)
   })
 
+  it('ac3_4 during a long break the snapshot shows the block it follows', () => {
+    const session = start(
+      pomodoro({
+        blocks: 8,
+        focusMinutes: 10,
+        breakMinutes: 5,
+        longBreakEnabled: true,
+        longBreakMinutes: 20,
+      }),
+    )
+    wait(60 * MINUTE_MS) // blocks 1–4 and the short breaks end at 55 min
+    expect(snapshot(session, now()).pomodoro).toMatchObject({
+      phase: 'long-break',
+      block: 4,
+      totalBlocks: 8,
+      blocksCompleted: 4,
+      phaseRemainingMs: 15 * MINUTE_MS,
+    })
+  })
+
+  it('ac3_5 skipping a long break starts the next focus block without a bell', () => {
+    let session = start(
+      pomodoro({
+        blocks: 8,
+        focusMinutes: 10,
+        breakMinutes: 5,
+        longBreakEnabled: true,
+        longBreakMinutes: 20,
+      }),
+    )
+    wait(60 * MINUTE_MS)
+    session = advance(session, now()).session
+    const skip = skipBreak(session, now())
+    expect(skip.event).toMatchObject({ from: 'long-break', to: 'focus', block: 5, skipped: true })
+    expect(snapshot(skip.session, now()).pomodoro).toMatchObject({
+      phase: 'focus',
+      block: 5,
+      phaseRemainingMs: 10 * MINUTE_MS,
+    })
+    expect(advance(skip.session, now()).events).toEqual([])
+  })
+
   it('ac3_5 there is no break to skip during focus or in other modes', () => {
     const session = start(pomodoro())
     wait(MINUTE_MS)

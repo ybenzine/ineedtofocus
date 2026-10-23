@@ -79,8 +79,12 @@ export class TimerController {
     this.#newId = options.newId ?? (() => crypto.randomUUID())
   }
 
-  /** The active session right now, or `null`. Read-only: does not report or persist anything. */
+  /**
+   * The active session right now, or `null`. Reads the stored copy, so it follows changes made
+   * in other tabs; reports and persists nothing.
+   */
   current(): TimerSnapshot | null {
+    this.#refresh()
     return this.#session ? snapshot(this.#session, this.#now()) : null
   }
 
@@ -178,7 +182,17 @@ export class TimerController {
     return this.#handOff(stored.pendingRecord)
   }
 
+  /**
+   * The device's copy is the truth: another tab may have paused, resumed, skipped or stopped
+   * since this one last looked. Adopt what is stored instead of overwriting it with a stale copy.
+   */
+  #refresh(): void {
+    const stored = this.#store.load()
+    this.#session = stored === null || stored.pendingRecord !== null ? null : stored.session
+  }
+
   #advance(): (ReturnType<typeof advance> & { now: number }) | null {
+    this.#refresh()
     if (this.#session === null) return null
     const now = this.#now()
     return { ...advance(this.#session, now), now }

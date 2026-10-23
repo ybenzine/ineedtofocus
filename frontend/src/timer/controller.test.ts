@@ -297,6 +297,23 @@ describe('surviving reloads (AC6.4, AC6.5)', () => {
     ])
   })
 
+  it('ac4_5 an unlimited timer that passed 12 h while closed is Completed at the 12 h mark', async () => {
+    const { controller, saved, make } = setup()
+    await controller.start(startOptions({ mode: 'unlimited', reminderMinutes: 60 }))
+    wait(30 * HOUR) // app closed
+    const update = await make().restore()
+    expect(update.snapshot).toBeNull()
+    expect(update.outcome).toMatchObject({ kind: 'saved' })
+    expect(saved).toEqual([
+      expect.objectContaining({
+        mode: 'unlimited',
+        status: 'completed',
+        endedAt: iso(T0 + 12 * HOUR),
+        focusSeconds: 12 * 3600,
+      }),
+    ])
+  })
+
   it('a Pomodoro still running after reopening shows the right phase', async () => {
     const { controller, make } = setup()
     await controller.start(startOptions(DEFAULT_POMODORO))
@@ -312,6 +329,48 @@ describe('surviving reloads (AC6.4, AC6.5)', () => {
 
   it('restoring with nothing stored is a no-op', async () => {
     expect(await setup().controller.restore()).toMatchObject({ snapshot: null, outcome: null })
+  })
+})
+
+describe('two tabs on one session', () => {
+  it('a pause in one tab is not overwritten by the other tab', async () => {
+    const { controller: tabA, make, store } = setup()
+    await tabA.start(startOptions(countdown(25)))
+    const tabB = make()
+    await tabB.restore()
+    wait(MINUTE_MS)
+    await tabA.pause()
+    wait(SECOND)
+    const update = await tabB.tick() // would have saved its stale, unpaused copy
+    expect(update.snapshot?.paused).toBe(true)
+    expect(store.load()?.session.pauses).toHaveLength(1)
+    expect(tabB.current()?.paused).toBe(true)
+  })
+
+  it('a stop in one tab ends the session in the other without saving twice', async () => {
+    const { controller: tabA, make, saved } = setup()
+    await tabA.start(startOptions(countdown(25)))
+    const tabB = make()
+    await tabB.restore()
+    wait(5 * MINUTE_MS)
+    await tabA.stop()
+    const update = await tabB.tick()
+    expect(update).toMatchObject({ snapshot: null, outcome: null })
+    expect(tabB.current()).toBeNull()
+    expect(saved).toHaveLength(1)
+    await expect(tabB.pause()).rejects.toThrow(NoActiveSessionError)
+  })
+
+  it('actions in the second tab build on the first tab’s changes', async () => {
+    const { controller: tabA, make } = setup()
+    await tabA.start(startOptions(countdown(25)))
+    const tabB = make()
+    await tabB.restore()
+    wait(MINUTE_MS)
+    await tabA.pause()
+    wait(MINUTE_MS)
+    const resumed = await tabB.resume()
+    expect(resumed.snapshot).toMatchObject({ paused: false, pausedMs: MINUTE_MS })
   })
 })
 
