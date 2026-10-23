@@ -3,20 +3,24 @@
 import type { FinishOutcome } from '../timer/index.ts'
 import { formatDuration } from './format.ts'
 
-/** The history screen's route (#20). */
-export const HISTORY_PATH = '/history'
+import { HISTORY_PATH } from '../nav/screens.ts'
+
+export { HISTORY_PATH }
 
 export interface SessionSummaryProps {
   outcome: FinishOutcome
   /** True if the record couldn't be saved yet; it stays on the device and is retried. */
   recordPending?: boolean
   onNewSession: () => void
+  /** Switches to the History screen; without it the link is a plain `/history` link. */
+  onViewHistory?: () => void
 }
 
 export default function SessionSummary({
   outcome,
   recordPending,
   onNewSession,
+  onViewHistory,
 }: SessionSummaryProps) {
   return (
     <section className="summary" aria-labelledby="summary-title">
@@ -67,7 +71,23 @@ export default function SessionSummary({
         <button type="button" className="primary" onClick={onNewSession}>
           New session
         </button>
-        <a className="secondary link-button" href={HISTORY_PATH}>
+        <a
+          className="secondary link-button"
+          href={HISTORY_PATH}
+          onClick={(event) => {
+            if (
+              !onViewHistory ||
+              event.button !== 0 ||
+              event.metaKey ||
+              event.ctrlKey ||
+              event.shiftKey ||
+              event.altKey
+            )
+              return
+            event.preventDefault()
+            onViewHistory()
+          }}
+        >
           View history
         </a>
       </div>

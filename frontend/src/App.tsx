@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertPlayer } from './sounds/alerts.ts'
 import AccountBar from './auth/AccountBar.tsx'
+import HistoryScreen from './history/HistoryScreen.tsx'
 import { notifySessionExpired, signedInUserId } from './auth/localData.ts'
 import ScreenNav from './nav/ScreenNav.tsx'
-import { type ScreenId } from './nav/screens.ts'
+import { pathForScreen, screenFromPath, type ScreenId } from './nav/screens.ts'
 import { httpSettingsApi } from './settings/api.ts'
 import { SettingsAlertVolumeStore, SettingsPreferencesStore } from './settings/adapters.ts'
 import { SettingsContext, useSettingsState } from './settings/SettingsContext.ts'
@@ -40,8 +41,7 @@ export const PENDING_RETRY_MS = 10_000
 
 type View =
   | { name: 'loading' }
-  | { name: 'setup' }
-  | { name: 'settings' }
+  | { name: ScreenId }
   | { name: 'timer' }
   | { name: 'summary'; update: TimerUpdate }
 
@@ -124,6 +124,10 @@ function AppBody({
       } else if (update.outcome) {
         void settings.refresh()
         if (!cancelled) setView({ name: 'summary', update })
+      } else if (screenFromPath(window.location.pathname) !== 'setup') {
+        // A deep link (`/history`, `/settings`): those screens don't wait for the server's copy.
+        void settings.refresh()
+        if (!cancelled) setView({ name: screenFromPath(window.location.pathname) })
       } else {
         // Only the setup screen needs the server's last-used config and tag, which it reads
         // once: give them a moment to arrive (another device may have changed them). Offline,
@@ -147,6 +151,27 @@ function AppBody({
   // Sync settings whenever the connection returns; at launch `refresh()` runs in the restore
   // effect above (waited for only when the setup screen opens).
   useEffect(() => settings.start(), [settings])
+
+  // The back and forward buttons move between the screens that have URLs (`/history`, `/settings`). They
+  // never take over a running timer or a summary.
+  useEffect(() => {
+    function onPopState() {
+      const screen = screenFromPath(window.location.pathname)
+      setView((current) =>
+        current.name === 'setup' || current.name === 'history' || current.name === 'settings'
+          ? { name: screen }
+          : current,
+      )
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  function goTo(screen: ScreenId) {
+    const path = pathForScreen(screen)
+    if (window.location.pathname !== path) window.history.pushState(null, '', path)
+    setView({ name: screen })
+  }
 
   // Send what is on the device now, when the connection returns, and on backoff (AC13.3).
   // Runs only while someone is signed in: AuthGate renders the app only then (#9).
@@ -217,20 +242,28 @@ function AppBody({
         <SessionSummary
           outcome={view.update.outcome}
           recordPending={view.update.recordPending}
-          onNewSession={() => setView({ name: 'setup' })}
+          onNewSession={() => goTo('setup')}
+          onViewHistory={() => goTo('history')}
         />
       </main>
     )
   }
 
-  const navigate = (screen: ScreenId) =>
-    setView(screen === 'settings' ? { name: 'settings' } : { name: 'setup' })
+  if (view.name === 'history') {
+    return (
+      <main className="dark-screen history-screen">
+        <AccountBar controller={timer} />
+        <ScreenNav current="history" onNavigate={goTo} />
+        <HistoryScreen sessions={services.sessions} onNewSession={() => goTo('setup')} />
+      </main>
+    )
+  }
 
   if (view.name === 'settings') {
     return (
       <main>
         <AccountBar controller={timer} />
-        <ScreenNav current="settings" onNavigate={navigate} />
+        <ScreenNav current="settings" onNavigate={goTo} />
         <SettingsScreen player={player} />
       </main>
     )
@@ -239,7 +272,7 @@ function AppBody({
   return (
     <main>
       <AccountBar controller={timer} />
-      <ScreenNav current="setup" onNavigate={navigate} />
+      <ScreenNav current="setup" onNavigate={goTo} />
       {notice && <p role="status">{notice}</p>}
       <SessionSetup
         preferences={prefs}

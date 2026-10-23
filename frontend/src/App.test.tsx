@@ -1,11 +1,17 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AlertPlayer, MemoryAlertVolumeStore } from './sounds/alerts.ts'
 import App from './App.tsx'
 import { AccountContext } from './auth/AccountContext.tsx'
 import { MemoryPreferencesStore } from './setup/preferences.ts'
+import { SettingsStore } from './settings/store.ts'
 import type { SyncEngine } from './sync/index.ts'
-import { ACTIVE_SESSION_KEY, MemoryActiveSessionStore, TimerController } from './timer/index.ts'
+import {
+  ACTIVE_SESSION_KEY,
+  LocalActiveSessionStore,
+  MemoryActiveSessionStore,
+  TimerController,
+} from './timer/index.ts'
 
 function setup(store = new MemoryActiveSessionStore()) {
   const controller = new TimerController({ store, saveRecord: () => undefined })
@@ -40,6 +46,51 @@ describe('App account bar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
     await screen.findByRole('timer')
     expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+  })
+
+  it('offers Sign out on the History screen, refused while a session runs, not on the summary', async () => {
+    renderSignedIn()
+    fireEvent.click(await screen.findByRole('button', { name: 'History' }))
+    await screen.findByRole('heading', { name: 'History' })
+    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    // A session running in another tab: Sign out is refused.
+    const other = new TimerController({
+      store: new LocalActiveSessionStore(),
+      saveRecord: () => undefined,
+    })
+    await other.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'End your session before signing out.',
+    )
+    window.localStorage.removeItem(ACTIVE_SESSION_KEY)
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('offers Sign out on the Settings screen, refused while a session runs', async () => {
+    const controller = new TimerController({
+      store: new MemoryActiveSessionStore(),
+      saveRecord: () => undefined,
+    })
+    render(
+      <AccountContext.Provider value={account}>
+        <App controller={controller} settings={new SettingsStore()} />
+      </AccountContext.Provider>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    await screen.findByRole('heading', { name: 'Settings' })
+    expect(window.location.pathname).toBe('/settings')
+    const other = new TimerController({
+      store: new LocalActiveSessionStore(),
+      saveRecord: () => undefined,
+    })
+    await other.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'End your session before signing out.',
+    )
+    window.localStorage.removeItem(ACTIVE_SESSION_KEY)
+    window.history.replaceState(null, '', '/')
   })
 
   it('does not offer Sign out over a session restored at reload', async () => {
@@ -183,5 +234,47 @@ describe('App', () => {
     expect(sync.start).toHaveBeenCalled()
     unmount()
     expect(stop).toHaveBeenCalled()
+  })
+})
+
+describe('App history navigation', () => {
+  afterEach(() => window.history.replaceState(null, '', '/'))
+
+  it('opens the History screen on a deep link to /history', async () => {
+    window.history.replaceState(null, '', '/history')
+    setup()
+    expect(await screen.findByRole('heading', { name: 'History' })).toBeInTheDocument()
+  })
+
+  it('moves between setup and History with the navigation, updating the URL', async () => {
+    setup()
+    await screen.findByRole('heading', { name: 'I Need To Focus' })
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    expect(await screen.findByRole('heading', { name: 'History' })).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/history')
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }))
+    expect(await screen.findByRole('heading', { name: 'I Need To Focus' })).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/')
+  })
+
+  it('follows the back button between setup and History', async () => {
+    setup()
+    await screen.findByRole('heading', { name: 'I Need To Focus' })
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    await screen.findByRole('heading', { name: 'History' })
+    act(() => {
+      window.history.back()
+    })
+    expect(await screen.findByRole('heading', { name: 'I Need To Focus' })).toBeInTheDocument()
+  })
+
+  it('opens History from the summary link without reloading', async () => {
+    setup()
+    fireEvent.click(await screen.findByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    fireEvent.click(await screen.findByRole('link', { name: 'View history' }))
+    expect(await screen.findByRole('heading', { name: 'History' })).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/history')
   })
 })
