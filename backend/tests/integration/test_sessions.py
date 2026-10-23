@@ -572,8 +572,9 @@ CRASHERS: dict[str, dict[str, Any]] = {
         "ended_at": "9999-12-31T21:00:00-05:00",
         "paused_seconds": 0,
     },
-    "nul_in_goal": {"goal": "bad\x00goal"},
-    "lone_surrogate_goal": {"goal": "bad\ud800goal"},
+    # "z" is not a hex digit, so "badz" can never appear in a UUID in the response.
+    "nul_in_goal": {"goal": "badz\x00goal"},
+    "lone_surrogate_goal": {"goal": "badz\ud800goal"},
     "huge_focus": {"focus_seconds": 10**30},
     "huge_blocks": {"blocks_completed": 10**30},
     "float_overflow": {"paused_seconds": 1e300},
@@ -603,7 +604,31 @@ def test_out_of_range_items_are_rejected_not_500(ada: TestClient, app_url: str) 
     for result in body["results"][1:]:
         assert result["status"] == "rejected"
         assert result["error"]["code"] == "validation_error"
-    assert "bad" not in r.text
+    assert "badz" not in r.text  # submitted values are never echoed
+    assert count(app_url) == 1
+
+
+def test_non_validation_error_in_an_item_is_rejected_not_500(
+    ada: TestClient, app_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = SessionIn.model_validate.__func__  # type: ignore[attr-defined]
+    boom = make_session(goal="boomzgoal")
+
+    def validate(cls: type[SessionIn], obj: Any, *a: Any, **kw: Any) -> SessionIn:
+        if isinstance(obj, dict) and obj.get("goal") == "boomzgoal":
+            raise RuntimeError("boomzgoal exploded")
+        result: SessionIn = original(cls, obj, *a, **kw)
+        return result
+
+    monkeypatch.setattr(SessionIn, "model_validate", classmethod(validate))
+    good = make_session()
+    r = ada.post("/api/sessions/sync", json={"sessions": [boom, good]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["created"], body["rejected"]) == (1, 1)
+    assert [x["status"] for x in body["results"]] == ["rejected", "created"]
+    assert body["results"][0]["error"]["code"] == "invalid_session"
+    assert "boomzgoal" not in r.text
     assert count(app_url) == 1
 
 

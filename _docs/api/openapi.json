@@ -627,12 +627,7 @@
         "properties": {
           "sessions": {
             "items": {
-              "anyOf": [
-                {
-                  "$ref": "#/components/schemas/SessionIn"
-                },
-                {}
-              ]
+              "$ref": "#/components/schemas/SessionIn"
             },
             "maxItems": 100,
             "minItems": 1,
