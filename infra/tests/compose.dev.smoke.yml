@@ -1,0 +1,16 @@
+# Smoke-test override for infra/compose.prod.yml as dev (infra/tests/prod_stack.sh only):
+# a fake Grafana Cloud OTLP gateway (fake_otlp.py) the collector exports to.
+services:
+  fake-grafana:
+    image: ghcr.io/ybenzine/ineedtofocus:${APP_TAG:?}
+    entrypoint: ["python", "/smoke/fake_otlp.py"]
+    environment:
+      FAKE_OTLP_EXPECTED_AUTH: ${SMOKE_EXPECTED_AUTH:?}
+    volumes:
+      - ${SMOKE_DIR:?}/fake_otlp.py:/smoke/fake_otlp.py:ro
+    mem_limit: 128m
+    restart: "no"
+  otel-collector:
+    depends_on:
+      fake-grafana:
+        condition: service_started

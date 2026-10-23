@@ -11,7 +11,8 @@ NPM     := npm --prefix frontend
 COMPOSE := docker compose
 
 .PHONY: help install up down logs check-stack test test-backend test-backend-unit \
-	test-backend-integration test-frontend test-e2e test-scripts test-server migrate lint lint-backend \
+	test-backend-integration test-frontend test-e2e test-scripts test-server test-infra test-prod-stack \
+	migrate lint lint-backend \
 	lint-frontend lint-scripts lint-shell openapi fmt fmt-backend fmt-frontend hooks
 
 # Set JUNIT_DIR (e.g. `make test-backend-unit JUNIT_DIR=reports`) to also write JUnit
@@ -27,6 +28,8 @@ vitest_junit = $(if $(JUNIT_DIR),--reporter=default --reporter=junit --outputFil
 SCRIPTS_RUN := $(UV) run --with-requirements ../scripts/reviewer_token.py
 # create_backlog.py seeded the board once (2026-10-20) and is kept only as a record; not linted.
 SCRIPTS_LINT_EXCLUDE := create_backlog.py
+# Python test helpers under infra/ (the smoke test's fake OTLP gateway), linted like scripts/.
+INFRA_PY := ../infra/tests
 # ShellCheck, pinned, run through uv (shellcheck-py ships the official binary).
 SHELLCHECK := uvx --from shellcheck-py==0.11.0.1 shellcheck
 
@@ -69,7 +72,7 @@ openapi: backend/.venv ## Regenerate _docs/api/openapi.json (commit it with any 
 
 # --- Tests --------------------------------------------------------------------
 
-test: test-backend test-frontend test-scripts test-server ## Run every test suite
+test: test-backend test-frontend test-scripts test-server test-infra ## Run every test suite
 
 test-backend: backend/.venv ## Backend tests, unit + integration (pytest)
 	$(UV) run pytest
@@ -88,6 +91,12 @@ test-scripts: backend/.venv ## Repo script tests (scripts/tests, pytest; e.g. th
 
 test-server: ## Server bootstrap (infra/server, #25) run 3x in an Ubuntu 24.04 container (needs Docker)
 	infra/server/tests/run.sh
+
+test-infra: ## Validate the production Compose, Caddy and Collector configs against the deploy rules (#27; needs Docker)
+	infra/tests/check_config.sh
+
+test-prod-stack: ## Smoke-test the production stack: Caddy + prod + dev (#27; needs Docker; APP_TAG=<tag> skips the build)
+	infra/tests/prod_stack.sh
 
 test-e2e: frontend/node_modules ## Playwright end-to-end tests against the running stack (`make up` first)
 	@if ! compgen -G 'frontend/playwright.config.*' > /dev/null; then \
@@ -108,10 +117,10 @@ lint-backend: backend/.venv ## ruff check, ruff format --check, mypy
 lint-frontend: frontend/node_modules ## eslint, prettier --check, tsc
 	$(NPM) run lint
 
-lint-scripts: backend/.venv ## ruff check, ruff format --check, mypy (strict) on scripts/*.py
-	$(SCRIPTS_RUN) ruff check --config pyproject.toml --extend-exclude $(SCRIPTS_LINT_EXCLUDE) ../scripts
-	$(SCRIPTS_RUN) ruff format --config pyproject.toml --extend-exclude $(SCRIPTS_LINT_EXCLUDE) --check ../scripts
-	$(SCRIPTS_RUN) mypy --config-file pyproject.toml --exclude '$(SCRIPTS_LINT_EXCLUDE)$$' ../scripts
+lint-scripts: backend/.venv ## ruff check, ruff format --check, mypy (strict) on scripts/*.py and infra/tests/*.py
+	$(SCRIPTS_RUN) ruff check --config pyproject.toml --extend-exclude $(SCRIPTS_LINT_EXCLUDE) ../scripts $(INFRA_PY)
+	$(SCRIPTS_RUN) ruff format --config pyproject.toml --extend-exclude $(SCRIPTS_LINT_EXCLUDE) --check ../scripts $(INFRA_PY)
+	$(SCRIPTS_RUN) mypy --config-file pyproject.toml --exclude '$(SCRIPTS_LINT_EXCLUDE)$$' ../scripts $(INFRA_PY)
 
 lint-shell: ## shellcheck on every tracked shell script (*.sh)
 	git ls-files -z '*.sh' | xargs -0 $(SHELLCHECK)

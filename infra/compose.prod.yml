@@ -1,0 +1,139 @@
+# Deployed environments on the Droplet (#27): one file, run as two Compose projects.
+#
+#   focus-prod  https://ineedtofoc.us       settings infra/env/prod.env, secrets /opt/focus/prod/.env
+#   focus-dev   https://dev.ineedtofoc.us   settings infra/env/dev.env,  secrets /opt/focus/dev/.env
+#
+# Each project has its own app, Postgres (named volume `db-data`) and OpenTelemetry
+# Collector. Nothing here publishes a port: traffic arrives through the shared Caddy
+# (infra/compose.edge.yml, start it first) on the environment's edge network.
+#
+# Run it through infra/compose.sh, which passes the env files in the right order and
+# fails without an image tag:
+#
+#   APP_TAG=<commit sha> infra/compose.sh prod up -d --wait
+#
+# By hand that is (the committed settings come last, so they win over the server file):
+#
+#   APP_TAG=<sha> docker compose -f infra/compose.prod.yml \
+#     --env-file /opt/focus/prod/.env --env-file infra/env/prod.env up -d --wait
+#
+# Deploys (#28-#30) migrate as a separate one-shot step before swapping the app, and
+# the app itself never migrates (MIGRATE_ON_START=0), so a rollback only swaps the tag:
+#
+#   APP_TAG=<sha> infra/compose.sh prod run --rm app alembic upgrade head
+#
+# Memory: every container has a limit. The total for Caddy + prod + dev, plus one
+# one-shot migration container, fits the 2 GiB Droplet (checked by
+# scripts/check_prod_compose.py in `make test-infra`).
+
+name: focus-${FOCUS_ENV:?set FOCUS_ENV (pass infra/env/<env>.env as the last --env-file)}
+
+services:
+  app:
+    # Images are built and pushed by CI (.github/workflows/ci.yml, job `publish`) only
+    # for commits on main that passed CI. Deploys are by tag: the commit SHA.
+    image: ghcr.io/ybenzine/ineedtofocus:${APP_TAG:?set APP_TAG to the image tag (the commit SHA) to run}
+    environment:
+      # URL-safe password only (e.g. `openssl rand -hex 32`): it is put into the URL as is.
+      DATABASE_URL: postgresql+asyncpg://focus:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/focus/<env>/.env}@db:5432/focus
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      READINESS_TIMEOUT_SECONDS: "2"
+      # Deploys migrate in their own step (see the header); see _docs/deployment.md.
+      MIGRATE_ON_START: "0"
+      # HTTPS only behind Caddy: the session cookie is always Secure (#8). Never 0 here.
+      COOKIE_SECURE: "1"
+      # uvicorn --proxy-headers (image CMD) trusts X-Forwarded-For/-Proto only from
+      # Caddy's fixed address, so the sign-in rate limiter sees the real client.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:?set by infra/env/<env>.env}
+      # Telemetry goes to this project's collector, which forwards to Grafana Cloud.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_METRICS_EXPORTER: otlp
+      OTEL_LOGS_EXPORTER: otlp
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment.name=${FOCUS_ENV},service.version=${APP_TAG}
+    networks:
+      default:
+      edge:
+        # The name Caddy routes to (infra/caddy/Caddyfile): focus-prod-app / focus-dev-app.
+        aliases:
+          - focus-${FOCUS_ENV}-app
+    depends_on:
+      db:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      # GET, not HEAD: the API answers HEAD on /healthz with 405.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    mem_limit: ${APP_MEM_LIMIT:?set by infra/env/<env>.env}
+    oom_score_adj: ${OOM_SCORE_ADJ:?set by infra/env/<env>.env}
+    cpu_shares: ${CPU_SHARES:?set by infra/env/<env>.env}
+    restart: unless-stopped
+
+  db:
+    image: postgres:17-alpine # same as compose.yaml and CI
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${DB_SHARED_BUFFERS:?set by infra/env/<env>.env}
+      - -c
+      - max_connections=40
+    environment:
+      POSTGRES_USER: focus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in /opt/focus/<env>/.env}
+      POSTGRES_DB: focus
+    volumes:
+      # Real name: focus-prod_db-data / focus-dev_db-data. Never removed by a deploy.
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U focus -d focus"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    # A clean shutdown (checkpoint) before Docker kills it.
+    stop_grace_period: 30s
+    mem_limit: ${DB_MEM_LIMIT:?set by infra/env/<env>.env}
+    oom_score_adj: ${OOM_SCORE_ADJ:?set by infra/env/<env>.env}
+    cpu_shares: ${CPU_SHARES:?set by infra/env/<env>.env}
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.162.0
+    command:
+      - --config=/etc/otelcol/config.yaml
+      # export.grafana-cloud.yaml once GRAFANA_CLOUD_OTLP_ENDPOINT is set (#32),
+      # export.yaml (accept and drop) until then. See infra/otel-collector/config.yaml.
+      - --config=/etc/otelcol/export${GRAFANA_CLOUD_OTLP_ENDPOINT:+.grafana-cloud}.yaml
+    environment:
+      FOCUS_ENV: ${FOCUS_ENV}
+      # From /opt/focus/<env>/.env only (#32); never in git or GitHub secrets.
+      GRAFANA_CLOUD_OTLP_ENDPOINT: ${GRAFANA_CLOUD_OTLP_ENDPOINT:-}
+      GRAFANA_CLOUD_INSTANCE_ID: ${GRAFANA_CLOUD_INSTANCE_ID:-}
+      GRAFANA_CLOUD_OTLP_TOKEN: ${GRAFANA_CLOUD_OTLP_TOKEN:-}
+      GOMEMLIMIT: ${OTELCOL_GOMEMLIMIT:?set by infra/env/<env>.env}
+    volumes:
+      - ./otel-collector:/etc/otelcol:ro
+    mem_limit: ${OTELCOL_MEM_LIMIT:?set by infra/env/<env>.env}
+    oom_score_adj: ${OOM_SCORE_ADJ:?set by infra/env/<env>.env}
+    cpu_shares: ${CPU_SHARES:?set by infra/env/<env>.env}
+    restart: unless-stopped
+
+networks:
+  # The environment's own edge network, owned by infra/compose.edge.yml. Only the app
+  # joins it; Postgres and the collector stay on the project's default network.
+  edge:
+    external: true
+    name: ${EDGE_NETWORK:?set by infra/env/<env>.env}
+
+volumes:
+  db-data:
