@@ -457,12 +457,74 @@
         "title": "Status",
         "type": "string"
       },
+      "SyncItemResult": {
+        "description": "The outcome for one item of a sync request. `session` is set unless rejected, `error`\nonly when rejected. `id` is null when the item had no usable id.",
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "created",
+              "existing",
+              "rejected"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "id",
+          "status"
+        ],
+        "title": "SyncItemResult",
+        "type": "object"
+      },
       "SyncRequest": {
         "additionalProperties": false,
         "properties": {
           "sessions": {
             "items": {
-              "$ref": "#/components/schemas/SessionIn"
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SessionIn"
+                },
+                {}
+              ]
             },
             "maxItems": 100,
             "minItems": 1,
@@ -477,7 +539,7 @@
         "type": "object"
       },
       "SyncResult": {
-        "description": "`created` are new; `existing` were already saved (their stored copy is returned).\n`sessions` follows the request order.",
+        "description": "Counts by status, and one result per request item in request order.",
         "properties": {
           "created": {
             "title": "Created",
@@ -487,18 +549,23 @@
             "title": "Existing",
             "type": "integer"
           },
-          "sessions": {
+          "rejected": {
+            "title": "Rejected",
+            "type": "integer"
+          },
+          "results": {
             "items": {
-              "$ref": "#/components/schemas/SessionOut"
+              "$ref": "#/components/schemas/SyncItemResult"
             },
-            "title": "Sessions",
+            "title": "Results",
             "type": "array"
           }
         },
         "required": [
           "created",
           "existing",
-          "sessions"
+          "rejected",
+          "results"
         ],
         "title": "SyncResult",
         "type": "object"
@@ -951,7 +1018,7 @@
     },
     "/api/sessions/sync": {
       "post": {
-        "description": "Save a batch of up to 100 sessions (AC13.3), idempotent per `id` (AC13.4). The whole\nbatch is rejected with 422 if any session is invalid; `details[].field` names it\n(`sessions.2.focus_seconds`).",
+        "description": "Save a batch of 1 to 100 sessions (AC13.3), idempotent per `id` (AC13.4).\n\nReturns 200 with one result per item, in request order: `created`, `existing` (already\nsaved; the stored copy is returned) or `rejected` (with an `error`; an id owned by another\naccount is `conflict`). Valid items are saved even when others are rejected, so one bad\nsession never blocks the queue (AC13.5). Only 401 and a malformed envelope (not a\n`sessions` list, or 0 or more than 100 items: 422) fail the whole request.",
         "operationId": "sync_sessions_api_sessions_sync_post",
         "requestBody": {
           "content": {

@@ -1,5 +1,6 @@
 """Sessions API (#10) against a real, migrated, throwaway Postgres."""
 
+import logging
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +16,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.config import Settings
-from app.logging_config import scrub
+from app.logging_config import JsonFormatter, scrub
 from app.main import create_app
 from app.models import FocusSession
 from app.sessions import SessionIn
@@ -140,27 +141,65 @@ def test_ac13_4_batch_sync_is_idempotent(ada: TestClient, app_url: str) -> None:
     r = ada.post("/api/sessions/sync", json={"sessions": batch})
     assert r.status_code == 200
     assert (r.json()["created"], r.json()["existing"]) == (3, 0)
-    assert [s["id"] for s in r.json()["sessions"]] == [s["id"] for s in batch]
+    assert [x["id"] for x in r.json()["results"]] == [x["id"] for x in batch]
+    assert [x["index"] for x in r.json()["results"]] == [0, 1, 2]
 
     extra = make_session()
     r = ada.post("/api/sessions/sync", json={"sessions": [*batch, extra, extra]})
-    assert (r.json()["created"], r.json()["existing"]) == (1, 3)
-    assert len(r.json()["sessions"]) == 5
+    assert (r.json()["created"], r.json()["existing"]) == (1, 4)
+    assert [x["status"] for x in r.json()["results"]] == ["existing"] * 3 + ["created", "existing"]
     assert count(app_url) == 4
 
 
-def test_batch_with_one_invalid_session_saves_nothing(ada: TestClient, app_url: str) -> None:
-    batch = [make_session(), make_session(), make_session(focus_seconds=59)]
-    r = ada.post("/api/sessions/sync", json={"sessions": batch})
-    assert r.status_code == 422
-    assert r.json()["error"]["details"][0]["field"] == "sessions.2.focus_seconds"
-    assert count(app_url) == 0
+def test_ac13_5_mixed_batch_saves_the_valid_items(ada: TestClient, app_url: str) -> None:
+    good1, good2 = make_session(), make_session()
+    short = make_session(focus_seconds=59)
+    negative = make_session(paused_seconds=-5, goal="top secret goal")
+    no_id = make_session(tag="gaming")
+    del no_id["id"]
+    r = ada.post(
+        "/api/sessions/sync",
+        json={"sessions": [good1, short, negative, "junk", no_id, {"id": "nope"}, good2]},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert (body["created"], body["existing"], body["rejected"]) == (2, 0, 5)
+    assert [x["index"] for x in body["results"]] == list(range(7))
+    assert [x["status"] for x in body["results"]] == [
+        "created",
+        "rejected",
+        "rejected",
+        "rejected",
+        "rejected",
+        "rejected",
+        "created",
+    ]
+    assert body["results"][0]["id"] == good1["id"] and body["results"][0]["session"]
+    assert body["results"][1]["id"] == short["id"]
+    err = body["results"][1]["error"]
+    assert err["code"] == "validation_error"
+    assert err["details"][0]["field"] == "focus_seconds"  # relative to the item
+    assert body["results"][2]["error"]["details"][0]["field"] == "paused_seconds"
+    assert "secret" not in r.text  # submitted values are never echoed
+    assert [body["results"][i]["id"] for i in (3, 4, 5)] == [None, None, None]
+    assert body["results"][6]["id"] == good2["id"]
+    assert count(app_url) == 2
+    # Retrying the same batch is idempotent; the bad items stay rejected.
+    again = ada.post("/api/sessions/sync", json={"sessions": [good1, short, good2]}).json()
+    assert (again["created"], again["existing"], again["rejected"]) == (0, 2, 1)
+    assert count(app_url) == 2
 
 
-def test_batch_limits(ada: TestClient) -> None:
+def test_batch_limits(ada: TestClient, app_url: str) -> None:
     assert ada.post("/api/sessions/sync", json={"sessions": []}).status_code == 422
     too_many = [make_session() for _ in range(101)]
     assert ada.post("/api/sessions/sync", json={"sessions": too_many}).status_code == 422
+    assert ada.post("/api/sessions/sync", json={"sessions": "x"}).status_code == 422
+    assert ada.post("/api/sessions/sync", json=[make_session()]).status_code == 422
+    assert ada.post("/api/sessions/sync", json={"other": 1}).status_code == 422
+    assert count(app_url) == 0
+    hundred = [make_session() for _ in range(100)]
+    assert ada.post("/api/sessions/sync", json={"sessions": hundred}).json()["created"] == 100
 
 
 def test_ac6_2_under_one_minute_is_rejected(ada: TestClient, app_url: str) -> None:
@@ -251,6 +290,14 @@ def test_ac4_5_twelve_hours_of_focus_is_accepted(ada: TestClient) -> None:
         ),
     )
     assert r.status_code == 201
+    over = make_session(
+        mode="unlimited",
+        mode_config=cfg,
+        focus_seconds=43201,
+        paused_seconds=0,
+        ended_at="2026-10-23T21:10:00Z",
+    )
+    assert ada.post("/api/sessions", json=over).status_code == 422
 
 
 def test_times_are_stored_in_utc(ada: TestClient, app_url: str) -> None:
@@ -266,6 +313,41 @@ def test_ac7_3_multiline_goal_is_saved_as_one_line(ada: TestClient) -> None:
     assert save(ada)["goal"] == "Write the report"
 
 
+LINE_BREAKS = [
+    "\r",
+    "\n",
+    "\r\n",
+    "\x0b",
+    "\x0c",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\x85",
+    "\u2028",
+    "\u2029",
+]
+
+
+@pytest.mark.parametrize("brk", LINE_BREAKS)
+def test_ac7_3_every_splitlines_boundary_is_one_space(ada: TestClient, brk: str) -> None:
+    out = save(ada, goal=f"{brk}one{brk}{brk}two{brk}")
+    assert out["goal"] == "one two"
+    sid = out["id"]
+    r = ada.patch(f"/api/sessions/{sid}", json={"goal": f"a{brk}b"})
+    assert r.json()["goal"] == "a b"
+
+
+def test_ac7_3_u2028_and_nel_save_and_edit(ada: TestClient) -> None:
+    out = save(ada, goal="line\u2028one\u0085two")
+    assert out["goal"] == "line one two"
+    r = ada.patch(f"/api/sessions/{out['id']}", json={"goal": "x\u2028y\u0085z"})
+    assert r.json()["goal"] == "x y z"
+
+
+def test_tabs_are_not_line_breaks(ada: TestClient) -> None:
+    assert save(ada, goal="a\tb")["goal"] == "a\tb"
+
+
 def test_ac13_5_length_is_checked_after_normalising(ada: TestClient) -> None:
     # 120 characters plus a trailing line break is fine; 121 is not.
     assert ada.post("/api/sessions", json=make_session(goal="x" * 120 + "\r\n")).status_code == 201
@@ -276,7 +358,7 @@ def test_ac13_5_logged_database_error_has_no_goal_text(app_url: str) -> None:
     goal = SessionIn.model_validate(make_session(goal="secret line one\nsecret line two")).goal
     assert goal == "secret line one secret line two"
 
-    async def violate() -> str:
+    async def violate() -> DBAPIError | None:
         engine = create_async_engine(app_url)
         try:
             async with engine.begin() as conn:
@@ -294,12 +376,25 @@ def test_ac13_5_logged_database_error_has_no_goal_text(app_url: str) -> None:
                     )
                 )
         except DBAPIError as exc:
-            return str(exc)
-        return ""
+            return exc
+        return None
 
-    message = run(violate())
-    assert message  # a real database error was raised
-    assert "secret" not in scrub(message)
+    exc = run(violate())
+    assert exc is not None  # a real database error was raised
+    assert "secret" not in scrub(str(exc))
+    # What is actually logged: the formatted, chained traceback of an error record.
+    record = logging.LogRecord(
+        "app.errors",
+        logging.ERROR,
+        __file__,
+        0,
+        "unhandled exception",
+        None,
+        (type(exc), exc, exc.__traceback__),
+    )
+    line = JsonFormatter().format(record)
+    assert "exception" in line and "focus_sessions" in line  # the traceback is there
+    assert "secret" not in line
 
 
 def test_signed_out_requests_get_401(app_url: str) -> None:
@@ -446,6 +541,14 @@ def test_ac1_3_a_session_id_owned_by_someone_else_is_a_conflict(
     assert "tag" not in r.text and "work" not in r.text  # nothing of Ada's leaks
     fresh = make_session()
     r = bob.post("/api/sessions/sync", json={"sessions": [fresh, make_session(id=mine["id"])]})
-    assert r.status_code == 409
-    assert count(app_url) == 1  # Bob's batch saved nothing
+    assert r.status_code == 200
+    results = r.json()["results"]
+    assert [x["status"] for x in results] == ["created", "rejected"]
+    assert results[1]["error"]["code"] == "conflict"
+    assert results[1]["id"] == mine["id"] and results[1]["session"] is None
+    assert (r.json()["created"], r.json()["rejected"]) == (1, 1)
+    assert count(app_url) == 2  # Bob's other session was saved; Ada's is untouched
+    assert ada.get("/api/sessions/archived").status_code == 200
+    ada_after = ada.patch(f"/api/sessions/{mine['id']}", json={"tag": "work"}).json()
+    assert ada_after["tag"] == "work"
     assert ada.get("/api/sessions/archived").status_code == 200

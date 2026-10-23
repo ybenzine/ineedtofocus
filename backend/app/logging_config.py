@@ -40,6 +40,8 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": scrub(record.getMessage()),
         }
+        # `extra=` values are written as-is, unscrubbed: never put database error text
+        # (str(exc), exception messages) in an `extra=` field; log it via exc_info instead.
         for key, value in record.__dict__.items():
             if key not in _RESERVED:
                 payload[key] = value

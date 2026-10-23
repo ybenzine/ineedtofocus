@@ -58,7 +58,7 @@ def error_body(code: str, message: str, details: Any = None) -> dict[str, Any]:
 _SAFE_SEGMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}")
 
 
-def _field(loc: tuple[Any, ...], error_type: str) -> str:
+def error_field(loc: tuple[Any, ...], error_type: str) -> str:
     """Client-visible field path that never echoes client-chosen keys.
 
     Segments that are not plain identifiers (e.g. a URL used as a dict key) become
@@ -82,7 +82,11 @@ def register_error_handlers(app: FastAPI) -> None:
     async def validation(_: Request, exc: RequestValidationError) -> JSONResponse:
         # Only field names and messages: never echo submitted input back.
         details = [
-            {"field": _field(tuple(e["loc"]), e["type"]), "message": e["msg"], "type": e["type"]}
+            {
+                "field": error_field(tuple(e["loc"]), e["type"]),
+                "message": e["msg"],
+                "type": e["type"],
+            }
             for e in exc.errors()
         ]
         return JSONResponse(

@@ -7,6 +7,7 @@ Field names are snake_case; the frontend's `SessionRecord` maps one to one (see
 
 import re
 import uuid
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
@@ -17,6 +18,7 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    ValidationError,
     field_validator,
     model_validator,
 )
@@ -24,7 +26,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 
 from app.deps import CurrentUser, DbSession
-from app.errors import ErrorResponse
+from app.errors import ErrorDetail, ErrorInfo, ErrorResponse, error_field
 from app.models import FocusSession, Mode, Status, Tag
 from app.models.enums import GOAL_MAX_LENGTH
 
@@ -36,7 +38,9 @@ MAX_BATCH = 100
 # The client rounds to whole seconds from millisecond timestamps.
 CLOCK_TOLERANCE = timedelta(seconds=2)
 
-_LINE_BREAKS = re.compile(r"[\r\n]+")
+# Every boundary str.splitlines() recognises: CR, LF, VT, FF, FS/GS/RS, NEL, LS, PS (tabs are
+# not line breaks). CRLF is a run of two.
+_LINE_BREAKS = re.compile(r"[\r\n\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029]+")
 
 
 def one_line_goal(value: object) -> object:
@@ -128,7 +132,9 @@ class SessionIn(BaseModel):
 class SyncRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    sessions: list[SessionIn] = Field(min_length=1, max_length=MAX_BATCH)
+    # Items are validated one by one in the handler, so one bad item doesn't fail the batch.
+    # `SessionIn | Any` documents the item shape; an invalid item falls through as raw JSON.
+    sessions: list[SessionIn | Any] = Field(min_length=1, max_length=MAX_BATCH)
 
 
 class SessionEdit(BaseModel):
@@ -164,13 +170,24 @@ class SessionOut(BaseModel):
     created_at: datetime
 
 
+class SyncItemResult(BaseModel):
+    """The outcome for one item of a sync request. `session` is set unless rejected, `error`
+    only when rejected. `id` is null when the item had no usable id."""
+
+    index: int
+    id: uuid.UUID | None
+    status: Literal["created", "existing", "rejected"]
+    session: SessionOut | None = None
+    error: ErrorInfo | None = None
+
+
 class SyncResult(BaseModel):
-    """`created` are new; `existing` were already saved (their stored copy is returned).
-    `sessions` follows the request order."""
+    """Counts by status, and one result per request item in request order."""
 
     created: int
     existing: int
-    sessions: list[SessionOut]
+    rejected: int
+    results: list[SyncItemResult]
 
 
 class SessionList(BaseModel):
@@ -194,12 +211,15 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
 
 async def _save(
     db: DbSession, user_id: uuid.UUID, items: list[SessionIn]
-) -> tuple[int, list[FocusSession]]:
-    """Insert the sessions that are new; return (number created, stored rows in input order).
+) -> tuple[set[uuid.UUID], dict[uuid.UUID, FocusSession]]:
+    """Insert the sessions that are new; return (ids created, this user's stored rows by id).
 
     `ON CONFLICT DO NOTHING` on the primary key makes retries and concurrent duplicates safe.
-    An id that belongs to another user is a 409 and nothing from the request is saved.
+    An id that belongs to another user is simply absent from the returned rows; the caller
+    reports it. Everything else is saved.
     """
+    if not items:
+        return set(), {}
     unique = list({i.id: i for i in items}.values())
     values = [
         {
@@ -224,7 +244,7 @@ async def _save(
         .on_conflict_do_nothing(index_elements=[FocusSession.id])
         .returning(FocusSession.id)
     )
-    created = len(inserted.all())
+    created = {r[0] for r in inserted.all()}
     rows = {
         r.id: r
         for r in await db.scalars(
@@ -233,11 +253,8 @@ async def _save(
             )
         )
     }
-    if len(rows) != len(unique):
-        await db.rollback()  # some id belongs to another account
-        raise HTTPException(409, "A session id is already in use")
     await db.commit()
-    return created, [rows[i.id] for i in items]
+    return created, rows
 
 
 @router.post("", status_code=201, responses={**_ERRORS, 200: {"model": SessionOut}})
@@ -247,19 +264,78 @@ async def save_session(
     """Save one finished session (AC6.3). Idempotent on `id` (AC13.4): a repeat returns 200 with
     the stored session and changes nothing."""
     created, rows = await _save(db, user.id, [body])
+    if body.id not in rows:
+        raise HTTPException(409, "A session id is already in use")
     if not created:
         response.status_code = 200
-    return _out(rows[0])
+    return _out(rows[body.id])
+
+
+def _item_error(code: str, message: str, details: list[ErrorDetail] | None = None) -> ErrorInfo:
+    return ErrorInfo(code=code, message=message, details=details)
+
+
+def _raw_id(raw: object) -> uuid.UUID | None:
+    if isinstance(raw, dict):
+        try:
+            return uuid.UUID(str(raw.get("id")))
+        except ValueError:
+            return None
+    return None
 
 
 @router.post("/sync", responses=_ERRORS)
 async def sync_sessions(body: SyncRequest, user: CurrentUser, db: DbSession) -> SyncResult:
-    """Save a batch of up to 100 sessions (AC13.3), idempotent per `id` (AC13.4). The whole
-    batch is rejected with 422 if any session is invalid; `details[].field` names it
-    (`sessions.2.focus_seconds`)."""
-    created, rows = await _save(db, user.id, body.sessions)
-    unique = len({r.id for r in rows})
-    return SyncResult(created=created, existing=unique - created, sessions=[_out(r) for r in rows])
+    """Save a batch of 1 to 100 sessions (AC13.3), idempotent per `id` (AC13.4).
+
+    Returns 200 with one result per item, in request order: `created`, `existing` (already
+    saved; the stored copy is returned) or `rejected` (with an `error`; an id owned by another
+    account is `conflict`). Valid items are saved even when others are rejected, so one bad
+    session never blocks the queue (AC13.5). Only 401 and a malformed envelope (not a
+    `sessions` list, or 0 or more than 100 items: 422) fail the whole request.
+    """
+    results: list[SyncItemResult | None] = [None] * len(body.sessions)
+    valid: list[tuple[int, SessionIn]] = []
+    for index, raw in enumerate(body.sessions):
+        try:
+            item = raw if isinstance(raw, SessionIn) else SessionIn.model_validate(raw)
+        except ValidationError as exc:
+            details = [
+                ErrorDetail(
+                    field=error_field(tuple(e["loc"]), e["type"]), message=e["msg"], type=e["type"]
+                )
+                for e in exc.errors()
+            ]
+            error = _item_error("validation_error", "Session validation failed", details)
+            results[index] = SyncItemResult(
+                index=index, id=_raw_id(raw), status="rejected", error=error
+            )
+        else:
+            valid.append((index, item))
+    created, rows = await _save(db, user.id, [item for _, item in valid])
+    seen: set[uuid.UUID] = set()
+    for index, item in valid:
+        row = rows.get(item.id)
+        if row is None:
+            error = _item_error("conflict", "This session id is already in use")
+            results[index] = SyncItemResult(index=index, id=item.id, status="rejected", error=error)
+            continue
+        first = item.id not in seen
+        seen.add(item.id)
+        results[index] = SyncItemResult(
+            index=index,
+            id=item.id,
+            status="created" if first and item.id in created else "existing",
+            session=_out(row),
+        )
+    final = [r for r in results if r is not None]
+    count = Counter(r.status for r in final)
+    return SyncResult(
+        created=count["created"],
+        existing=count["existing"],
+        rejected=count["rejected"],
+        results=final,
+    )
 
 
 @router.get("/archived", responses=_ERRORS)
