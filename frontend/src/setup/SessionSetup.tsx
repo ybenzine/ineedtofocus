@@ -10,6 +10,8 @@ import {
   type Tag,
   type TimerConfig,
 } from '../timer/index.ts'
+import { OfflineRainSuggestion } from '../sounds/AudioControls.tsx'
+import { useOnline } from '../sounds/useOnline.ts'
 import { AUDIO_SOURCES, GOAL_MAX_LENGTH, type AudioSource } from './options.ts'
 import type { PreferencesStore } from './preferences.ts'
 
@@ -90,6 +92,7 @@ export default function SessionSetup({
   const [tag, setTag] = useState<Tag>(remembered.tag)
   const [goal, setGoal] = useState('')
   const [audio, setAudio] = useState<AudioSource>('none')
+  const online = useOnline()
   const [countdown, setCountdown] = useState('25')
   const [focus, setFocus] = useState(String(remembered.pomodoro.focusMinutes))
   const [shortBreak, setShortBreak] = useState(String(remembered.pomodoro.breakMinutes))
@@ -293,6 +296,9 @@ export default function SessionSetup({
             </label>
           ))}
         </div>
+        {audio === 'youtube' && !online && (
+          <OfflineRainSuggestion onUseRain={() => setAudio('rain')} />
+        )}
       </fieldset>
 
       {failure && (

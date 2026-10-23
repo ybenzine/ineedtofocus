@@ -1,3 +1,4 @@
+import { AUDIO_SOURCE_KEY } from '../sounds/audioSource.ts'
 import { SETTINGS_KEY } from '../settings/store.ts'
 import { ACTIVE_OWNER_KEY } from '../sync/owner.ts'
 import { finishedRecordOf, parkSession } from '../sync/parked.ts'
@@ -28,6 +29,7 @@ const USER_DATA_KEYS = [
   SETTINGS_KEY,
   ACTIVE_SESSION_KEY,
   ACTIVE_OWNER_KEY,
+  AUDIO_SOURCE_KEY,
   ...LEGACY_USER_DATA_KEYS,
 ]
 
