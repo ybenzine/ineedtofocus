@@ -1,6 +1,6 @@
 # Deployment
 
-> **Status: in progress.** Server setup is scripted (#25); the rest is filled in by the DevOps agent with #26–#30. The plan is in [tech_stack.md §2–3](tech_stack.md).
+> **Status: in progress.** Server setup is scripted (#25) and the images and production Compose are defined (#27); the rest is filled in by the DevOps agent with #26, #28–#30. The plan is in [tech_stack.md §2–3](tech_stack.md).
 
 ## Environments
 
@@ -19,7 +19,7 @@ One image (root `Dockerfile`, #4) serves the API and the built frontend. Its ent
 | `1` (default) | Migrate, then start | Local stack (`make up`) |
 | `0` | Skip migrations and start (logs that it skipped) | Deploys and rollbacks |
 
-The default doesn't suit rollbacks: an older image started against a database that a newer image migrated fails with `Can't locate revision …` and never serves. Migrations are expand-only (`backend/tests/unit/test_migration_safety.py`), so the older app runs fine on the newer schema once the step is skipped. Deploys (#27–#30) should therefore run migrations as their own one-shot step, e.g. `docker compose run --rm app alembic upgrade head`, and run the app with `MIGRATE_ON_START=0`. That way a rollback only swaps the image tag.
+The default doesn't suit rollbacks: an older image started against a database that a newer image migrated fails with `Can't locate revision …` and never serves. Migrations are expand-only (`backend/tests/unit/test_migration_safety.py`), so the older app runs fine on the newer schema once the step is skipped. Deploys therefore run migrations as their own one-shot step (`infra/compose.sh <env> run --rm app alembic upgrade head`), and `infra/compose.prod.yml` runs the app with `MIGRATE_ON_START=0` ([Running it on the server](#running-it-on-the-server)). That way a rollback only swaps the image tag.
 
 ## Server setup (#25)
 
@@ -88,10 +88,89 @@ restrict,command="/opt/focus/bin/<command>" ssh-ed25519 AAAA... focus-ci-<enviro
 - **Security updates** install themselves daily. Docker's packages come from Docker's repo, which unattended-upgrades doesn't touch: upgrade them by hand at a quiet time with `sudo apt-get update && sudo apt-get install --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin` (`live-restore` keeps the containers up).
 - **Reboots** aren't automatic, because prod and dev share the server. When a kernel or libc update needs one, `/var/run/reboot-required` exists and the login banner says so (the script's summary warns too). Reboot at a quiet time with `sudo reboot`; containers restart through their restart policy (#27).
 
+## Images and production Compose (#27)
+
+### Layout on the Droplet
+
+Three Compose projects ([tech_stack.md §2](tech_stack.md#2-environments-and-hosting)). Ports 80 and 443 reach only Caddy; nothing else publishes a port.
+
+```
+                             :80, :443
+                                 |
+                 focus-edge   caddy  (infra/compose.edge.yml)
+                  172.16.10.2 /     \ 172.16.20.2
+          network focus-edge_prod   focus-edge_dev
+                             /       \
+        focus-prod   app (focus-prod-app)   focus-dev   app (focus-dev-app)
+                     db, otel-collector                 db, otel-collector
+                     volume focus-prod_db-data          volume focus-dev_db-data
+```
+
+| File | Role |
+|---|---|
+| `infra/compose.edge.yml` + `infra/caddy/Caddyfile` | Project `focus-edge`: one Caddy. Automatic HTTPS from Let's Encrypt for `ineedtofoc.us` and `dev.ineedtofoc.us`; certificates persist in the `caddy-data` volume. http redirects to https. HTTP/1.1 and HTTP/2 only, since the firewall doesn't open 443/udp. Owns both edge networks, so start it first |
+| `infra/compose.prod.yml` | One file, run as `focus-prod` and as `focus-dev`. Each project has an app, Postgres 17 with a named volume, and an OpenTelemetry Collector. Only the app joins its environment's edge network, under the alias Caddy routes to. Dev's app can't reach prod's |
+| `infra/env/prod.env`, `infra/env/dev.env` | Committed, non-secret settings per environment: memory limits, OOM score, CPU weight, Postgres `shared_buffers`, edge network, Caddy's address |
+| `/opt/focus/<env>/.env` (server only) | That environment's secrets: `POSTGRES_PASSWORD` and, from #32, the `GRAFANA_CLOUD_*` values ([.env.example](../.env.example), "Deployed environments") |
+| `infra/compose.sh` | `APP_TAG=<sha> infra/compose.sh prod\|dev <compose args>`: passes `-f infra/compose.prod.yml --env-file /opt/focus/<env>/.env --env-file infra/env/<env>.env`. The committed file comes last, so its values win over anything in the server file |
+
+Compose refuses to start an environment without `APP_TAG`, `POSTGRES_PASSWORD` or any committed setting. All containers use `restart: unless-stopped`, so they come back after a reboot.
+
+### Memory: dev can't starve prod
+
+| Container | prod | dev |
+|---|---|---|
+| app | 320 MiB | 256 MiB |
+| Postgres (`shared_buffers`) | 256 MiB (64 MB) | 128 MiB (32 MB) |
+| OpenTelemetry Collector | 96 MiB | 96 MiB |
+| Caddy (shared) | 96 MiB | |
+
+The limits add up to 1,248 MiB. Adding a one-shot migration container (up to 320 MiB) gives 1,568 MiB, under the 1,600 MiB budget that leaves about 350 MiB of the 2 GiB Droplet to the kernel, dockerd, containerd and sshd. So the limits never overcommit the host. Dev's containers also get `oom_score_adj: 500`, so the kernel kills them first if memory runs out anyway, and a quarter of prod's CPU weight (`cpu_shares` 256 against 1024). The collectors run with `GOMEMLIMIT` and a `memory_limiter` at 80% of their limit. `make test-infra` fails if the limits break these rules (`scripts/check_prod_compose.py`).
+
+### Image build and publish
+
+One image (root `Dockerfile`, multi-stage: Vite build, locked uv dependencies, slim non-root runtime) serves the API and the built frontend. `.github/workflows/ci.yml` has two jobs for it besides the five required checks:
+
+- **`image`** (every PR and push) runs `make test-infra`, builds the image as `ghcr.io/ybenzine/ineedtofocus:<sha>`, and runs `make test-prod-stack` on it: the real edge, prod and dev projects, with Caddy on its internal CA ([testing.md](testing.md)). On `main` it keeps the tested image as a one-day artifact.
+- **`publish`** (push to `main` only) pushes that same image, tagged with the commit SHA only (no `latest`). It `needs:` the five required jobs and `image`, so only a commit that passed all of CI is published. It's the only job with `packages: write`, using `GITHUB_TOKEN` (no stored secret), and it checks out no code. Pull requests, forks included, never push, and no tag or release trigger publishes anything.
+
+**Dev deploy hook (#28):** add a `deploy-dev` job with `needs: publish`, or a workflow triggered by `workflow_run` on `CI` that checks `conclusion == 'success'` and deploys `github.event.workflow_run.head_sha`. Either way, a red `main` never reaches dev.
+
+### Running it on the server
+
+The server needs this repo's `infra/` directory. How it gets there, and how it is kept root-owned so a deploy key can't change what runs, is for #28. These are the steps the deploy and rollback scripts (#28–#30) will run, in this order:
+
+```bash
+docker compose -f infra/compose.edge.yml up -d --wait          # once, and after Caddyfile changes
+export APP_TAG=<commit sha>
+infra/compose.sh dev pull app                                   # public package: no login needed
+infra/compose.sh dev run --rm app alembic upgrade head          # one-shot migration
+infra/compose.sh dev up -d --wait                               # app starts with MIGRATE_ON_START=0
+curl -fsS https://dev.ineedtofoc.us/healthz && curl -fsS https://dev.ineedtofoc.us/readyz
+```
+
+A rollback is the same `up -d --wait` with the previous tag and no migration step, because migrations are expand-only (see [App image and migrations](#app-image-and-migrations)). To reload Caddy after a Caddyfile change without dropping connections: `docker compose -f infra/compose.edge.yml exec caddy caddy reload --config /etc/caddy/Caddyfile`.
+
+### App settings fixed by the Compose file
+
+- `COOKIE_SECURE=1`: the session cookie is always `Secure` (#8). It isn't read from the server `.env`, so it can't be turned off there.
+- `MIGRATE_ON_START=0`: deploys migrate as their own step.
+- `uvicorn --proxy-headers` (image CMD) with `FORWARDED_ALLOW_IPS` set to Caddy's fixed address on that environment's edge network (`172.16.10.2` prod, `172.16.20.2` dev), never `*`. The app therefore takes `X-Forwarded-For`/`-Proto` only from Caddy, and Caddy overwrites whatever a client sends. The sign-in rate limiter sees the real client address, and a request that doesn't come through Caddy can't spoof one. The smoke test checks both.
+- `OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=<env>,service.version=<sha>`, so telemetry shows which deploy produced it.
+
+### Telemetry to Grafana Cloud
+
+Each environment's app sends OTLP to its own collector (`infra/otel-collector/config.yaml`). The collector adds `deployment.environment.name` and forwards to Grafana Cloud over OTLP/HTTP with basic auth. It does that once `GRAFANA_CLOUD_OTLP_ENDPOINT`, `GRAFANA_CLOUD_INSTANCE_ID` and `GRAFANA_CLOUD_OTLP_TOKEN` are in `/opt/focus/<env>/.env`, which #32 does. While the endpoint is empty, the collector accepts the data and drops it, so deploys don't depend on Grafana Cloud. The token is never in git or in GitHub secrets. After changing these values, recreate the collector: `APP_TAG=<current tag> infra/compose.sh <env> up -d otel-collector`. Whether one collector per environment stays, or a shared one replaces it, is #32's call.
+
+### Human steps (Yacine)
+
+1. **After the first image is published** (the first push to `main` after this lands), make the package public. A new package in a personal account starts out private, so the server couldn't pull it without a token. On github.com, go to your profile → **Packages** → `ineedtofocus` → **Package settings**. Under **Danger Zone**, choose **Change visibility** → **Public**, then type `ineedtofocus` to confirm. If it already shows Public, there's nothing to do. The repository is public already. Under **Manage Actions access** on the same page, `ybenzine/ineedtofocus` should be listed: the workflow that created the package gets access automatically. If it isn't listed, add it with the **Write** role.
+2. **Before the first deploy (#28)**, put `POSTGRES_PASSWORD=<openssl rand -hex 32>` in both `/opt/focus/prod/.env` and `/opt/focus/dev/.env`, with a different value in each. Keep the files at mode 600, owner `deploy`. Anything else copied from `.env.example`'s local sections has no effect there.
+3. **With #32**, add the three `GRAFANA_CLOUD_*` values to both files.
+
 ## Sections to write
 
 - DNS (Route 53) — #26
-- Images and production Compose — #27
 - Deploy to dev — #28
 - Deploy to prod — #29
 - Health checks, auto-revert and rollback — #30
