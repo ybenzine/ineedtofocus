@@ -536,3 +536,84 @@ describe('session rules (F6)', () => {
     expect(stopSession(session, now()).kind).toBe('discarded')
   })
 })
+
+describe('clock moved backwards (#93)', () => {
+  const setClock = (ms: number) => vi.setSystemTime(ms)
+
+  function expectApiInvariant(record: SessionRecord) {
+    const span = (Date.parse(record.endedAt) - Date.parse(record.startedAt)) / 1000
+    expect(record.pausedSeconds).toBeGreaterThanOrEqual(0)
+    expect(record.focusSeconds).toBeGreaterThanOrEqual(0)
+    expect(span).toBeGreaterThanOrEqual(0)
+    expect(record.focusSeconds + record.pausedSeconds).toBeLessThanOrEqual(span + 2)
+  }
+
+  it('a backwards jump during a pause counts as zero paused time', () => {
+    let session = start({ mode: 'unlimited', reminderMinutes: null })
+    wait(10 * MINUTE_MS)
+    session = pauseSession(session, now())
+    setClock(T0 + 5 * MINUTE_MS) // clock set back 5 minutes while paused
+    session = resumeSession(session, now())
+    setClock(T0 + 20 * MINUTE_MS)
+    const record = saved(stopSession(session, now()))
+    expect(record.pausedSeconds).toBe(0)
+    expect(record.focusSeconds).toBe(20 * 60)
+    expectApiInvariant(record)
+  })
+
+  it('a backwards jump during focus never yields negative or oversized durations', () => {
+    let session = start({ mode: 'unlimited', reminderMinutes: null })
+    wait(10 * MINUTE_MS)
+    setClock(T0 + 4 * MINUTE_MS) // back while focusing
+    session = pauseSession(session, now())
+    wait(MINUTE_MS)
+    session = resumeSession(session, now())
+    wait(5 * MINUTE_MS)
+    const record = saved(stopSession(session, now()))
+    expect(record.pausedSeconds).toBeGreaterThanOrEqual(0)
+    expectApiInvariant(record)
+  })
+
+  it('stopping with the clock before the start still ends at or after the start', () => {
+    const session = start({ mode: 'countdown', minutes: 25 })
+    wait(2 * MINUTE_MS)
+    setClock(T0 - HOUR)
+    expect(stopSession(session, now()).kind).toBe('discarded')
+    wait(HOUR + 3 * MINUTE_MS)
+    expectApiInvariant(saved(stopSession(session, now())))
+  })
+
+  it('a pause or resume read on a fast clock is capped once the clock is corrected', () => {
+    let session = start({ mode: 'unlimited', reminderMinutes: null })
+    wait(10 * MINUTE_MS)
+    session = pauseSession(session, now())
+    setClock(T0 + 48 * HOUR) // clock wrong by two days
+    session = resumeSession(session, now())
+    setClock(T0 + 20 * MINUTE_MS) // corrected before Stop
+    const record = saved(stopSession(session, now()))
+    expect(Date.parse(record.endedAt)).toBeLessThanOrEqual(now())
+    expect(Date.parse(record.endedAt)).toBeLessThanOrEqual(now() + 24 * HOUR)
+    expect(record.pausedSeconds).toBe(10 * 60)
+    expectApiInvariant(record)
+  })
+
+  it('never reports negative paused or focus time in a snapshot', () => {
+    let session = start({ mode: 'countdown', minutes: 25 })
+    wait(10 * MINUTE_MS)
+    session = pauseSession(session, now())
+    setClock(T0 + 5 * MINUTE_MS)
+    const snap = snapshot(session, now())
+    expect(snap.pausedMs).toBe(0)
+    // Readings later than the corrected clock are capped at it: never more than elapsed.
+    expect(snap.focusMs).toBe(5 * MINUTE_MS)
+  })
+
+  it('ac6_5 a forward jump while closed still completes at the scheduled end', () => {
+    const session = start({ mode: 'countdown', minutes: 25 })
+    wait(3 * HOUR)
+    const record = saved(stopSession(session, now()))
+    expect(record.status).toBe('completed')
+    expect(record.endedAt).toBe(iso(T0 + 25 * MINUTE_MS))
+    expect(record.focusSeconds).toBe(25 * 60)
+  })
+})

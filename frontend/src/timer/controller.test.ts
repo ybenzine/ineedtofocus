@@ -458,3 +458,28 @@ describe('LocalActiveSessionStore', () => {
     expect(parseStoredTimer(broken)).toBeNull()
   })
 })
+
+describe('clock moved backwards (#93)', () => {
+  it('restore() after a reload hands over a valid record when the clock went back during a pause', async () => {
+    const { store, make } = setup()
+    const controller = make(() => Promise.reject(new Error('offline')))
+    await controller.start(startOptions({ mode: 'unlimited', reminderMinutes: null }))
+    wait(10 * MINUTE_MS)
+    await controller.pause()
+    vi.setSystemTime(T0 + 5 * MINUTE_MS)
+    await controller.resume()
+    vi.setSystemTime(T0 + 20 * MINUTE_MS)
+    await controller.stop()
+    const pending = store.load()?.pendingRecord
+    expect(pending?.pausedSeconds).toBe(0)
+
+    const handed: SessionRecord[] = []
+    const restored = await make((r) => {
+      handed.push(r)
+    }).restore()
+    expect(restored.outcome).toMatchObject({ kind: 'saved', record: { pausedSeconds: 0 } })
+    const record = handed[0]
+    const span = (Date.parse(record.endedAt) - Date.parse(record.startedAt)) / 1000
+    expect(record.focusSeconds + record.pausedSeconds).toBeLessThanOrEqual(span + 2)
+  })
+})
