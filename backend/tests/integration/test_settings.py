@@ -1,5 +1,6 @@
 """Settings API and recent YouTube links (#12) against a real, migrated Postgres."""
 
+import asyncio
 import logging
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -11,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from app import settings_api
 from app.logging_config import configure_logging
 from tests.integration.conftest import MakeClient, run, signup
 
@@ -298,6 +300,8 @@ def test_ac8_6_links_are_per_user(make_client: MakeClient) -> None:
         "https://www.youtube.com/embed/abc123",
         "https://www.youtube.com:443/watch?v=abc",
         "http://youtube.com:80/watch?v=abc",
+        "HTTPS://WWW.YOUTUBE.COM/watch?v=abc",
+        "Https://YouTu.be/abc",
     ],
 )
 def test_ac8_6_accepts_youtube_links(client: TestClient, url: str) -> None:
@@ -330,6 +334,9 @@ def test_ac8_6_accepts_youtube_links(client: TestClient, url: str) -> None:
         "https://www.youtube.com/wat\x00ch",
         "https://www.youtube.com/watch?v=a\u200bbc",
         "https://www.youtube.com/watch?v=a\u00a0bc",
+        "https://www.youtu\u212aube.com/watch",
+        "https://www.yo\u0075tube.com\u3002evil.example/x",
+        "https://www.y\u00f6utube.com/watch",
         pytest.param("https://www.youtube.com/" + "a" * 2048, id="too-long"),
     ],
 )
@@ -380,15 +387,28 @@ def test_no_youtube_link_in_logs_on_request_or_database_error(
 
 
 def test_first_gets_for_a_new_user_race_to_one_row(
-    make_client: MakeClient, test_db_url: str
+    make_client: MakeClient, test_db_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Two concurrent first GETs both succeed and leave a single settings row."""
+    """Two concurrent first GETs both succeed and leave a single settings row.
+
+    A barrier inside `_get_or_create` holds each request until both are in it, so the two
+    really overlap (a select-then-insert implementation fails this with an IntegrityError).
+    """
+    real = settings_api._get_or_create
+    barrier: asyncio.Barrier | None = None
+
+    async def gated(db: Any, user: Any) -> Any:
+        nonlocal barrier
+        barrier = barrier or asyncio.Barrier(2)
+        await barrier.wait()
+        return await real(db, user)
+
+    monkeypatch.setattr(settings_api, "_get_or_create", gated)
     with make_client() as c:
-        signup(c)
+        assert signup(c).status_code == 201
         run(_exec(test_db_url, "DELETE FROM user_settings"))  # as if sign-up had not made one
         with ThreadPoolExecutor(max_workers=2) as pool:
-            codes = [
-                f.result().status_code for f in [pool.submit(c.get, "/api/settings") for _ in "ab"]
-            ]
+            futures = [pool.submit(c.get, "/api/settings") for _ in range(2)]
+            codes = [f.result().status_code for f in futures]
     assert codes == [200, 200]
     assert run(_scalar(test_db_url, "SELECT count(*) FROM user_settings"))[0][0] == 1
