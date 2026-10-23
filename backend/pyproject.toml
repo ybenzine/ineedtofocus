@@ -14,6 +14,7 @@ dependencies = [
     "opentelemetry-instrumentation-logging>=0.66b1",
     "pydantic-settings>=2.16.1",
     "sqlalchemy[asyncio]>=2.1.6",
+    "tzdata>=2026.5",
     "uvicorn[standard]>=0.54.0",
 ]
 
