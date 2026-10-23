@@ -1,20 +1,10 @@
 // "Keep screen awake" (AC9.2) with the Screen Wake Lock API, where the browser has it.
 
-import { useEffect, useState } from 'react'
-
-export const KEEP_AWAKE_KEY = 'ineedtofocus.keepAwake'
+import { useEffect } from 'react'
+import { useSettingsState, useSettingsStore } from '../settings/SettingsContext.ts'
 
 export function wakeLockSupported(): boolean {
   return typeof navigator !== 'undefined' && 'wakeLock' in navigator
-}
-
-/** Off for a new user (decision log, #6); remembered on the device until Settings (#22) takes over. */
-export function loadKeepAwake(storage: Storage = window.localStorage): boolean {
-  return storage.getItem(KEEP_AWAKE_KEY) === 'true'
-}
-
-export function saveKeepAwake(value: boolean, storage: Storage = window.localStorage): void {
-  storage.setItem(KEEP_AWAKE_KEY, String(value))
 }
 
 /**
@@ -52,14 +42,12 @@ export function useWakeLock(enabled: boolean): void {
   }, [enabled])
 }
 
-/** Tracks the toggle: persisted, and always off when the device can't do it. */
+/** The Settings value (AC12.3, off for a new user), and always off when the device can't do it. */
 export function useKeepAwakeSetting(): [boolean, (value: boolean) => void] {
-  const [value, setValue] = useState(() => wakeLockSupported() && loadKeepAwake())
+  const store = useSettingsStore()
+  const { values } = useSettingsState()
   return [
-    value,
-    (next) => {
-      setValue(next)
-      saveKeepAwake(next)
-    },
+    wakeLockSupported() && values.keep_screen_awake,
+    (next) => store.update({ keep_screen_awake: next }),
   ]
 }

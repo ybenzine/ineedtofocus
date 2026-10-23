@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { SettingsContext } from '../settings/SettingsContext.ts'
+import { SettingsStore } from '../settings/store.ts'
 import {
   ACTIVE_SESSION_KEY,
   DEFAULT_POMODORO,
@@ -12,12 +14,14 @@ import {
 } from '../timer/index.ts'
 import SessionSummary from './SessionSummary.tsx'
 import TimerScreen from './TimerScreen.tsx'
-import { KEEP_AWAKE_KEY } from './wakeLock.ts'
 
 // Fake clock: Vitest's fake timers own Date.now() and setInterval.
 const T0 = Date.UTC(2026, 9, 23, 9, 0, 0)
 
+let settings = new SettingsStore()
+
 beforeEach(() => {
+  settings = new SettingsStore()
   vi.useFakeTimers()
   vi.setSystemTime(T0)
   localStorage.clear()
@@ -52,7 +56,11 @@ async function mount(config: TimerConfig, goal: string | null = 'Write the repor
   await controller.start({ config, tag: 'study', goal })
   const onEnded = vi.fn<(update: TimerUpdate) => void>()
   const onEvents = vi.fn()
-  render(<TimerScreen controller={controller} audio="rain" onEnded={onEnded} onEvents={onEvents} />)
+  render(
+    <SettingsContext.Provider value={settings}>
+      <TimerScreen controller={controller} audio="rain" onEnded={onEnded} onEvents={onEvents} />
+    </SettingsContext.Provider>,
+  )
   return { controller, store, saved, onEnded, onEvents }
 }
 
@@ -286,7 +294,7 @@ describe('Keep screen awake (AC9.2)', () => {
       fireEvent.click(toggle)
     })
     expect(request).toHaveBeenCalledWith('screen')
-    expect(localStorage.getItem(KEEP_AWAKE_KEY)).toBe('true')
+    expect(settings.values.keep_screen_awake).toBe(true)
     await act(async () => {
       fireEvent.click(toggle)
     })
@@ -295,7 +303,7 @@ describe('Keep screen awake (AC9.2)', () => {
 
   it('requests the lock again when the tab becomes visible', async () => {
     const { request } = stubWakeLock()
-    localStorage.setItem(KEEP_AWAKE_KEY, 'true')
+    settings.update({ keep_screen_awake: true })
     await mount({ mode: 'countdown', minutes: 25 })
     expect(request).toHaveBeenCalledOnce()
     // The browser releases the lock when the tab is hidden.
