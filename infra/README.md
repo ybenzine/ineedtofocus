@@ -4,7 +4,7 @@ Deployment and runtime configuration. The local development stack is `compose.ya
 
 | Path (planned) | What | Issue |
 |---|---|---|
-| `server/` | Droplet setup: deploy user, firewall, Docker | #25 |
+| `server/` (exists) | Droplet setup script `bootstrap.sh`: Docker Engine + Compose, unattended security upgrades, SSH hardening, the `deploy` user, `/opt/focus` layout ([deployment.md → Server setup](../_docs/deployment.md#server-setup-25)); tested by `make test-server` | #25 |
 | `compose.prod.yaml` | `focus-prod` / `focus-dev` Compose projects (app + Postgres, memory limits) | #27 |
 | `caddy/` | Shared Caddy reverse proxy, HTTPS for both host names | #27 |
 | `otel-collector/` | OpenTelemetry Collector forwarding to Grafana Cloud | #31, #32 |

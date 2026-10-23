@@ -49,8 +49,8 @@ All entry points go through `make` (`make help` lists them). Needs Docker with C
 | `make install` | Install backend (uv) and frontend (npm) dependencies; the other targets do this on demand |
 | `make up` | Start the full local stack (app, Postgres, Grafana/OTel) with Docker Compose; the app service arrives with #4 |
 | `make down` | Stop it (keeps the database volume) |
-| `make test` | Run every test suite: backend unit + integration, frontend unit, Playwright end-to-end (Playwright arrives with #23) |
-| `make lint` | Linters and type checks for backend (ruff, mypy) and frontend (ESLint, Prettier, tsc) |
+| `make test` | Run every test suite: backend unit + integration, frontend unit, repo scripts, the server bootstrap in an Ubuntu container, Playwright end-to-end (Playwright arrives with #23) |
+| `make lint` | Linters and type checks for backend (ruff, mypy), frontend (ESLint, Prettier, tsc), repo scripts and shell scripts (shellcheck) |
 | `make fmt` | Auto-format |
 | `make hooks` | Install the pre-commit hooks (ruff, ESLint, Prettier, hygiene checks) |
 
