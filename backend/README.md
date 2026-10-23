@@ -9,13 +9,16 @@ docker compose up -d db  # from the repo root: just Postgres (`make up` also run
 cd backend
 uv sync
 uv run alembic upgrade head                              # or `make migrate` from the root
-uv run uvicorn app.main:app_factory --factory --reload   # http://localhost:8000
+COOKIE_SECURE=0 uv run uvicorn app.main:app_factory --factory --reload   # http://localhost:8000
 ```
 
-Settings come from environment variables (documented in the root `.env.example`):
-`DATABASE_URL` (async URL, `postgresql+asyncpg://...`), `LOG_LEVEL`, `FRONTEND_DIST`
-(built frontend, default `../frontend/dist`; ignored when absent) and
-`READINESS_TIMEOUT_SECONDS`.
+Settings come from environment variables only (documented in the root `.env.example`); the
+app never reads a `.env` file, so set them in the shell as above. They are `DATABASE_URL`
+(async URL, `postgresql+asyncpg://...`), `LOG_LEVEL`, `FRONTEND_DIST` (built frontend,
+default `../frontend/dist`; ignored when absent), `READINESS_TIMEOUT_SECONDS`,
+`COOKIE_SECURE`, `SESSION_TTL_DAYS` and the `SIGNIN_*` rate limits. `COOKIE_SECURE`
+defaults to on, which plain http can't use (browsers and curl drop `Secure` cookies), so a
+local host run needs `COOKIE_SECURE=0` to sign in; `compose.yaml` sets it for `make up`.
 
 - `GET /healthz`: process is up. `GET /readyz`: database reachable (503 otherwise).
 - Interactive API docs: `/docs`. If `frontend/dist` exists it is served from `/`.
