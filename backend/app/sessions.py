@@ -251,7 +251,7 @@ async def _save(
     """
     if not items:
         return set(), {}
-    unique = list({i.id: i for i in items}.values())
+    unique = list({i.id: i for i in reversed(items)}.values())[::-1]  # first occurrence wins
     values = [
         {
             "id": i.id,

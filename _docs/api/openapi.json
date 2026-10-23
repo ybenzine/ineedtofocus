@@ -113,54 +113,6 @@
         "title": "Mode",
         "type": "string"
       },
-      "PomodoroConfig": {
-        "additionalProperties": false,
-        "properties": {
-          "blocks": {
-            "maximum": 8.0,
-            "minimum": 1.0,
-            "title": "Blocks",
-            "type": "integer"
-          },
-          "break_minutes": {
-            "maximum": 30.0,
-            "minimum": 1.0,
-            "title": "Break Minutes",
-            "type": "integer"
-          },
-          "focus_minutes": {
-            "maximum": 90.0,
-            "minimum": 5.0,
-            "title": "Focus Minutes",
-            "type": "integer"
-          },
-          "long_break_enabled": {
-            "title": "Long Break Enabled",
-            "type": "boolean"
-          },
-          "long_break_minutes": {
-            "maximum": 60.0,
-            "minimum": 5.0,
-            "title": "Long Break Minutes",
-            "type": "integer"
-          },
-          "mode": {
-            "const": "pomodoro",
-            "title": "Mode",
-            "type": "string"
-          }
-        },
-        "required": [
-          "mode",
-          "focus_minutes",
-          "break_minutes",
-          "blocks",
-          "long_break_enabled",
-          "long_break_minutes"
-        ],
-        "title": "PomodoroConfig",
-        "type": "object"
-      },
       "SessionEdit": {
         "additionalProperties": false,
         "description": "Change the tag and/or goal (AC11.1). `goal: null` (or blank) clears the goal.",
@@ -236,7 +188,7 @@
             "discriminator": {
               "mapping": {
                 "countdown": "#/components/schemas/CountdownConfig",
-                "pomodoro": "#/components/schemas/PomodoroConfig",
+                "pomodoro": "#/components/schemas/app__sessions__PomodoroConfig",
                 "unlimited": "#/components/schemas/UnlimitedConfig"
               },
               "propertyName": "mode"
@@ -246,7 +198,7 @@
                 "$ref": "#/components/schemas/CountdownConfig"
               },
               {
-                "$ref": "#/components/schemas/PomodoroConfig"
+                "$ref": "#/components/schemas/app__sessions__PomodoroConfig"
               },
               {
                 "$ref": "#/components/schemas/UnlimitedConfig"
@@ -357,7 +309,7 @@
             "discriminator": {
               "mapping": {
                 "countdown": "#/components/schemas/CountdownConfig",
-                "pomodoro": "#/components/schemas/PomodoroConfig",
+                "pomodoro": "#/components/schemas/app__sessions__PomodoroConfig",
                 "unlimited": "#/components/schemas/UnlimitedConfig"
               },
               "propertyName": "mode"
@@ -367,7 +319,7 @@
                 "$ref": "#/components/schemas/CountdownConfig"
               },
               {
-                "$ref": "#/components/schemas/PomodoroConfig"
+                "$ref": "#/components/schemas/app__sessions__PomodoroConfig"
               },
               {
                 "$ref": "#/components/schemas/UnlimitedConfig"
@@ -407,6 +359,161 @@
           "created_at"
         ],
         "title": "SessionOut",
+        "type": "object"
+      },
+      "SettingsOut": {
+        "properties": {
+          "alert_volume": {
+            "description": "0-100",
+            "title": "Alert Volume",
+            "type": "integer"
+          },
+          "background_volume": {
+            "description": "0-100",
+            "title": "Background Volume",
+            "type": "integer"
+          },
+          "default_reminder_minutes": {
+            "anyOf": [
+              {
+                "enum": [
+                  15,
+                  30,
+                  45,
+                  60,
+                  90,
+                  120
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null = Off",
+            "title": "Default Reminder Minutes"
+          },
+          "keep_screen_awake": {
+            "title": "Keep Screen Awake",
+            "type": "boolean"
+          },
+          "last_tag": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Tag"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null means Work (AC7.2)"
+          },
+          "pomodoro_config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/app__settings_api__PomodoroConfig"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null until first use"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "week_start_day": {
+            "description": "0 = Sunday ... 6 = Saturday",
+            "title": "Week Start Day",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "week_start_day",
+          "alert_volume",
+          "background_volume",
+          "keep_screen_awake",
+          "default_reminder_minutes",
+          "pomodoro_config",
+          "last_tag",
+          "updated_at"
+        ],
+        "title": "SettingsOut",
+        "type": "object"
+      },
+      "SettingsPatch": {
+        "additionalProperties": false,
+        "description": "Partial update: send only the fields to change. `null` is a value for\n`default_reminder_minutes` (Off), `pomodoro_config` and `last_tag` (back to none).",
+        "properties": {
+          "alert_volume": {
+            "default": 80,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Alert Volume",
+            "type": "integer"
+          },
+          "background_volume": {
+            "default": 50,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Background Volume",
+            "type": "integer"
+          },
+          "default_reminder_minutes": {
+            "anyOf": [
+              {
+                "enum": [
+                  15,
+                  30,
+                  45,
+                  60,
+                  90,
+                  120
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Default Reminder Minutes"
+          },
+          "keep_screen_awake": {
+            "default": false,
+            "title": "Keep Screen Awake",
+            "type": "boolean"
+          },
+          "last_tag": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Tag"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pomodoro_config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/app__settings_api__PomodoroConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "week_start_day": {
+            "default": 0,
+            "maximum": 6.0,
+            "minimum": 0.0,
+            "title": "Week Start Day",
+            "type": "integer"
+          }
+        },
+        "title": "SettingsPatch",
         "type": "object"
       },
       "SignInRequest": {
@@ -643,6 +750,57 @@
         "title": "UserOut",
         "type": "object"
       },
+      "YoutubeLinkIn": {
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "maxLength": 2048,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "YoutubeLinkIn",
+        "type": "object"
+      },
+      "YoutubeLinkOut": {
+        "properties": {
+          "last_used_at": {
+            "format": "date-time",
+            "title": "Last Used At",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "last_used_at"
+        ],
+        "title": "YoutubeLinkOut",
+        "type": "object"
+      },
+      "YoutubeLinksOut": {
+        "properties": {
+          "links": {
+            "description": "Newest first, at most 5",
+            "items": {
+              "$ref": "#/components/schemas/YoutubeLinkOut"
+            },
+            "title": "Links",
+            "type": "array"
+          }
+        },
+        "required": [
+          "links"
+        ],
+        "title": "YoutubeLinksOut",
+        "type": "object"
+      },
       "app__health__Status": {
         "properties": {
           "status": {
@@ -663,6 +821,97 @@
         ],
         "title": "Status",
         "type": "string"
+      },
+      "app__sessions__PomodoroConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "blocks": {
+            "maximum": 8.0,
+            "minimum": 1.0,
+            "title": "Blocks",
+            "type": "integer"
+          },
+          "break_minutes": {
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Break Minutes",
+            "type": "integer"
+          },
+          "focus_minutes": {
+            "maximum": 90.0,
+            "minimum": 5.0,
+            "title": "Focus Minutes",
+            "type": "integer"
+          },
+          "long_break_enabled": {
+            "title": "Long Break Enabled",
+            "type": "boolean"
+          },
+          "long_break_minutes": {
+            "maximum": 60.0,
+            "minimum": 5.0,
+            "title": "Long Break Minutes",
+            "type": "integer"
+          },
+          "mode": {
+            "const": "pomodoro",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "focus_minutes",
+          "break_minutes",
+          "blocks",
+          "long_break_enabled",
+          "long_break_minutes"
+        ],
+        "title": "PomodoroConfig",
+        "type": "object"
+      },
+      "app__settings_api__PomodoroConfig": {
+        "additionalProperties": false,
+        "description": "Last-used Pomodoro configuration; ranges are AC3.2.\n\nMaps to the frontend `PomodoroConfig` (timer/config.ts) in snake_case, without `mode`:\nfocusMinutes -> focus_minutes, breakMinutes -> break_minutes, blocks -> blocks,\nlongBreakEnabled -> long_break_enabled, longBreakMinutes -> long_break_minutes.",
+        "properties": {
+          "blocks": {
+            "maximum": 8.0,
+            "minimum": 1.0,
+            "title": "Blocks",
+            "type": "integer"
+          },
+          "break_minutes": {
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Break Minutes",
+            "type": "integer"
+          },
+          "focus_minutes": {
+            "maximum": 90.0,
+            "minimum": 5.0,
+            "title": "Focus Minutes",
+            "type": "integer"
+          },
+          "long_break_enabled": {
+            "title": "Long Break Enabled",
+            "type": "boolean"
+          },
+          "long_break_minutes": {
+            "maximum": 60.0,
+            "minimum": 5.0,
+            "title": "Long Break Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "focus_minutes",
+          "break_minutes",
+          "blocks",
+          "long_break_enabled",
+          "long_break_minutes"
+        ],
+        "title": "PomodoroConfig",
+        "type": "object"
       }
     }
   },
@@ -1318,6 +1567,170 @@
         "summary": "Restore Session",
         "tags": [
           "sessions"
+        ]
+      }
+    },
+    "/api/settings": {
+      "get": {
+        "description": "The signed-in user's settings (AC12.1-12.5); defaults for a new user.",
+        "operationId": "get_settings_api_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          }
+        },
+        "summary": "Get Settings",
+        "tags": [
+          "settings"
+        ]
+      },
+      "patch": {
+        "description": "Change the fields sent; the rest stay as they are. Out-of-range values are 422.",
+        "operationId": "update_settings_api_settings_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SettingsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Update Settings",
+        "tags": [
+          "settings"
+        ]
+      }
+    },
+    "/api/youtube-links": {
+      "get": {
+        "description": "The user's 5 most recently used YouTube links, newest first (AC8.6).",
+        "operationId": "list_youtube_links_api_youtube_links_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/YoutubeLinksOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          }
+        },
+        "summary": "List Youtube Links",
+        "tags": [
+          "settings"
+        ]
+      },
+      "post": {
+        "description": "Record a link as just used (moves it to the top if known) and drop all but the 5\nnewest. Returns the updated list.",
+        "operationId": "use_youtube_link_api_youtube_links_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/YoutubeLinkIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/YoutubeLinksOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Use Youtube Link",
+        "tags": [
+          "settings"
         ]
       }
     },

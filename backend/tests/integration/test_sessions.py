@@ -602,7 +602,7 @@ def test_out_of_range_items_are_rejected_not_500(ada: TestClient, app_url: str) 
     assert body["results"][0]["status"] == "created"
     for result in body["results"][1:]:
         assert result["status"] == "rejected"
-        assert result["error"]["code"] in {"validation_error", "invalid_session"}
+        assert result["error"]["code"] == "validation_error"
     assert "bad" not in r.text
     assert count(app_url) == 1
 
@@ -633,3 +633,14 @@ def test_extreme_json_numbers_are_a_client_error(ada: TestClient, literal: str) 
         assert r.status_code in (200, 400, 422), (url, r.status_code)
         if r.status_code == 200:
             assert r.json()["results"][0]["status"] == "rejected"
+
+
+def test_repeated_id_in_one_batch_keeps_the_first(ada: TestClient, app_url: str) -> None:
+    first = make_session(tag="work")
+    second = {**first, "tag": "nap"}
+    r = ada.post("/api/sessions/sync", json={"sessions": [first, second]})
+    assert [x["status"] for x in r.json()["results"]] == ["created", "existing"]
+    assert [x["session"]["tag"] for x in r.json()["results"]] == ["work", "work"]
+    assert count(app_url) == 1
+    rows = run(_query(app_url, "SELECT tag FROM focus_sessions"))
+    assert rows == [("work",)]
