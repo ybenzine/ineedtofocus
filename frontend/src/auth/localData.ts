@@ -1,6 +1,19 @@
+import { ACTIVE_SESSION_KEY } from '../timer/store.ts'
 import type { User } from './api.ts'
 
-const USER_KEY = 'intf.user'
+export const USER_KEY = 'ineedtofocus.user'
+
+/**
+ * True while a session is running or a finished one hasn't reached the session store yet
+ * (`pendingRecord`); signing out would delete it (F13).
+ */
+export function hasUnsavedSession(): boolean {
+  try {
+    return localStorage.getItem(ACTIVE_SESSION_KEY) !== null
+  } catch {
+    return false
+  }
+}
 
 /** The last signed-in user, kept so the app opens offline (F13). */
 export function loadCachedUser(): User | null {

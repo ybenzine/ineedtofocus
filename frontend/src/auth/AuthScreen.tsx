@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { AuthError, describeWait, type AuthApi, type User } from './api.ts'
 
 type Mode = 'signin' | 'signup'
@@ -18,8 +18,18 @@ export default function AuthScreen({ api, onSignedIn }: Props) {
   const [passwordError, setPasswordError] = useState('')
   const [formError, setFormError] = useState('')
   const [busy, setBusy] = useState(false)
+  const emailRef = useRef<HTMLInputElement>(null)
+  const passwordRef = useRef<HTMLInputElement>(null)
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const switched = useRef(false)
+
+  // After switching between sign-in and sign-up, announce the new form by focusing its heading.
+  useEffect(() => {
+    if (switched.current) headingRef.current?.focus()
+  }, [mode])
 
   function switchMode(next: Mode) {
+    switched.current = true
     setMode(next)
     setEmailError('')
     setPasswordError('')
@@ -35,7 +45,10 @@ export default function AuthScreen({ api, onSignedIn }: Props) {
     setEmailError(emailProblem)
     setPasswordError(passwordProblem)
     setFormError('')
-    if (emailProblem || passwordProblem) return
+    if (emailProblem || passwordProblem) {
+      ;(emailProblem ? emailRef : passwordRef).current?.focus()
+      return
+    }
 
     setBusy(true)
     try {
@@ -46,9 +59,13 @@ export default function AuthScreen({ api, onSignedIn }: Props) {
       onSignedIn(user)
     } catch (error) {
       if (error instanceof AuthError) {
-        if (error.kind === 'duplicate') setEmailError(error.message)
-        else if (error.kind === 'password') setPasswordError(error.message)
-        else if (error.kind === 'rate_limited') {
+        if (error.kind === 'duplicate') {
+          setEmailError(error.message)
+          emailRef.current?.focus()
+        } else if (error.kind === 'password') {
+          setPasswordError(error.message)
+          passwordRef.current?.focus()
+        } else if (error.kind === 'rate_limited') {
           setFormError(`Too many attempts. ${describeWait(error.retryAfterSeconds)}`)
         } else setFormError(error.message)
       } else {
@@ -62,11 +79,14 @@ export default function AuthScreen({ api, onSignedIn }: Props) {
   return (
     <main>
       <h1>I Need To Focus</h1>
-      <h2>{signUp ? 'Create your account' : 'Sign in'}</h2>
+      <h2 ref={headingRef} tabIndex={-1}>
+        {signUp ? 'Create your account' : 'Sign in'}
+      </h2>
       <form className="setup" onSubmit={(e) => void submit(e)} noValidate>
         <label>
           Email
           <input
+            ref={emailRef}
             type="email"
             name="email"
             autoComplete="email"
@@ -84,16 +104,19 @@ export default function AuthScreen({ api, onSignedIn }: Props) {
         <label>
           Password
           <input
+            ref={passwordRef}
             type="password"
             name="password"
             autoComplete={signUp ? 'new-password' : 'current-password'}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             aria-invalid={passwordError ? true : undefined}
-            aria-describedby={passwordError ? 'password-error' : undefined}
+            aria-describedby={
+              passwordError ? 'password-error' : signUp ? 'password-hint' : undefined
+            }
           />
         </label>
-        {signUp && !passwordError && <p>8 to 128 characters.</p>}
+        {signUp && !passwordError && <p id="password-hint">8 to 128 characters.</p>}
         {passwordError && (
           <p id="password-error" role="alert">
             {passwordError}

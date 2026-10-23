@@ -1,0 +1,20 @@
+# Exporters when Grafana Cloud isn't configured yet (GRAFANA_CLOUD_OTLP_ENDPOINT is
+# unset or empty in the server's /opt/focus/<env>/.env, until #32). Merged over
+# config.yaml; see that file.
+#
+# Telemetry is accepted and dropped: the app's OTLP exporters keep working (no retry
+# loops or error logs) and a deploy doesn't depend on Grafana Cloud credentials.
+# Setting the GRAFANA_CLOUD_* variables and recreating the collector switches to
+# export.grafana-cloud.yaml.
+
+exporters:
+  nop: {}
+
+service:
+  pipelines:
+    traces:
+      exporters: [nop]
+    metrics:
+      exporters: [nop]
+    logs:
+      exporters: [nop]

@@ -71,6 +71,19 @@ describe('httpAuthApi', () => {
   })
 })
 
+describe('httpAuthApi availability', () => {
+  it('maps a 5xx to a server error', async () => {
+    reply(503, {})
+    expect((await failure(httpAuthApi.me())).kind).toBe('server')
+  })
+
+  it('gives /me a timeout signal', async () => {
+    reply(200, user)
+    await httpAuthApi.me()
+    expect(vi.mocked(fetch).mock.calls[0][1]?.signal).toBeInstanceOf(AbortSignal)
+  })
+})
+
 describe('describeWait', () => {
   it('words seconds and minutes', () => {
     expect(describeWait(1)).toBe('Try again in 1 second.')

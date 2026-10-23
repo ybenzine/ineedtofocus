@@ -24,7 +24,7 @@ Production: https://ineedtofoc.us · Dev: https://dev.ineedtofoc.us
 ## 2. Environments and hosting
 
 - **Server:** one DigitalOcean Droplet, Basic 2 GiB / 1 vCPU ($12/month, optional weekly backups +$2.40), Ubuntu 24.04 LTS, NYC region.
-- **Layout on the Droplet:** two Docker Compose projects, `focus-prod` and `focus-dev`, each with its own app container and its own Postgres container and volume. One shared Caddy container terminates HTTPS (automatic Let's Encrypt certificates) and routes by host name. An OpenTelemetry Collector container forwards telemetry to Grafana Cloud. Every container has a memory limit so dev cannot starve prod.
+- **Layout on the Droplet:** two Docker Compose projects, `focus-prod` and `focus-dev`, each with its own app container and its own Postgres container and volume. One shared Caddy container terminates HTTPS (automatic Let's Encrypt certificates) and routes by host name. An OpenTelemetry Collector container in each project (one for prod, one for dev) forwards telemetry to Grafana Cloud; #32 may consolidate them into one. Every container has a memory limit so dev cannot starve prod.
 - **Security:** DigitalOcean Cloud Firewall allows only 22 (SSH, key-only), 80 and 443. Secrets live in per-environment `.env` files on the server and in GitHub environment secrets, never in the repo.
 - **Domain:** `ineedtofoc.us` registered at Gandi, DNS hosted on AWS Route 53.
 

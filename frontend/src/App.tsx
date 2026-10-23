@@ -1,7 +1,16 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import AccountBar from './auth/AccountBar.tsx'
 import { LocalPreferencesStore, type PreferencesStore } from './setup/preferences.ts'
 import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
-import { LocalActiveSessionStore, TimerController, type SessionRecord } from './timer/index.ts'
+import type { AudioSource } from './setup/options.ts'
+import SessionSummary from './timerscreen/SessionSummary.tsx'
+import TimerScreen from './timerscreen/TimerScreen.tsx'
+import {
+  LocalActiveSessionStore,
+  TimerController,
+  type SessionRecord,
+  type TimerUpdate,
+} from './timer/index.ts'
 
 export interface AppProps {
   /** Injectable for tests; the app uses the device's localStorage by default. */
@@ -22,43 +31,79 @@ function createController(): TimerController {
   })
 }
 
+type View =
+  | { name: 'loading' }
+  | { name: 'setup' }
+  | { name: 'timer' }
+  | { name: 'summary'; update: TimerUpdate }
+
 export default function App({ controller, preferences }: AppProps) {
   const timer = useMemo(() => controller ?? createController(), [controller])
   const prefs = useMemo(() => preferences ?? new LocalPreferencesStore(), [preferences])
-  const [running, setRunning] = useState(false)
+  const [view, setView] = useState<View>({ name: 'loading' })
+  // Only the setup choice is known here; after a reload the audio source is not remembered yet
+  // (audio playback and its persistence arrive with #17 and #18).
+  const [notice, setNotice] = useState<string | null>(null)
+  const [audio, setAudio] = useState<AudioSource>('none')
 
-  // Pick up a session that was running when the app closed (AC6.4); #15 shows it properly.
+  // Pick up a session that was running when the app closed (AC6.4), or show how one that ended
+  // while the app was closed finished (AC6.5).
   useEffect(() => {
+    let cancelled = false
     void timer.restore().then((update) => {
-      if (update.snapshot) setRunning(true)
+      if (cancelled) return
+      if (update.snapshot) setView({ name: 'timer' })
+      else if (update.outcome) setView({ name: 'summary', update })
+      else setView({ name: 'setup' })
     })
+    return () => {
+      cancelled = true
+    }
   }, [timer])
 
   async function start(request: SessionRequest) {
+    setNotice(null)
     await timer.start({ config: request.config, tag: request.tag, goal: request.goal })
-    setRunning(true)
+    setAudio(request.audio)
+    setView({ name: 'timer' })
   }
 
-  if (running) {
-    // Placeholder hand-off: the full-screen timer arrives with #15.
+  const ended = useCallback((update: TimerUpdate) => {
+    // An update with no outcome means another tab ended the session; that tab shows the summary.
+    if (update.outcome) {
+      setView({ name: 'summary', update })
+    } else {
+      setNotice('This session was ended in another tab.')
+      setView({ name: 'setup' })
+    }
+  }, [])
+
+  if (view.name === 'loading') return <main aria-busy="true" />
+
+  if (view.name === 'timer') {
     return (
-      <main>
-        <h1>Session started</h1>
-        <p>The timer screen is coming soon.</p>
-        <button
-          type="button"
-          onClick={() => {
-            void timer.stop().then(() => setRunning(false))
-          }}
-        >
-          Stop
-        </button>
+      <main className="dark-screen">
+        <TimerScreen controller={timer} audio={audio} onEnded={ended} />
+      </main>
+    )
+  }
+
+  if (view.name === 'summary' && view.update.outcome) {
+    return (
+      <main className="dark-screen">
+        <SessionSummary
+          outcome={view.update.outcome}
+          recordPending={view.update.recordPending}
+          onNewSession={() => setView({ name: 'setup' })}
+        />
       </main>
     )
   }
 
   return (
     <main>
+      <AccountBar />
+      {notice && <p role="status">{notice}</p>}
       <SessionSetup preferences={prefs} onStart={start} />
     </main>
   )

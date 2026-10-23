@@ -1,6 +1,41 @@
 {
   "components": {
     "schemas": {
+      "CountdownConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "minutes": {
+            "maximum": 240.0,
+            "minimum": 1.0,
+            "title": "Minutes",
+            "type": "integer"
+          },
+          "mode": {
+            "const": "countdown",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "minutes"
+        ],
+        "title": "CountdownConfig",
+        "type": "object"
+      },
+      "DeletedCount": {
+        "properties": {
+          "deleted": {
+            "title": "Deleted",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "title": "DeletedCount",
+        "type": "object"
+      },
       "ErrorDetail": {
         "properties": {
           "field": {
@@ -69,47 +104,261 @@
         "title": "ErrorResponse",
         "type": "object"
       },
-      "PomodoroConfig": {
+      "Mode": {
+        "enum": [
+          "countdown",
+          "pomodoro",
+          "unlimited"
+        ],
+        "title": "Mode",
+        "type": "string"
+      },
+      "SessionEdit": {
         "additionalProperties": false,
-        "description": "Last-used Pomodoro configuration; ranges are AC3.2.\n\nMaps to the frontend `PomodoroConfig` (timer/config.ts) in snake_case, without `mode`:\nfocusMinutes -> focus_minutes, breakMinutes -> break_minutes, blocks -> blocks,\nlongBreakEnabled -> long_break_enabled, longBreakMinutes -> long_break_minutes.",
+        "description": "Change the tag and/or goal (AC11.1). `goal: null` (or blank) clears the goal.",
         "properties": {
-          "blocks": {
+          "goal": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal"
+          },
+          "tag": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Tag"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "title": "SessionEdit",
+        "type": "object"
+      },
+      "SessionIn": {
+        "additionalProperties": false,
+        "description": "A finished session as the client saved it on the device (AC6.3, AC13.2).",
+        "properties": {
+          "blocks_completed": {
+            "default": 0,
             "maximum": 8.0,
-            "minimum": 1.0,
-            "title": "Blocks",
+            "minimum": 0.0,
+            "title": "Blocks Completed",
             "type": "integer"
           },
-          "break_minutes": {
-            "maximum": 30.0,
-            "minimum": 1.0,
-            "title": "Break Minutes",
+          "ended_at": {
+            "format": "date-time",
+            "title": "Ended At",
+            "type": "string"
+          },
+          "focus_seconds": {
+            "maximum": 43200.0,
+            "title": "Focus Seconds",
             "type": "integer"
           },
-          "focus_minutes": {
-            "maximum": 90.0,
-            "minimum": 5.0,
-            "title": "Focus Minutes",
+          "goal": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/Mode"
+          },
+          "mode_config": {
+            "discriminator": {
+              "mapping": {
+                "countdown": "#/components/schemas/CountdownConfig",
+                "pomodoro": "#/components/schemas/app__sessions__PomodoroConfig",
+                "unlimited": "#/components/schemas/UnlimitedConfig"
+              },
+              "propertyName": "mode"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CountdownConfig"
+              },
+              {
+                "$ref": "#/components/schemas/app__sessions__PomodoroConfig"
+              },
+              {
+                "$ref": "#/components/schemas/UnlimitedConfig"
+              }
+            ],
+            "title": "Mode Config"
+          },
+          "paused_seconds": {
+            "maximum": 2147483647.0,
+            "minimum": 0.0,
+            "title": "Paused Seconds",
             "type": "integer"
           },
-          "long_break_enabled": {
-            "title": "Long Break Enabled",
-            "type": "boolean"
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
           },
-          "long_break_minutes": {
-            "maximum": 60.0,
-            "minimum": 5.0,
-            "title": "Long Break Minutes",
-            "type": "integer"
+          "status": {
+            "$ref": "#/components/schemas/Status-Input"
+          },
+          "tag": {
+            "$ref": "#/components/schemas/Tag"
           }
         },
         "required": [
-          "focus_minutes",
-          "break_minutes",
-          "blocks",
-          "long_break_enabled",
-          "long_break_minutes"
+          "id",
+          "mode",
+          "tag",
+          "started_at",
+          "ended_at",
+          "focus_seconds",
+          "paused_seconds",
+          "status",
+          "mode_config"
         ],
-        "title": "PomodoroConfig",
+        "title": "SessionIn",
+        "type": "object"
+      },
+      "SessionList": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/SessionOut"
+            },
+            "title": "Sessions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions"
+        ],
+        "title": "SessionList",
+        "type": "object"
+      },
+      "SessionOut": {
+        "properties": {
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "blocks_completed": {
+            "title": "Blocks Completed",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "ended_at": {
+            "format": "date-time",
+            "title": "Ended At",
+            "type": "string"
+          },
+          "focus_seconds": {
+            "title": "Focus Seconds",
+            "type": "integer"
+          },
+          "goal": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goal"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/Mode"
+          },
+          "mode_config": {
+            "discriminator": {
+              "mapping": {
+                "countdown": "#/components/schemas/CountdownConfig",
+                "pomodoro": "#/components/schemas/app__sessions__PomodoroConfig",
+                "unlimited": "#/components/schemas/UnlimitedConfig"
+              },
+              "propertyName": "mode"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CountdownConfig"
+              },
+              {
+                "$ref": "#/components/schemas/app__sessions__PomodoroConfig"
+              },
+              {
+                "$ref": "#/components/schemas/UnlimitedConfig"
+              }
+            ],
+            "title": "Mode Config"
+          },
+          "paused_seconds": {
+            "title": "Paused Seconds",
+            "type": "integer"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/app__models__enums__Status"
+          },
+          "tag": {
+            "$ref": "#/components/schemas/Tag"
+          }
+        },
+        "required": [
+          "id",
+          "mode",
+          "tag",
+          "goal",
+          "started_at",
+          "ended_at",
+          "focus_seconds",
+          "paused_seconds",
+          "status",
+          "mode_config",
+          "blocks_completed",
+          "archived_at",
+          "created_at"
+        ],
+        "title": "SessionOut",
         "type": "object"
       },
       "SettingsOut": {
@@ -162,7 +411,7 @@
           "pomodoro_config": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/PomodoroConfig"
+                "$ref": "#/components/schemas/app__settings_api__PomodoroConfig"
               },
               {
                 "type": "null"
@@ -249,7 +498,7 @@
           "pomodoro_config": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/PomodoroConfig"
+                "$ref": "#/components/schemas/app__settings_api__PomodoroConfig"
               },
               {
                 "type": "null"
@@ -308,17 +557,125 @@
         "title": "SignUpRequest",
         "type": "object"
       },
-      "Status": {
+      "Status-Input": {
+        "enum": [
+          "completed",
+          "ended_early"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "SyncItemResult": {
+        "description": "The outcome for one item of a sync request. `session` is set unless rejected, `error`\nonly when rejected. `id` is null when the item had no usable id.",
         "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ErrorInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
+          },
+          "index": {
+            "title": "Index",
+            "type": "integer"
+          },
+          "session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "status": {
+            "enum": [
+              "created",
+              "existing",
+              "rejected"
+            ],
             "title": "Status",
             "type": "string"
           }
         },
         "required": [
+          "index",
+          "id",
           "status"
         ],
-        "title": "Status",
+        "title": "SyncItemResult",
+        "type": "object"
+      },
+      "SyncRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "sessions": {
+            "items": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SessionIn"
+                },
+                {}
+              ]
+            },
+            "maxItems": 100,
+            "minItems": 1,
+            "title": "Sessions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions"
+        ],
+        "title": "SyncRequest",
+        "type": "object"
+      },
+      "SyncResult": {
+        "description": "Counts by status, and one result per request item in request order.",
+        "properties": {
+          "created": {
+            "title": "Created",
+            "type": "integer"
+          },
+          "existing": {
+            "title": "Existing",
+            "type": "integer"
+          },
+          "rejected": {
+            "title": "Rejected",
+            "type": "integer"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SyncItemResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "created",
+          "existing",
+          "rejected",
+          "results"
+        ],
+        "title": "SyncResult",
         "type": "object"
       },
       "Tag": {
@@ -332,6 +689,41 @@
         ],
         "title": "Tag",
         "type": "string"
+      },
+      "UnlimitedConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "const": "unlimited",
+            "title": "Mode",
+            "type": "string"
+          },
+          "reminder_minutes": {
+            "anyOf": [
+              {
+                "enum": [
+                  15,
+                  30,
+                  45,
+                  60,
+                  90,
+                  120
+                ],
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reminder Minutes"
+          }
+        },
+        "required": [
+          "mode",
+          "reminder_minutes"
+        ],
+        "title": "UnlimitedConfig",
+        "type": "object"
       },
       "UserOut": {
         "properties": {
@@ -407,6 +799,118 @@
           "links"
         ],
         "title": "YoutubeLinksOut",
+        "type": "object"
+      },
+      "app__health__Status": {
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Status",
+        "type": "object"
+      },
+      "app__models__enums__Status": {
+        "enum": [
+          "completed",
+          "ended_early"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "app__sessions__PomodoroConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "blocks": {
+            "maximum": 8.0,
+            "minimum": 1.0,
+            "title": "Blocks",
+            "type": "integer"
+          },
+          "break_minutes": {
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Break Minutes",
+            "type": "integer"
+          },
+          "focus_minutes": {
+            "maximum": 90.0,
+            "minimum": 5.0,
+            "title": "Focus Minutes",
+            "type": "integer"
+          },
+          "long_break_enabled": {
+            "title": "Long Break Enabled",
+            "type": "boolean"
+          },
+          "long_break_minutes": {
+            "maximum": 60.0,
+            "minimum": 5.0,
+            "title": "Long Break Minutes",
+            "type": "integer"
+          },
+          "mode": {
+            "const": "pomodoro",
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode",
+          "focus_minutes",
+          "break_minutes",
+          "blocks",
+          "long_break_enabled",
+          "long_break_minutes"
+        ],
+        "title": "PomodoroConfig",
+        "type": "object"
+      },
+      "app__settings_api__PomodoroConfig": {
+        "additionalProperties": false,
+        "description": "Last-used Pomodoro configuration; ranges are AC3.2.\n\nMaps to the frontend `PomodoroConfig` (timer/config.ts) in snake_case, without `mode`:\nfocusMinutes -> focus_minutes, breakMinutes -> break_minutes, blocks -> blocks,\nlongBreakEnabled -> long_break_enabled, longBreakMinutes -> long_break_minutes.",
+        "properties": {
+          "blocks": {
+            "maximum": 8.0,
+            "minimum": 1.0,
+            "title": "Blocks",
+            "type": "integer"
+          },
+          "break_minutes": {
+            "maximum": 30.0,
+            "minimum": 1.0,
+            "title": "Break Minutes",
+            "type": "integer"
+          },
+          "focus_minutes": {
+            "maximum": 90.0,
+            "minimum": 5.0,
+            "title": "Focus Minutes",
+            "type": "integer"
+          },
+          "long_break_enabled": {
+            "title": "Long Break Enabled",
+            "type": "boolean"
+          },
+          "long_break_minutes": {
+            "maximum": 60.0,
+            "minimum": 5.0,
+            "title": "Long Break Minutes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "focus_minutes",
+          "break_minutes",
+          "blocks",
+          "long_break_enabled",
+          "long_break_minutes"
+        ],
+        "title": "PomodoroConfig",
         "type": "object"
       }
     }
@@ -575,6 +1079,494 @@
         "summary": "Sign Up",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/sessions": {
+      "post": {
+        "description": "Save one finished session (AC6.3). Idempotent on `id` (AC13.4): a repeat returns 200 with\nthe stored session and changes nothing.",
+        "operationId": "save_session_api_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such session"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict (see message)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Save Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/archived": {
+      "delete": {
+        "description": "Permanently delete every archived session and return how many (AC11.6). Non-archived\nsessions are never touched, and no endpoint deletes one (AC11.7).",
+        "operationId": "delete_archived_api_sessions_archived_delete",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletedCount"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such session"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict (see message)"
+          }
+        },
+        "summary": "Delete Archived",
+        "tags": [
+          "sessions"
+        ]
+      },
+      "get": {
+        "description": "The Archive view (AC11.3): archived sessions, most recently archived first.",
+        "operationId": "list_archived_api_sessions_archived_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such session"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict (see message)"
+          }
+        },
+        "summary": "List Archived",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/sync": {
+      "post": {
+        "description": "Save a batch of 1 to 100 sessions (AC13.3), idempotent per `id` (AC13.4).\n\nReturns 200 with one result per item, in request order: `created`, `existing` (already\nsaved; the stored copy is returned) or `rejected` (with an `error`; an id owned by another\naccount is `conflict`). Valid items are saved even when others are rejected, so one bad\nsession never blocks the queue (AC13.5). Only 401 and a malformed envelope (not a\n`sessions` list, or 0 or more than 100 items: 422) fail the whole request.",
+        "operationId": "sync_sessions_api_sessions_sync_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such session"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict (see message)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Sync Sessions",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}": {
+      "patch": {
+        "description": "Change tag and/or goal of a non-archived session (AC11.1). Archived sessions are\nread-only (AC11.4): 409.",
+        "operationId": "edit_session_api_sessions__session_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionEdit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such session"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict (see message)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Edit Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/archive": {
+      "post": {
+        "description": "Archive a session (AC11.2). Already archived: unchanged, still 200.",
+        "operationId": "archive_session_api_sessions__session_id__archive_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such session"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict (see message)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Archive Session",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/api/sessions/{session_id}/restore": {
+      "post": {
+        "description": "Return an archived session to history exactly as it was (AC11.5). Not archived:\nunchanged, still 200.",
+        "operationId": "restore_session_api_sessions__session_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such session"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict (see message)"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Restore Session",
+        "tags": [
+          "sessions"
         ]
       }
     },
@@ -751,7 +1743,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Status"
+                  "$ref": "#/components/schemas/app__health__Status"
                 }
               }
             },
@@ -773,7 +1765,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Status"
+                  "$ref": "#/components/schemas/app__health__Status"
                 }
               }
             },

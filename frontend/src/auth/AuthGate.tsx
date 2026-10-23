@@ -1,7 +1,15 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { AccountContext, type Account } from './AccountContext.tsx'
 import { AuthError, httpAuthApi, type AuthApi, type User } from './api.ts'
 import AuthScreen from './AuthScreen.tsx'
-import { cacheUser, clearLocalUserData, forgetCachedUser, loadCachedUser } from './localData.ts'
+import {
+  cacheUser,
+  clearLocalUserData,
+  forgetCachedUser,
+  hasUnsavedSession,
+  loadCachedUser,
+  USER_KEY,
+} from './localData.ts'
 
 interface Props {
   children: ReactNode
@@ -10,8 +18,9 @@ interface Props {
 
 /**
  * Shows the sign-in screen until the user is signed in, then the app (AC1.2).
- * If the server can't be reached but this device remembers a signed-in user, the app opens
- * anyway so the timers keep working offline (F13).
+ * If the server can't be reached (offline, timeout, 5xx) but this device remembers a signed-in
+ * user, the app opens anyway so the timers keep working offline (F13). The app shows the
+ * account bar itself, on its setup screen, through `AccountContext`.
  */
 export default function AuthGate({ children, api = httpAuthApi }: Props) {
   const [user, setUser] = useState<User | null>(null)
@@ -30,8 +39,9 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
       })
       .catch((error: unknown) => {
         if (cancelled) return
-        if (error instanceof AuthError && error.kind === 'network') setUser(loadCachedUser())
-        else setUser(null)
+        const unreachable =
+          error instanceof AuthError && (error.kind === 'network' || error.kind === 'server')
+        setUser(unreachable ? loadCachedUser() : null)
       })
       .finally(() => {
         if (!cancelled) setChecking(false)
@@ -41,22 +51,41 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
     }
   }, [api])
 
-  function signedIn(next: User) {
-    cacheUser(next)
-    setUser(next)
-  }
-
-  async function signOut() {
-    setSignOutError('')
-    try {
-      await api.signOut()
-    } catch {
-      setSignOutError("Couldn't sign out. Check your connection and try again.")
-      return
+  // Signing out in one tab removes the remembered user (or clears storage); the others follow.
+  useEffect(() => {
+    function onStorage(event: StorageEvent) {
+      if (event.key === null || (event.key === USER_KEY && event.newValue === null)) {
+        setUser(null)
+      }
     }
-    await clearLocalUserData()
-    setUser(null)
-  }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  const account = useMemo<Account | null>(() => {
+    if (!user) return null
+    return {
+      user,
+      signOutError,
+      signOut: async () => {
+        setSignOutError('')
+        if (hasUnsavedSession()) {
+          setSignOutError(
+            'A session is still running or waiting to be saved on this device. Finish it before signing out.',
+          )
+          return
+        }
+        try {
+          await api.signOut()
+        } catch {
+          setSignOutError("Couldn't sign out. Check your connection and try again.")
+          return
+        }
+        await clearLocalUserData()
+        setUser(null)
+      },
+    }
+  }, [user, signOutError, api])
 
   if (checking) {
     return (
@@ -65,18 +94,17 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
       </main>
     )
   }
-  if (!user) return <AuthScreen api={api} onSignedIn={signedIn} />
+  if (!user) {
+    return (
+      <AuthScreen
+        api={api}
+        onSignedIn={(next) => {
+          cacheUser(next)
+          setUser(next)
+        }}
+      />
+    )
+  }
 
-  return (
-    <>
-      <header className="account-bar">
-        <span>{user.email}</span>
-        <button type="button" onClick={() => void signOut()}>
-          Sign out
-        </button>
-        {signOutError && <span role="alert">{signOutError}</span>}
-      </header>
-      {children}
-    </>
-  )
+  return <AccountContext.Provider value={account}>{children}</AccountContext.Provider>
 }

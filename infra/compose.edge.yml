@@ -1,0 +1,67 @@
+# Shared edge of the Droplet (#27): one Caddy in front of both environments.
+#
+#   docker compose -f infra/compose.edge.yml up -d --wait     # project focus-edge
+#
+# Start this project first: it owns the two edge networks the app projects join
+# (infra/compose.prod.yml, `external: true`). Each environment gets its own network,
+# so the dev app can't reach the prod app; only Caddy sits on both. Caddy has a fixed
+# address on each, which the app trusts for X-Forwarded-For (FORWARDED_ALLOW_IPS in
+# infra/env/<env>.env). Keep the subnets, addresses and infra/env/*.env in step.
+#
+# No secrets and no .env: Caddy needs none. Routing and HTTPS: infra/caddy/Caddyfile.
+
+name: focus-edge
+
+services:
+  caddy:
+    image: caddy:2.11.4-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and ACME account: keep them, or a re-create re-issues
+      # certificates and can hit Let's Encrypt's rate limits.
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      prod:
+        ipv4_address: 172.16.10.2
+      dev:
+        ipv4_address: 172.16.20.2
+    healthcheck:
+      # Caddy accepts connections on :80 (the http->https redirect). A bare TCP connect
+      # (busybox nc), so the probe adds no log lines; the admin API logs every request.
+      test: ["CMD", "nc", "-z", "127.0.0.1", "80"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    environment:
+      # Go runtime soft limit, below mem_limit, so the GC works harder before the
+      # kernel's OOM killer steps in.
+      GOMEMLIMIT: 80MiB
+    mem_limit: 96m
+    restart: unless-stopped
+
+networks:
+  # Outside Docker's default address pools (172.17-31.0.0/16, 192.168.0.0/16) and
+  # DigitalOcean's VPC range (10.x), so nothing else on the host takes these subnets.
+  # Docker hands out dynamic addresses (the apps') from ip_range only, the upper half.
+  # Caddy's fixed address sits in the lower half, so an app that starts first after a
+  # reboot or restart can never take it (Caddy would then fail with "invalid IP" and
+  # both sites would stay down). scripts/check_prod_compose.py enforces this.
+  prod:
+    ipam:
+      config:
+        - subnet: 172.16.10.0/24
+          ip_range: 172.16.10.128/25
+  dev:
+    ipam:
+      config:
+        - subnet: 172.16.20.0/24
+          ip_range: 172.16.20.128/25
+
+volumes:
+  caddy-data:
+  caddy-config:

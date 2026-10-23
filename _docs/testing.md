@@ -12,15 +12,18 @@
 | `make test-backend-unit` | `backend/tests/unit/` only |
 | `make test-backend-integration` | `backend/tests/integration/` only, with `-rs` (prints why anything skipped) |
 | `make test-frontend` | `vitest run` in `frontend/` |
+| Frontend dev server | `npm --prefix frontend run dev` serves the app on port 5173 and proxies `/api` to the backend on `http://localhost:8000` (`server.proxy` in `vite.config.ts`), so the session cookie stays first-party. Start the backend first (`make up`, or run it from `backend/`; local Compose sets `COOKIE_SECURE=0`, which plain-http sign-in needs). The proxy applies to the dev server only, not to tests or the production build |
 | `make test-e2e` | Playwright against the running stack (`make up` first); fails until #23 adds the suites |
 | `make test-scripts` | `scripts/tests/`: the repo tooling, e.g. the reviewer App token and review scripts (#70), with the backend's locked pytest plus the token script's pinned dependencies. No network or real key: GitHub, `uv` and `gh` are faked |
 | `make test-server` | `infra/server/tests/run.sh`: runs the Droplet setup script `infra/server/bootstrap.sh` (#25) in a fresh `ubuntu:24.04` container three times. Checks packages, Docker and Compose, unattended-upgrades config, the `deploy` user (docker, no sudo), file permissions and the sshd config, then makes real SSH logins: the CI key runs only its forced command, root and keys in `~deploy/.ssh` are refused, the admin user still gets in. The second run must change nothing; the third must flag a deploy key without a forced command. Needs Docker and network (apt); about 30 s. No systemd in a container, so service management is the one part only tested on the Droplet |
+| `make test-infra` | `infra/tests/check_config.sh` (#27): renders `infra/compose.edge.yml` and `infra/compose.prod.yml` as prod and dev with dummy secrets (`docker compose config`) and checks that they refuse to render without `APP_TAG` or `POSTGRES_PASSWORD`. Checks the collector picks the right exporters, runs `otelcol validate` on both collector configs, and runs `caddy validate`, `caddy fmt` and `caddy adapt` on the Caddyfile. Then `scripts/check_prod_compose.py` checks the deploy rules: every container has a memory limit, the 2 GiB budget holds, dev stays below prod, only Caddy publishes ports, Caddy's fixed addresses sit outside the networks' `ip_range`, `COOKIE_SECURE=1`, `MIGRATE_ON_START=0`, proxy headers are trusted only from Caddy's address, and Caddy routes each host to its own environment. Needs Docker; about 10 s |
+| `make test-prod-stack` | `infra/tests/prod_stack.sh` (#27): starts the real edge, prod and dev projects under test names (`FOCUS_TEST_PREFIX`, default `focus-smoke`) on the app image (built first unless `APP_TAG` names a local one). Caddy runs the real Caddyfile with its internal CA on `127.0.0.1:18080/18443`. Checks the one-shot migration, health, HTTPS and the frontend for both hosts, the http to https redirect, and per-host routing (with dev's app stopped, dev answers 502 and prod 200). Restarts both apps before Caddy, as after a reboot, and checks Caddy still starts. Signs up and signs in through Caddy and checks the session cookie is `Secure`, `HttpOnly` and `SameSite=Lax` (#8). Also checks that proxy headers are trusted from Caddy only, and that dev's collector forwards traces with basic auth and the right environment and version to a fake Grafana Cloud gateway (`infra/tests/fake_otlp.py`). Removes everything it started, volumes included; refuses to run with the real project names or where `/opt/focus` exists. Not part of `make test` (like `test-e2e`); CI runs it. Needs Docker; about 2 minutes with the image built |
 | `make lint-backend` | `ruff check`, `ruff format --check`, `mypy` (strict) |
 | `make lint-frontend` | `eslint`, `prettier --check`, `tsc -b` (strict) |
-| `make lint-scripts` | `ruff check`, `ruff format --check`, `mypy` (strict) on `scripts/*.py` and `scripts/tests/`, with the backend's tools and config. `create_backlog.py` (the one-off board seeding script) is excluded |
+| `make lint-scripts` | `ruff check`, `ruff format --check`, `mypy` (strict) on `scripts/*.py`, `scripts/tests/` and `infra/tests/*.py`, with the backend's tools and config. `create_backlog.py` (the one-off board seeding script) is excluded |
 | `make lint-shell` | `shellcheck` (pinned `shellcheck-py`, run through `uvx`) on every tracked `*.sh` |
 
-Add `JUNIT_DIR=reports` to any `test-*` target except `test-e2e` and `test-server` to also write a JUnit XML report to `reports/<suite>.xml` (git-ignored). Playwright end-to-end tests join `make test` with #23.
+Add `JUNIT_DIR=reports` to any `test-*` target except `test-e2e`, `test-server`, `test-infra` and `test-prod-stack` to also write a JUnit XML report to `reports/<suite>.xml` (git-ignored). Playwright end-to-end tests join `make test` with #23.
 
 ## CI
 
@@ -34,9 +37,16 @@ Add `JUNIT_DIR=reports` to any `test-*` target except `test-e2e` and `test-serve
 | `Frontend unit tests` | `make test-frontend` | |
 | `End-to-end (Compose stack)` | `make up`, `make check-stack`, then `make test-e2e` when `frontend/playwright.config.*` exists | Until #23 lands, Playwright doesn't run. The job then posts a "Playwright not run" warning and job summary, and only checks the stack: health, frontend, sign-up over plain http (session cookie not `Secure`), telemetry and no query strings or cookies in telemetry. `PLAYWRIGHT_BASE_URL` is `http://localhost:8000` |
 
+Two more jobs aren't required checks (#27, [deployment.md → Images](deployment.md#images-and-production-compose-27)):
+
+| Job | Runs | Notes |
+|---|---|---|
+| `Image build and production stack smoke` | `make test-infra`, `docker build` of the app image tagged with the commit SHA, then `make test-prod-stack` on it | Every PR and push. On `main` it also saves the tested image as a one-day artifact. Uploads `test-reports-prod-stack` (every container's logs) |
+| `Publish image to GHCR` | Loads that artifact and pushes `ghcr.io/ybenzine/ineedtofocus:<sha>` | Only on push to `main`, and only after the five required jobs and the image job passed on that commit (`needs:`). The only job with `packages: write` (`GITHUB_TOKEN`, no stored secret); it checks out no code |
+
 **Reports.** Each test job uploads a `test-reports-<job>` artifact (14 days): JUnit XML. For end-to-end, the artifact holds `docker compose ps` and the stack's logs, plus `playwright-report/` and `test-results/` once Playwright runs. Each test job also writes a pass/fail/skip table, with skip reasons, to the run's summary page. Coverage isn't collected yet: it needs `pytest-cov` and `@vitest/coverage-v8` in the locked dependencies.
 
-**Actions** are pinned to commit SHAs (with the version in a comment). The workflow token is read-only (`contents: read`), and checkouts don't keep the token. CI uses no secrets.
+**Actions** are pinned to commit SHAs (with the version in a comment). The workflow token is read-only (`contents: read`), and checkouts don't keep the token. CI uses no stored secrets: the publish job alone gets `packages: write` on its `GITHUB_TOKEN`.
 
 ## Layers
 

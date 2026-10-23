@@ -1,7 +1,11 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AuthError, type AuthApi, type User } from './api.ts'
+import AccountBar from './AccountBar.tsx'
 import AuthGate from './AuthGate.tsx'
+import { USER_KEY } from './localData.ts'
+import { PREFERENCES_KEY } from '../setup/preferences.ts'
+import { ACTIVE_SESSION_KEY } from '../timer/store.ts'
 
 const user: User = { id: 'u1', email: 'a@b.co', created_at: '2026-10-23T00:00:00Z' }
 
@@ -18,6 +22,7 @@ function makeApi(overrides: Partial<AuthApi> = {}): AuthApi {
 function renderGate(api: AuthApi) {
   return render(
     <AuthGate api={api}>
+      <AccountBar />
       <p>the timer app</p>
     </AuthGate>,
   )
@@ -44,9 +49,16 @@ describe('AuthGate', () => {
   })
 
   it('opens the app offline for a remembered user', async () => {
-    localStorage.setItem('intf.user', JSON.stringify(user))
+    localStorage.setItem(USER_KEY, JSON.stringify(user))
     const offline = new AuthError('network', 'offline')
     renderGate(makeApi({ me: vi.fn().mockRejectedValue(offline) }))
+    expect(await screen.findByText('the timer app')).toBeInTheDocument()
+  })
+
+  it('opens the app for a remembered user when the server returns an error', async () => {
+    localStorage.setItem(USER_KEY, JSON.stringify(user))
+    const down = new AuthError('server', 'down')
+    renderGate(makeApi({ me: vi.fn().mockRejectedValue(down) }))
     expect(await screen.findByText('the timer app')).toBeInTheDocument()
   })
 
@@ -128,13 +140,62 @@ describe('AuthGate', () => {
 
   it('signs out and clears local user data from the device', async () => {
     const api = makeApi({ me: vi.fn().mockResolvedValue(user) })
+    const deleted: string[] = []
+    vi.stubGlobal('indexedDB', {
+      databases: () => Promise.resolve([{ name: 'sessions' }]),
+      deleteDatabase: (name: string) => {
+        deleted.push(name)
+        const request: { onsuccess?: () => void } = {}
+        queueMicrotask(() => request.onsuccess?.())
+        return request
+      },
+    })
     renderGate(api)
     await screen.findByText('the timer app')
-    localStorage.setItem('intf.setup.preferences', '{"goal":"secret"}')
+    localStorage.setItem(PREFERENCES_KEY, '{"goal":"secret"}')
+    sessionStorage.setItem('anything', 'x')
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     expect(api.signOut).toHaveBeenCalled()
     expect(localStorage.length).toBe(0)
+    expect(sessionStorage.length).toBe(0)
+    expect(deleted).toEqual(['sessions'])
+    vi.unstubAllGlobals()
+  })
+
+  it('refuses to sign out while a session is running or waiting to be saved', async () => {
+    const api = makeApi({ me: vi.fn().mockResolvedValue(user) })
+    renderGate(api)
+    await screen.findByText('the timer app')
+    localStorage.setItem(ACTIVE_SESSION_KEY, '{"pendingRecord":{}}')
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Finish it before signing out')
+    expect(api.signOut).not.toHaveBeenCalled()
+    expect(localStorage.getItem(ACTIVE_SESSION_KEY)).not.toBeNull()
+    expect(screen.getByText('the timer app')).toBeInTheDocument()
+  })
+
+  it('signs out other tabs when the remembered user is removed', async () => {
+    renderGate(makeApi({ me: vi.fn().mockResolvedValue(user) }))
+    await screen.findByText('the timer app')
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: USER_KEY, newValue: null }))
+    })
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+  })
+
+  it('moves focus to the first invalid field and links the password hint', async () => {
+    renderGate(makeApi())
+    await screen.findByRole('heading', { name: 'Sign in' })
+    fireEvent.click(screen.getByRole('button', { name: 'Create an account' }))
+    expect(screen.getByRole('heading', { name: 'Create your account' })).toHaveFocus()
+    expect(screen.getByLabelText('Password')).toHaveAttribute('aria-describedby', 'password-hint')
+    fill('a@b.co', 'short')
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
+    await waitFor(() => expect(screen.getByLabelText('Password')).toHaveFocus())
+    fill('nope', 'password1')
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
+    await waitFor(() => expect(screen.getByLabelText('Email')).toHaveFocus())
   })
 
   it('keeps the user signed in and says so when sign-out fails', async () => {

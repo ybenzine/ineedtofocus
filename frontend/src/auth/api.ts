@@ -5,7 +5,10 @@ export interface User {
 }
 
 export type AuthErrorKind =
-  'invalid' | 'duplicate' | 'password' | 'rate_limited' | 'network' | 'other'
+  'invalid' | 'duplicate' | 'password' | 'rate_limited' | 'network' | 'server' | 'other'
+
+/** A stalled connection counts as offline, so a remembered user can still reach the timers. */
+export const ME_TIMEOUT_MS = 5000
 
 /** A failed auth call, already mapped to something the screen can show. */
 export class AuthError extends Error {
@@ -37,10 +40,11 @@ async function readError(response: Response): Promise<ErrorBody['error']> {
   }
 }
 
-async function call(path: string, init?: RequestInit): Promise<Response> {
+async function call(path: string, init?: RequestInit, timeoutMs?: number): Promise<Response> {
   try {
     return await fetch(path, {
       ...init,
+      signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
       headers: init?.body ? { 'Content-Type': 'application/json' } : undefined,
       credentials: 'same-origin',
     })
@@ -69,6 +73,9 @@ async function toError(response: Response): Promise<AuthError> {
     const seconds = Number.isFinite(parsed) && parsed > 0 ? Math.ceil(parsed) : undefined
     return new AuthError('rate_limited', 'Too many attempts.', seconds)
   }
+  if (response.status >= 500) {
+    return new AuthError('server', 'The server is having trouble. Try again in a moment.')
+  }
   return new AuthError('other', 'Something went wrong. Try again in a moment.')
 }
 
@@ -80,7 +87,7 @@ async function credentials(path: string, email: string, password: string): Promi
 
 export const httpAuthApi: AuthApi = {
   async me() {
-    const response = await call('/api/auth/me')
+    const response = await call('/api/auth/me', undefined, ME_TIMEOUT_MS)
     if (response.status === 401) return null
     if (!response.ok) throw await toError(response)
     return (await response.json()) as User

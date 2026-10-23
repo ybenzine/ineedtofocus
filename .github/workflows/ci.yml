@@ -6,6 +6,17 @@
 #
 # Each job goes through the same `make` targets as local work (Makefile). Test jobs write
 # JUnit XML to reports/ and upload it as a workflow artifact, even when tests fail.
+#
+# Two more jobs, not required checks (#27):
+#   image    builds the app image, validates the production configs and smoke-tests the
+#            production stack (Caddy + prod + dev) on it. Every PR and push. No credentials.
+#   publish  pushes that same image to ghcr.io/ybenzine/ineedtofocus:<commit sha>. Only on
+#            push to main, only after all five required jobs and `image` passed on that
+#            commit (`needs:`), with GITHUB_TOKEN limited to `packages: write` for this job.
+#            PRs (forks included) never push. No tag or release trigger publishes anything.
+# The dev deploy (#28) hangs off `publish` (a job that `needs: publish`, or a workflow_run
+# on this workflow that deploys github.event.workflow_run.head_sha), so a red main never
+# reaches dev.
 
 name: CI
 
@@ -223,3 +234,82 @@ jobs:
       - name: Stop the stack
         if: always()
         run: docker compose down --volumes --remove-orphans
+
+  image:
+    name: Image build and production stack smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      IMAGE: ghcr.io/ybenzine/ineedtofocus:${{ github.sha }}
+      APP_TAG: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate production configs (Compose, Caddy, Collector, deploy rules)
+        run: make test-infra
+      - name: Build the app image (root Dockerfile)
+        env:
+          REVISION: ${{ github.sha }}
+        run: docker build --label "org.opencontainers.image.revision=$REVISION" -t "$IMAGE" .
+      - name: Smoke-test the production stack on this image
+        run: make test-prod-stack SMOKE_LOG_DIR=reports/prod-stack
+      - name: Save the tested image for `publish`
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker save "$IMAGE" | gzip -1 > image.tar.gz
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: app-image
+          path: image.tar.gz
+          if-no-files-found: error
+          compression-level: 0 # already gzipped
+          retention-days: 1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: test-reports-prod-stack
+          path: reports/
+          if-no-files-found: warn
+          retention-days: 14
+
+  publish:
+    name: Publish image to GHCR
+    # Never on pull requests: only commits on main that passed every check below.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, backend-unit, backend-integration, frontend-unit, e2e, image]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/ybenzine/ineedtofocus:${{ github.sha }}
+    steps:
+      # No checkout: this job runs no repository code, it only pushes the tested image.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: app-image
+      - name: Load the image `image` tested
+        env:
+          REVISION: ${{ github.sha }}
+        run: |
+          gunzip -c image.tar.gz | docker load
+          label=$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
+          [[ $label == "$REVISION" ]] || { echo "::error::image revision $label != $REVISION"; exit 1; }
+      - name: Push to GHCR, tagged with the commit SHA
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+          docker push "$IMAGE"
+          digest=$(docker image inspect "$IMAGE" --format '{{ index .RepoDigests 0 }}')
+          docker logout ghcr.io
+          {
+            echo "### Published image"
+            echo ""
+            echo "| Tag | Digest |"
+            echo "|---|---|"
+            echo "| \`$IMAGE\` | \`$digest\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
