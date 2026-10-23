@@ -5,8 +5,9 @@
 # stands in for Docker: it records every call and the environment variables it got.
 #
 #   installer   refuses non-root, malformed shas, commits not on main and trees with
-#               symlinks; installs root-owned files the deploy user can't change;
-#               starts the edge; on a change, recreates Caddy and the collectors
+#               symlinks; writes the full diff and installs nothing without a typed
+#               "yes" on a terminal; installs root-owned files the deploy user can't
+#               change; starts the edge; on a change, recreates Caddy and the collectors
 #   refusals    anything but `deploy <sha> sha256:<digest>`, `rollback` or `status` is
 #               refused with exit status 2 before any docker call (shells, scp, sftp,
 #               injection, case, spacing, length, an unknown profile)
@@ -81,11 +82,15 @@ echo "# changed" >>"$up/infra/otel-collector/config.yaml"
 g add -A && g commit -qm D
 D=$(g rev-parse HEAD)
 
-install_at() { # <sha>: run the installer as root; sets out and rc
+install_at() { # <sha>: run the installer as root, confirmed with --yes; sets out and rc
   rc=0
   # file:// goes through git's transport like the clone from GitHub: only commits
   # reachable from main arrive.
-  out=$(bash "$SRC/server/install.sh" --repo "file://$up" "$@" 2>&1) || rc=$?
+  out=$(bash "$SRC/server/install.sh" --repo "file://$up" --yes "$@" 2>&1) || rc=$?
+}
+install_typing() { # <answer> <sha>: run it on a pseudo-terminal, typing <answer>
+  rc=0
+  out=$(printf '%s\n' "$1" | script -qec "bash $SRC/server/install.sh --repo file://$up $2" /dev/null 2>&1) || rc=$?
 }
 
 echo "--- Installer refuses what it mustn't install"
@@ -109,6 +114,16 @@ check "commit present but not on main: says so" contains "$out" "$C isn't on mai
 install_at "$B"
 check "tree with a symlink: refused" [ "$rc" -ne 0 ]
 check "tree with a symlink: says so" contains "$out" "other than regular files"
+rc=0
+out=$(bash "$SRC/server/install.sh" --repo "file://$up" "$A" 2>&1) || rc=$?
+check "no terminal and no --yes: stops" eq "$rc" 1
+check "no terminal: says it needs one" contains "$out" "confirming needs a terminal"
+check "the full diff is saved for review, root only" eq "$(mode_owner "/root/focus-install-$A.diff")" "600 root:root"
+check "first-install diff shows every file" contains "$(cat "/root/focus-install-$A.diff")" "+++ b/compose.prod.yml"
+check "it lists the files that differ" contains "$out" "    compose.sh"
+install_typing no "$A"
+check "typing anything but yes: stops" [ "$rc" -ne 0 ]
+check "typing no: says nothing was installed" contains "$out" "stopped: nothing installed"
 check "nothing installed so far" [ ! -e /opt/focus/infra ]
 check "no forced command so far" [ ! -e /opt/focus/bin/focus-ci ]
 
@@ -352,10 +367,17 @@ check "no docker call while another holder had the lock" \
   awk -v a="$first" -v b="$(cat /tmp/released)" 'BEGIN { exit !(a >= b) }'
 
 echo "--- Installing a change"
+install_typing no "$D"
+check "a change: stops unless confirmed" [ "$rc" -ne 0 ]
+check "a change: still the old revision" eq "$(cat /opt/focus/infra/REVISION)" "$A"
+diff_text=$(cat "/root/focus-install-$D.diff")
+check "the diff shows the Caddyfile change" contains "$diff_text" "+# changed"
+check "the diff is against the installed files" contains "$diff_text" "--- a/caddy/Caddyfile"
+check "the diff has no symlink in it" not_contains "$diff_text" "b/link"
 mark
-install_at "$D"
+install_typing yes "$D"
 printf '%s\n' "$out" | sed 's/^/     | /'
-check "second install succeeds" eq "$rc" 0
+check "second install succeeds once yes is typed" eq "$rc" 0
 calls=$(new_calls)
 check "REVISION updated" eq "$(cat /opt/focus/infra/REVISION)" "$D"
 check "previous copy kept" eq "$(cat /opt/focus/infra.previous/REVISION)" "$A"

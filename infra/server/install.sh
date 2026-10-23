@@ -18,7 +18,12 @@
 #   1. Clones main from GitHub over HTTPS (a fresh bare clone of that one branch, so
 #      only commits on main are present) and checks that <sha> is on main. infra/ at
 #      <sha> must hold regular files only: no symlinks or submodules.
-#   2. Shows which commits and files changed since the installed revision.
+#   2. Writes the full diff between what is installed now and infra/ at <sha> (every
+#      file, as it is on disk) to /root/focus-install-<sha>.diff, prints the commits and
+#      a summary, and asks for a typed "yes" on the terminal. Answering "diff" pages
+#      through the whole diff first; anything else stops without changing anything.
+#      Without a terminal (no ssh -t) it stops too. This is the one place where Yacine
+#      sees exactly what will run as root, so read the diff.
 #   3. Under the deploy lock (/opt/focus/deploy.lock, the one focus-ci takes), so it
 #      never swaps files under a running deploy: replaces /opt/focus/infra with infra/
 #      at <sha>, plus a REVISION file, all root:root and not writable by group or
@@ -34,7 +39,9 @@
 # It never touches the deploy keys (/etc/ssh/authorized_keys/deploy), the .env files,
 # the databases or the apps.
 #
-# --repo <url or path> clones from somewhere else instead of GitHub (tests only).
+# Test-harness options (never needed on the server):
+#   --repo <url or path>   clone from somewhere else instead of GitHub
+#   --yes                  don't ask for confirmation
 set -euo pipefail
 export LC_ALL=C
 
@@ -55,17 +62,69 @@ die() {
   exit 1
 }
 usage() {
-  echo "usage: sudo bash $0 [--repo <url>] <40-character commit sha on main>" >&2
+  echo "usage: sudo bash $0 <40-character commit sha on main>   (tests: --repo <url>, --yes)" >&2
   exit 2
 }
 clean() { env -i PATH="$CLEAN_PATH" HOME=/root "$@" 9<&-; }
 edge() { clean docker compose -f "$INFRA_DIR/compose.edge.yml" "$@"; }
 
+# write_diff <installed revision> <stage>: the full diff, installed files (a/) against
+# the new ones (b/), to $diff_file, plus a summary on the terminal.
+write_diff() {
+  local rc=0
+  diff_file=/root/focus-install-$sha.diff
+  mkdir "$work/empty"
+  ln -s "$( [[ -d $INFRA_DIR ]] && echo "$INFRA_DIR" || echo "$work/empty")" "$work/a"
+  ln -s "$2" "$work/b"
+  {
+    echo "# install.sh: infra/ installed now (a/, revision ${1:-none}) -> infra/ at $sha (b/)"
+    (cd "$work" && diff -ruN a/ b/) || rc=$?
+  } >"$work/install.diff"
+  ((rc <= 1)) || die "couldn't diff the installed files against $sha"
+  install -m 0600 -o root -g root "$work/install.diff" "$diff_file"
+  local changed
+  changed=$(grep -c '^diff -ruN ' "$diff_file" || true)
+  log "$changed file(s) differ from what is installed; full diff: $diff_file"
+  grep '^diff -ruN ' "$diff_file" | sed 's|^diff -ruN a/\(.*\) b/.*|    \1|' || true
+}
+
+# confirm: a typed "yes" on the terminal, or --yes (tests).
+confirm() {
+  if ((assume_yes)); then
+    log "--yes: installing without asking"
+    return 0
+  fi
+  if ! { exec 3<>/dev/tty; } 2>/dev/null; then
+    die "nothing installed: confirming needs a terminal (ssh -t ...). The diff is in $diff_file"
+  fi
+  local answer
+  while true; do
+    printf 'Install infra/ at %s on this server? Type "yes" to install, "diff" to read the full diff, anything else to stop: ' "$sha" >&3
+    IFS= read -r answer <&3 || answer=""
+    case $answer in
+      yes) break ;;
+      diff)
+        if command -v less >/dev/null; then
+          less "$diff_file" <&3 >&3
+        else
+          cat "$diff_file" >&3
+        fi
+        ;;
+      *) die "stopped: nothing installed" ;;
+    esac
+  done
+  exec 3>&-
+}
+
 main() {
   exec </dev/null
-  local repo=$REPO_URL sha=""
+  local repo=$REPO_URL sha="" assume_yes=0
   while (($#)); do
     case $1 in
+      --yes)
+        assume_yes=1
+        shift
+        ;;
       --repo)
         (($# >= 2)) || usage
         repo=$2
@@ -112,7 +171,7 @@ main() {
   chown -R root:root "$stage"
   chmod -R u+rwX,go+rX,go-w "$stage"
 
-  # 2. What changes.
+  # 2. What changes, and a decision.
   local old=""
   [[ -r $INFRA_DIR/REVISION ]] && old=$(<"$INFRA_DIR/REVISION")
   if [[ -z $old ]]; then
@@ -122,10 +181,11 @@ main() {
   elif "${git[@]}" cat-file -e "$old^{commit}" 2>/dev/null; then
     log "changes to infra/ from $old to $sha:"
     "${git[@]}" log --oneline "$old..$sha" -- infra | sed 's/^/    /'
-    "${git[@]}" diff --stat "$old" "$sha" -- infra | sed 's/^/    /'
   else
     log "the installed revision $old isn't on main any more; installing $sha"
   fi
+  write_diff "$old" "$stage"
+  confirm
 
   # 3. Swap under the deploy lock.
   [[ -f $LOCK_FILE ]] || install -m 0644 -o root -g root /dev/null "$LOCK_FILE"

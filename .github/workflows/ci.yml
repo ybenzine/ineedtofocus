@@ -360,13 +360,21 @@ jobs:
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        # Both secrets: deploy. Neither: not set up yet, skip green with a notice.
+        # Only one: a misconfiguration, fail red.
         run: |
           if [[ -n $DEPLOY_SSH_KEY && -n $DEPLOY_KNOWN_HOSTS ]]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if [[ -n $DEPLOY_SSH_KEY || -n $DEPLOY_KNOWN_HOSTS ]]; then
+            missing=DEPLOY_KNOWN_HOSTS
+            [[ -n $DEPLOY_SSH_KEY ]] || missing=DEPLOY_SSH_KEY
+            echo "::error title=Dev environment half set up::the dev environment has one of DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS but not $missing. Set both (_docs/deployment.md, Deploy to dev)."
+            exit 1
+          fi
           echo "configured=false" >> "$GITHUB_OUTPUT"
-          msg="Not deployed: the dev environment has no DEPLOY_SSH_KEY or DEPLOY_KNOWN_HOSTS secret yet. The image is published; see _docs/deployment.md (Deploy to dev) for the one-time setup."
+          msg="Not deployed: the dev environment has neither DEPLOY_SSH_KEY nor DEPLOY_KNOWN_HOSTS yet. The image is published; see _docs/deployment.md (Deploy to dev) for the one-time setup."
           echo "::notice title=Dev deploy skipped::$msg"
           printf '### Deploy to dev: skipped\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

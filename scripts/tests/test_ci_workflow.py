@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -113,3 +114,49 @@ def test_deploy_dev_sends_requests_focus_ci_accepts(jobs: dict[str, Any]) -> Non
     assert re.fullmatch(deploy_re.group(1).strip("^$"), request)
     assert "StrictHostKeyChecking yes" in text and "BatchMode yes" in text
     assert 'rm -rf "$RUNNER_TEMP/deploy-ssh"' in text
+
+
+@pytest.mark.parametrize(
+    ("key", "known_hosts", "status", "configured", "says"),
+    [
+        ("KEY", "HOSTS", 0, "true", ""),
+        ("", "", 0, "false", "::notice title=Dev deploy skipped::"),
+        ("KEY", "", 1, None, "but not DEPLOY_KNOWN_HOSTS"),
+        ("", "HOSTS", 1, None, "but not DEPLOY_SSH_KEY"),
+    ],
+)
+def test_deploy_dev_gate_runs_skips_or_fails(
+    jobs: dict[str, Any],
+    tmp_path: Path,
+    key: str,
+    known_hosts: str,
+    status: int,
+    configured: str | None,
+    says: str,
+) -> None:
+    """The gate step itself, run with bash: deploy with both secrets, skip green with
+    neither, fail red with only one (a half-configured environment)."""
+    step = jobs["deploy-dev"]["steps"][0]
+    output, summary = tmp_path / "output", tmp_path / "summary"
+    output.touch()
+    summary.touch()
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "DEPLOY_SSH_KEY": key,
+        "DEPLOY_KNOWN_HOSTS": known_hosts,
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_STEP_SUMMARY": str(summary),
+    }
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == status, result
+    assert says in result.stdout
+    expected = f"configured={configured}\n" if configured else ""
+    assert output.read_text() == expected
+    if configured == "false":
+        assert "Deploy to dev: skipped" in summary.read_text()
