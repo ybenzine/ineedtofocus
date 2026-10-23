@@ -71,6 +71,15 @@ async def _scalar(url: str, sql: str) -> list[Any]:
         await engine.dispose()
 
 
+async def _exec(url: str, sql: str) -> None:
+    engine: AsyncEngine = create_async_engine(url)
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(sql))
+    finally:
+        await engine.dispose()
+
+
 def test_ac1_1_signup_creates_account_and_signs_in(client: TestClient, test_db_url: str) -> None:
     r = signup(client)
     assert r.status_code == 201
@@ -275,3 +284,49 @@ def test_burst_of_concurrent_signins_cannot_exceed_the_limit(make_client: MakeCl
             )
         assert codes.count(401) <= limit
         assert codes.count(401) + codes.count(429) == 30
+
+
+def test_signup_is_rate_limited_per_client(make_client: MakeClient) -> None:
+    with make_client(signup_max_per_client=2) as c:
+        assert signup(c, "a@example.com").status_code == 201
+        assert signup(c, "b@example.com").status_code == 201
+        blocked = signup(c, "c@example.com")
+        assert blocked.status_code == 429
+        assert blocked.json()["error"]["code"] == "rate_limited"
+        assert int(blocked.headers["retry-after"]) >= 1
+
+
+def test_expired_sessions_are_deleted_on_sign_in(client: TestClient, test_db_url: str) -> None:
+    signup(client)
+    run(
+        _exec(
+            test_db_url,
+            "INSERT INTO auth_sessions (token_hash, user_id, expires_at) "
+            "SELECT 'old' || g, id, now() - interval '1 day' FROM users, generate_series(1, 3) g",
+        )
+    )
+    assert len(run(_scalar(test_db_url, "SELECT 1 FROM auth_sessions"))) == 4
+    client.post("/api/auth/signout")
+    r = client.post("/api/auth/signin", json={"email": "ada@example.com", "password": PASSWORD})
+    assert r.status_code == 200
+    rows = run(_scalar(test_db_url, "SELECT token_hash FROM auth_sessions"))
+    assert len(rows) == 1 and not rows[0][0].startswith("old")
+
+
+def test_cookie_uses_host_prefix_when_secure(make_client: MakeClient) -> None:
+    with make_client(cookie_secure=True) as c:
+        cookie = signup(c).headers["set-cookie"]
+        assert cookie.startswith("__Host-focus_session=")
+        assert "path=/" in cookie.lower() and "domain" not in cookie.lower()
+        token = c.cookies.get("__Host-focus_session")
+        assert token
+        c.cookies.clear()
+        # Replayed over the test client's http: send the cookie by hand.
+        ok = c.get("/api/auth/me", headers={"Cookie": f"__Host-focus_session={token}"})
+        assert ok.status_code == 200
+        old = c.get("/api/auth/me", headers={"Cookie": f"focus_session={token}"})
+        assert old.status_code == 401
+        out = c.post("/api/auth/signout").headers["set-cookie"]
+        assert out.startswith("__Host-focus_session=")
+    with make_client(cookie_secure=False) as c:
+        assert signup(c, "second@example.com").headers["set-cookie"].startswith("focus_session=")

@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     signin_max_failures: int = Field(default=5, ge=1)
     signin_max_failures_per_client: int = Field(default=20, ge=1)
     signin_window_seconds: float = Field(default=900.0, gt=0)
+    # Sign-ups allowed per client within the window (each runs a full argon2 hash).
+    signup_max_per_client: int = Field(default=10, ge=1)
+    signup_window_seconds: float = Field(default=3600.0, gt=0)
 
 
 @lru_cache

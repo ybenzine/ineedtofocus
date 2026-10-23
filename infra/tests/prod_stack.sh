@@ -208,21 +208,23 @@ expect 200 dev.ineedtofoc.us /healthz
 ok "restart order: apps first, then Caddy; the apps' addresses stay out of Caddy's"
 
 # The session cookie behind Caddy (#8): sign up and sign in over HTTPS through Caddy;
-# both answers must set focus_session with Secure, HttpOnly and SameSite=Lax.
+# both answers must set __Host-focus_session with Secure, HttpOnly and SameSite=Lax.
 email="smoke-$RANDOM$RANDOM@example.com"
 password=$(openssl rand -hex 12)
 credentials="{\"email\": \"$email\", \"password\": \"$password\"}"
 for step in signup:201 signin:200; do
   expect "${step#*:}" ineedtofoc.us "/api/auth/${step%%:*}" -D "$work/headers" \
     -H 'Content-Type: application/json' --data "$credentials"
-  cookie=$(grep -i '^set-cookie: focus_session=' "$work/headers" | tr -d '\r') ||
-    fail "${step%%:*} through Caddy set no focus_session cookie"
+  cookie=$(grep -i '^set-cookie: __Host-focus_session=' "$work/headers" | tr -d '\r') ||
+    fail "${step%%:*} through Caddy set no __Host-focus_session cookie"
+  grep -qi '; *Path=/\(;\|$\)' <<< "$cookie" || fail "${step%%:*}: session cookie lacks Path=/"
+  ! grep -qi '; *Domain=' <<< "$cookie" || fail "${step%%:*}: __Host- cookie must not set Domain"
   for attribute in Secure HttpOnly 'SameSite=lax'; do
     grep -qi "; *$attribute\(;\|$\)" <<< "$cookie" ||
       fail "${step%%:*}: session cookie lacks $attribute: ${cookie%%=*}=...${cookie#*;}"
   done
 done
-ok "sign-up and sign-in through Caddy set focus_session with Secure, HttpOnly, SameSite=Lax"
+ok "sign-up and sign-in through Caddy set __Host-focus_session with Secure, HttpOnly, SameSite=Lax, Path=/, no Domain"
 
 # Proxy trust and telemetry, read from the traces that reach the fake Grafana Cloud.
 # Caddy talks plain http to the app; the app records url.scheme=https only when it

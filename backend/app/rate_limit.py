@@ -5,9 +5,26 @@ emails are never held as plain keys. Good enough to slow online guessing (#8).
 """
 
 import hashlib
+import ipaddress
 import time
 from collections import deque
 from collections.abc import Callable
+
+
+def client_key(host: str | None) -> str:
+    """The rate-limit key for a client address: IPv6 clients group by their /64 prefix, so
+    rotating addresses inside one prefix does not escape the limit; IPv4 is kept as is."""
+    if not host:
+        return "unknown"
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return host
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped is not None:
+            return str(ip.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False))
+    return str(ip)
 
 
 class FailureLimiter:
@@ -62,6 +79,10 @@ class FailureLimiter:
         self._failures.pop(pair_key, None)
         q = self._failures.get(client_key)
         if q:
+            # Pop the newest entry. If another attempt from this client started meanwhile, the
+            # entry removed may be theirs rather than ours, but entries are only timestamps,
+            # so the count is still right (this refund removes exactly one). At worst the
+            # surviving timestamp is a little older, which expires sooner.
             q.pop()
             if not q:
                 self._failures.pop(client_key, None)
