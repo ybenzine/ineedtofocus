@@ -27,6 +27,10 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-focus}:${POSTGRES_PASSWORD:-focus}@db:5432/${POSTGRES_DB:-focus}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       READINESS_TIMEOUT_SECONDS: ${READINESS_TIMEOUT_SECONDS:-2}
+      # The local stack is plain http, where browsers and curl drop `Secure` cookies,
+      # so sign-in needs the flag off here. Local only: the app defaults it on, and the
+      # dev and prod Compose files in infra/ leave it on (#27, #28).
+      COOKIE_SECURE: ${COOKIE_SECURE:-0}
       # Run `alembic upgrade head` before the server starts (image entrypoint).
       MIGRATE_ON_START: ${MIGRATE_ON_START:-1}
       # OpenTelemetry: traces, metrics and logs over OTLP/HTTP to the lgtm container.
