@@ -71,7 +71,7 @@ function NumberField({ label, unit, value, range, error, onChange }: NumberField
         />
         <span aria-hidden="true">{unit}</span>
       </div>
-      <p id={hintId} className={error ? 'field-hint field-error' : 'field-hint'}>
+      <p id={hintId} aria-live="polite" className={error ? 'field-hint field-error' : 'field-hint'}>
         {error ?? `${range.min}–${range.max} ${unit}`}
       </p>
     </div>
@@ -122,20 +122,17 @@ export default function SessionSetup({ preferences, onStart }: SessionSetupProps
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (errors.size > 0 || starting) return
-    if (config.mode === 'pomodoro') {
-      preferences.save({
-        tag,
-        pomodoro: longBreakOn
-          ? config
-          : { ...config, longBreakMinutes: remembered.pomodoro.longBreakMinutes },
-      })
-    } else {
-      preferences.save({ ...preferences.load(), tag })
-    }
+    // With the long break off its length is not the user's to fix: use the remembered one.
+    const toStart: TimerConfig =
+      config.mode === 'pomodoro' && !longBreakOn
+        ? { ...config, longBreakMinutes: remembered.pomodoro.longBreakMinutes }
+        : config
     setStarting(true)
     setFailure(null)
     try {
-      await onStart({ config, tag, goal: goal.trim() === '' ? null : goal.trim(), audio })
+      await onStart({ config: toStart, tag, goal: goal.trim() === '' ? null : goal.trim(), audio })
+      if (toStart.mode === 'pomodoro') preferences.save({ tag, pomodoro: toStart })
+      else preferences.save({ ...preferences.load(), tag })
     } catch (error) {
       setFailure(error instanceof Error ? error.message : 'The session could not be started.')
     } finally {
@@ -265,9 +262,10 @@ export default function SessionSetup({ preferences, onStart }: SessionSetupProps
           maxLength={GOAL_MAX_LENGTH}
           autoComplete="off"
           value={goal}
+          aria-describedby={`${groupId}-goal-count`}
           onChange={(event) => setGoal(event.target.value)}
         />
-        <p className="field-hint">
+        <p id={`${groupId}-goal-count`} className="field-hint">
           {goal.length}/{GOAL_MAX_LENGTH}
         </p>
       </div>

@@ -174,6 +174,34 @@ describe('SessionSetup', () => {
   })
 })
 
+describe('SessionSetup long break', () => {
+  it('starts with the remembered length after the long break is cleared then switched off', async () => {
+    const { onStart } = setup()
+    pick('Pomodoro')
+    const box = screen.getByRole('checkbox', { name: /long break/i })
+    fireEvent.click(box)
+    type('Long break', '')
+    fireEvent.click(box)
+    expect(start()).toBeEnabled()
+    fireEvent.click(start())
+    await waitFor(() => expect(onStart).toHaveBeenCalledOnce())
+    expect(onStart.mock.calls[0]?.[0].config).toMatchObject({
+      longBreakEnabled: false,
+      longBreakMinutes: 15,
+    })
+  })
+
+  it('does not update the remembered settings when the start fails', async () => {
+    const preferences = new MemoryPreferencesStore()
+    const onStart = vi.fn().mockRejectedValue(new Error('nope'))
+    render(<SessionSetup preferences={preferences} onStart={onStart} />)
+    pick('Study')
+    fireEvent.click(start())
+    await screen.findByRole('alert')
+    expect(preferences.load().tag).toBe('work')
+  })
+})
+
 describe('parsePreferences', () => {
   it('falls back to Work and the defaults for missing or corrupt data', () => {
     expect(parsePreferences(null)).toEqual(DEFAULT_PREFERENCES)
