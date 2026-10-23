@@ -130,7 +130,8 @@ jobs:
         run: |
           docker exec "$PG_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 \
             -c "CREATE ROLE focus LOGIN PASSWORD 'focus' NOSUPERUSER CREATEDB" \
-            -c "CREATE DATABASE focus OWNER focus"
+            -c "CREATE DATABASE focus OWNER focus" \
+            -c "GRANT pg_signal_backend TO focus"
       - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
         with:
           version: ${{ env.UV_VERSION }}
@@ -188,7 +189,7 @@ jobs:
           persist-credentials: false
       - name: Start the stack (build the app image, wait until healthy)
         run: make up
-      - name: Check health, frontend and telemetry (no query strings or cookies leak)
+      - name: Check health, frontend, sign-up and telemetry (no query strings or cookies leak)
         run: make check-stack
       - name: Look for Playwright suites
         id: suites
