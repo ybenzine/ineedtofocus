@@ -124,7 +124,7 @@ async def sign_up(
 async def sign_in(
     body: SignInRequest, request: Request, response: Response, db: DbSession
 ) -> UserOut:
-    """Sign in with email and password (AC1.2); rate limited (attempts are counted before any await)."""
+    """Sign in with email and password (AC1.2); rate limited."""
     limiter = request.app.state.signin_limiter
     client = _client(request)
     wait = limiter.try_acquire(client, body.email)

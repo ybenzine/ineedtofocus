@@ -190,7 +190,7 @@
     },
     "/api/auth/signin": {
       "post": {
-        "description": "Sign in with email and password (AC1.2); rate limited (attempts are counted before any await).",
+        "description": "Sign in with email and password (AC1.2); rate limited.",
         "operationId": "sign_in_api_auth_signin_post",
         "requestBody": {
           "content": {
