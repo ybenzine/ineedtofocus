@@ -18,11 +18,7 @@
             "type": "integer"
           }
         },
-        "required": [
-          "date",
-          "focus_seconds",
-          "sessions"
-        ],
+        "required": ["date", "focus_seconds", "sessions"],
         "title": "Bucket",
         "type": "object"
       },
@@ -41,10 +37,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "mode",
-          "minutes"
-        ],
+        "required": ["mode", "minutes"],
         "title": "CountdownConfig",
         "type": "object"
       },
@@ -55,9 +48,7 @@
             "type": "integer"
           }
         },
-        "required": [
-          "deleted"
-        ],
+        "required": ["deleted"],
         "title": "DeletedCount",
         "type": "object"
       },
@@ -76,11 +67,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "field",
-          "message",
-          "type"
-        ],
+        "required": ["field", "message", "type"],
         "title": "ErrorDetail",
         "type": "object"
       },
@@ -109,10 +96,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "code",
-          "message"
-        ],
+        "required": ["code", "message"],
         "title": "ErrorInfo",
         "type": "object"
       },
@@ -123,9 +107,7 @@
             "$ref": "#/components/schemas/ErrorInfo"
           }
         },
-        "required": [
-          "error"
-        ],
+        "required": ["error"],
         "title": "ErrorResponse",
         "type": "object"
       },
@@ -133,10 +115,7 @@
         "properties": {
           "bucket": {
             "description": "What one chart bar covers",
-            "enum": [
-              "day",
-              "month"
-            ],
+            "enum": ["day", "month"],
             "title": "Bucket",
             "type": "string"
           },
@@ -228,11 +207,7 @@
         "type": "object"
       },
       "Mode": {
-        "enum": [
-          "countdown",
-          "pomodoro",
-          "unlimited"
-        ],
+        "enum": ["countdown", "pomodoro", "unlimited"],
         "title": "Mode",
         "type": "string"
       },
@@ -371,9 +346,7 @@
             "type": "array"
           }
         },
-        "required": [
-          "sessions"
-        ],
+        "required": ["sessions"],
         "title": "SessionList",
         "type": "object"
       },
@@ -499,14 +472,7 @@
           "default_reminder_minutes": {
             "anyOf": [
               {
-                "enum": [
-                  15,
-                  30,
-                  45,
-                  60,
-                  90,
-                  120
-                ],
+                "enum": [15, 30, 45, 60, 90, 120],
                 "type": "integer"
               },
               {
@@ -568,17 +534,15 @@
       },
       "SettingsPatch": {
         "additionalProperties": false,
-        "description": "Partial update: send only the fields to change. `null` is a value for\n`default_reminder_minutes` (Off), `pomodoro_config` and `last_tag` (back to none).",
+        "description": "Partial update: send only the fields to change. An omitted field means unchanged; no\nfield has a default. `null` is a value for `default_reminder_minutes` (Off),\n`pomodoro_config` and `last_tag` (back to none).",
         "properties": {
           "alert_volume": {
-            "default": 80,
             "maximum": 100.0,
             "minimum": 0.0,
             "title": "Alert Volume",
             "type": "integer"
           },
           "background_volume": {
-            "default": 50,
             "maximum": 100.0,
             "minimum": 0.0,
             "title": "Background Volume",
@@ -587,14 +551,7 @@
           "default_reminder_minutes": {
             "anyOf": [
               {
-                "enum": [
-                  15,
-                  30,
-                  45,
-                  60,
-                  90,
-                  120
-                ],
+                "enum": [15, 30, 45, 60, 90, 120],
                 "type": "integer"
               },
               {
@@ -604,7 +561,6 @@
             "title": "Default Reminder Minutes"
           },
           "keep_screen_awake": {
-            "default": false,
             "title": "Keep Screen Awake",
             "type": "boolean"
           },
@@ -629,7 +585,6 @@
             ]
           },
           "week_start_day": {
-            "default": 0,
             "maximum": 6.0,
             "minimum": 0.0,
             "title": "Week Start Day",
@@ -652,10 +607,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "email",
-          "password"
-        ],
+        "required": ["email", "password"],
         "title": "SignInRequest",
         "type": "object"
       },
@@ -673,18 +625,12 @@
             "type": "string"
           }
         },
-        "required": [
-          "email",
-          "password"
-        ],
+        "required": ["email", "password"],
         "title": "SignUpRequest",
         "type": "object"
       },
       "Status-Input": {
-        "enum": [
-          "completed",
-          "ended_early"
-        ],
+        "enum": ["completed", "ended_early"],
         "title": "Status",
         "type": "string"
       },
@@ -728,20 +674,12 @@
             ]
           },
           "status": {
-            "enum": [
-              "created",
-              "existing",
-              "rejected"
-            ],
+            "enum": ["created", "existing", "rejected"],
             "title": "Status",
             "type": "string"
           }
         },
-        "required": [
-          "index",
-          "id",
-          "status"
-        ],
+        "required": ["index", "id", "status"],
         "title": "SyncItemResult",
         "type": "object"
       },
@@ -758,9 +696,7 @@
             "type": "array"
           }
         },
-        "required": [
-          "sessions"
-        ],
+        "required": ["sessions"],
         "title": "SyncRequest",
         "type": "object"
       },
@@ -787,24 +723,12 @@
             "type": "array"
           }
         },
-        "required": [
-          "created",
-          "existing",
-          "rejected",
-          "results"
-        ],
+        "required": ["created", "existing", "rejected", "results"],
         "title": "SyncResult",
         "type": "object"
       },
       "Tag": {
-        "enum": [
-          "work",
-          "study",
-          "nap",
-          "read",
-          "meditation",
-          "exercise"
-        ],
+        "enum": ["work", "study", "nap", "read", "meditation", "exercise"],
         "title": "Tag",
         "type": "string"
       },
@@ -822,11 +746,7 @@
             "$ref": "#/components/schemas/Tag"
           }
         },
-        "required": [
-          "tag",
-          "focus_seconds",
-          "sessions"
-        ],
+        "required": ["tag", "focus_seconds", "sessions"],
         "title": "TagTotal",
         "type": "object"
       },
@@ -841,14 +761,7 @@
           "reminder_minutes": {
             "anyOf": [
               {
-                "enum": [
-                  15,
-                  30,
-                  45,
-                  60,
-                  90,
-                  120
-                ],
+                "enum": [15, 30, 45, 60, 90, 120],
                 "type": "integer"
               },
               {
@@ -858,10 +771,7 @@
             "title": "Reminder Minutes"
           }
         },
-        "required": [
-          "mode",
-          "reminder_minutes"
-        ],
+        "required": ["mode", "reminder_minutes"],
         "title": "UnlimitedConfig",
         "type": "object"
       },
@@ -882,22 +792,12 @@
             "type": "string"
           }
         },
-        "required": [
-          "id",
-          "email",
-          "created_at"
-        ],
+        "required": ["id", "email", "created_at"],
         "title": "UserOut",
         "type": "object"
       },
       "View": {
-        "enum": [
-          "day",
-          "week",
-          "month",
-          "all",
-          "custom"
-        ],
+        "enum": ["day", "week", "month", "all", "custom"],
         "title": "View",
         "type": "string"
       },
@@ -910,9 +810,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "url"
-        ],
+        "required": ["url"],
         "title": "YoutubeLinkIn",
         "type": "object"
       },
@@ -928,10 +826,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "url",
-          "last_used_at"
-        ],
+        "required": ["url", "last_used_at"],
         "title": "YoutubeLinkOut",
         "type": "object"
       },
@@ -946,9 +841,7 @@
             "type": "array"
           }
         },
-        "required": [
-          "links"
-        ],
+        "required": ["links"],
         "title": "YoutubeLinksOut",
         "type": "object"
       },
@@ -959,17 +852,12 @@
             "type": "string"
           }
         },
-        "required": [
-          "status"
-        ],
+        "required": ["status"],
         "title": "Status",
         "type": "object"
       },
       "app__models__enums__Status": {
-        "enum": [
-          "completed",
-          "ended_early"
-        ],
+        "enum": ["completed", "ended_early"],
         "title": "Status",
         "type": "string"
       },
@@ -1099,9 +987,7 @@
           }
         },
         "summary": "Me",
-        "tags": [
-          "auth"
-        ]
+        "tags": ["auth"]
       }
     },
     "/api/auth/signin": {
@@ -1161,9 +1047,7 @@
           }
         },
         "summary": "Sign In",
-        "tags": [
-          "auth"
-        ]
+        "tags": ["auth"]
       }
     },
     "/api/auth/signout": {
@@ -1176,9 +1060,7 @@
           }
         },
         "summary": "Sign Out",
-        "tags": [
-          "auth"
-        ]
+        "tags": ["auth"]
       }
     },
     "/api/auth/signup": {
@@ -1238,9 +1120,7 @@
           }
         },
         "summary": "Sign Up",
-        "tags": [
-          "auth"
-        ]
+        "tags": ["auth"]
       }
     },
     "/api/history": {
@@ -1380,9 +1260,7 @@
           }
         },
         "summary": "Get History",
-        "tags": [
-          "history"
-        ]
+        "tags": ["history"]
       }
     },
     "/api/sessions": {
@@ -1462,9 +1340,7 @@
           }
         },
         "summary": "Save Session",
-        "tags": [
-          "sessions"
-        ]
+        "tags": ["sessions"]
       }
     },
     "/api/sessions/archived": {
@@ -1514,9 +1390,7 @@
           }
         },
         "summary": "Delete Archived",
-        "tags": [
-          "sessions"
-        ]
+        "tags": ["sessions"]
       },
       "get": {
         "description": "The Archive view (AC11.3): archived sessions, most recently archived first.",
@@ -1564,9 +1438,7 @@
           }
         },
         "summary": "List Archived",
-        "tags": [
-          "sessions"
-        ]
+        "tags": ["sessions"]
       }
     },
     "/api/sessions/sync": {
@@ -1636,9 +1508,7 @@
           }
         },
         "summary": "Sync Sessions",
-        "tags": [
-          "sessions"
-        ]
+        "tags": ["sessions"]
       }
     },
     "/api/sessions/{session_id}": {
@@ -1720,9 +1590,7 @@
           }
         },
         "summary": "Edit Session",
-        "tags": [
-          "sessions"
-        ]
+        "tags": ["sessions"]
       }
     },
     "/api/sessions/{session_id}/archive": {
@@ -1794,9 +1662,7 @@
           }
         },
         "summary": "Archive Session",
-        "tags": [
-          "sessions"
-        ]
+        "tags": ["sessions"]
       }
     },
     "/api/sessions/{session_id}/restore": {
@@ -1868,9 +1734,7 @@
           }
         },
         "summary": "Restore Session",
-        "tags": [
-          "sessions"
-        ]
+        "tags": ["sessions"]
       }
     },
     "/api/settings": {
@@ -1900,9 +1764,7 @@
           }
         },
         "summary": "Get Settings",
-        "tags": [
-          "settings"
-        ]
+        "tags": ["settings"]
       },
       "patch": {
         "description": "Change the fields sent; the rest stay as they are. Out-of-range values are 422.",
@@ -1950,9 +1812,7 @@
           }
         },
         "summary": "Update Settings",
-        "tags": [
-          "settings"
-        ]
+        "tags": ["settings"]
       }
     },
     "/api/youtube-links": {
@@ -1982,9 +1842,7 @@
           }
         },
         "summary": "List Youtube Links",
-        "tags": [
-          "settings"
-        ]
+        "tags": ["settings"]
       },
       "post": {
         "description": "Record a link as just used (moves it to the top if known) and drop all but the 5\nnewest. Returns the updated list.",
@@ -2032,9 +1890,7 @@
           }
         },
         "summary": "Use Youtube Link",
-        "tags": [
-          "settings"
-        ]
+        "tags": ["settings"]
       }
     },
     "/healthz": {
@@ -2054,9 +1910,7 @@
           }
         },
         "summary": "Healthz",
-        "tags": [
-          "health"
-        ]
+        "tags": ["health"]
       }
     },
     "/readyz": {
@@ -2086,9 +1940,7 @@
           }
         },
         "summary": "Readyz",
-        "tags": [
-          "health"
-        ]
+        "tags": ["health"]
       }
     }
   }

@@ -26,43 +26,16 @@ export const FADE_SECONDS = 0.04
 
 /** Settings API `background_volume` default (0-100). */
 export const DEFAULT_BACKGROUND_VOLUME = 50
-export const BACKGROUND_VOLUME_KEY = 'ineedtofocus.backgroundVolume'
 
 export function clampBackgroundVolume(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_BACKGROUND_VOLUME
   return Math.min(100, Math.max(0, Math.round(value)))
 }
 
-/** Where the background volume (0-100) comes from; the Settings API backs it later (#22). */
+/** Where the background volume (0-100) comes from; the app backs it with the settings store. */
 export interface BackgroundVolumeStore {
   load(): number
   save(volume: number): void
-}
-
-export class LocalBackgroundVolumeStore implements BackgroundVolumeStore {
-  readonly #storage: Storage
-
-  constructor(storage: Storage = window.localStorage) {
-    this.#storage = storage
-  }
-
-  load(): number {
-    try {
-      const raw = this.#storage.getItem(BACKGROUND_VOLUME_KEY)
-      if (raw === null || raw.trim() === '') return DEFAULT_BACKGROUND_VOLUME
-      return clampBackgroundVolume(Number(raw))
-    } catch {
-      return DEFAULT_BACKGROUND_VOLUME
-    }
-  }
-
-  save(volume: number): void {
-    try {
-      this.#storage.setItem(BACKGROUND_VOLUME_KEY, String(clampBackgroundVolume(volume)))
-    } catch {
-      // Remembering is a convenience.
-    }
-  }
 }
 
 export class MemoryBackgroundVolumeStore implements BackgroundVolumeStore {

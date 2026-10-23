@@ -16,7 +16,7 @@ Settings come from environment variables only (documented in the root `.env.exam
 app never reads a `.env` file, so set them in the shell as above. They are `DATABASE_URL`
 (async URL, `postgresql+asyncpg://...`), `LOG_LEVEL`, `FRONTEND_DIST` (built frontend,
 default `../frontend/dist`; ignored when absent), `READINESS_TIMEOUT_SECONDS`,
-`COOKIE_SECURE`, `SESSION_TTL_DAYS` and the `SIGNIN_*` rate limits. `COOKIE_SECURE`
+`COOKIE_SECURE`, `SESSION_TTL_DAYS` and the `SIGNIN_*` and `SIGNUP_*` rate limits. `COOKIE_SECURE`
 defaults to on, which plain http can't use (browsers and curl drop `Secure` cookies), so a
 local host run needs `COOKIE_SECURE=0` to sign in; `compose.yaml` sets it for `make up`.
 

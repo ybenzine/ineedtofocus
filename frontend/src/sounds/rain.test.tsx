@@ -9,16 +9,13 @@ import { MemoryPreferencesStore } from '../setup/preferences.ts'
 import SessionSetup from '../setup/SessionSetup.tsx'
 import { MemoryActiveSessionStore, TimerController } from '../timer/index.ts'
 import { AlertPlayer, MemoryAlertVolumeStore } from './alerts.ts'
+import { SettingsBackgroundVolumeStore } from '../settings/adapters.ts'
+import { SettingsContext } from '../settings/SettingsContext.ts'
+import SettingsScreen from '../settings/SettingsScreen.tsx'
+import { SettingsStore } from '../settings/store.ts'
 import AudioControls from './AudioControls.tsx'
 import { AUDIO_SOURCE_KEY, LocalAudioSourceStore, MemoryAudioSourceStore } from './audioSource.ts'
-import {
-  BACKGROUND_VOLUME_KEY,
-  LocalBackgroundVolumeStore,
-  MemoryBackgroundVolumeStore,
-  RAIN_LOOP_END,
-  RAIN_LOOP_START,
-  RainPlayer,
-} from './rain.ts'
+import { MemoryBackgroundVolumeStore, RAIN_LOOP_END, RAIN_LOOP_START, RainPlayer } from './rain.ts'
 
 function fakeAudio(state: AudioContextState = 'running') {
   const sources: {
@@ -181,14 +178,14 @@ describe('RainPlayer', () => {
 })
 
 describe('device stores', () => {
-  it('defaults the background volume to 50 and clamps bad values', () => {
-    localStorage.clear()
-    const store = new LocalBackgroundVolumeStore()
+  it('backs the background volume with the settings store: default 50, clamped', () => {
+    const settings = new SettingsStore()
+    const store = new SettingsBackgroundVolumeStore(settings)
     expect(store.load()).toBe(50)
     store.save(140)
-    expect(localStorage.getItem(BACKGROUND_VOLUME_KEY)).toBe('100')
-    localStorage.setItem(BACKGROUND_VOLUME_KEY, 'loud')
-    expect(store.load()).toBe(50)
+    expect(settings.values.background_volume).toBe(100)
+    settings.update({ background_volume: 20 })
+    expect(store.load()).toBe(20)
   })
 
   it('remembers the audio source and ignores unknown values', () => {
@@ -307,10 +304,29 @@ describe('AudioControls', () => {
     expect(sources).toHaveLength(0)
   })
 
-  it('has a rain volume slider that changes the background volume', async () => {
-    const { rain } = controls('rain', false)
-    fireEvent.change(screen.getByLabelText('Rain volume'), { target: { value: '30' } })
-    expect(rain.volume).toBe(30)
+  it('the rain volume slider and the Settings screen share one stored volume', () => {
+    const settings = new SettingsStore()
+    const audio = fakeAudio()
+    const rain = new RainPlayer({
+      alerts: audio.alerts,
+      volume: new SettingsBackgroundVolumeStore(settings),
+      fetchSound: audio.fetchSound,
+    })
+    render(
+      <SettingsContext.Provider value={settings}>
+        <AudioControls source="rain" paused rain={rain} onSourceChange={vi.fn()} />
+        <SettingsScreen player={audio.alerts} />
+      </SettingsContext.Provider>,
+    )
+    const rainSlider = screen.getByLabelText('Rain volume')
+    const settingsSlider = screen.getByLabelText('Background audio volume')
+    expect(rainSlider).toHaveValue('50')
+    fireEvent.change(rainSlider, { target: { value: '30' } })
+    expect(settings.values.background_volume).toBe(30)
+    expect(settingsSlider).toHaveValue('30')
+    fireEvent.change(settingsSlider, { target: { value: '70' } })
+    expect(rainSlider).toHaveValue('70')
+    expect(rain.volume).toBe(70)
   })
 
   it('ac8_7 suggests Rain when YouTube is chosen offline, and switches on request', () => {

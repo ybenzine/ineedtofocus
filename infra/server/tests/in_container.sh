@@ -4,36 +4,11 @@
 # sshd drop-in enabling passwords), runs bootstrap.sh three times and checks the result.
 set -euo pipefail
 
-BOOTSTRAP=/src/bootstrap.sh
+BOOTSTRAP=/src/server/bootstrap.sh
 SSH_PORT=2222
-failures=0
+# shellcheck source=/dev/null # lib.sh: check, eq, contains, not_contains, mode_owner, finish
+. /src/server/tests/lib.sh
 
-check() {
-  local desc=$1
-  shift
-  if "$@"; then
-    printf 'ok   %s\n' "$desc"
-  else
-    printf 'FAIL %s\n' "$desc"
-    failures=$((failures + 1))
-  fi
-}
-eq() {
-  [[ $1 == "$2" ]] && return 0
-  printf '     expected %q\n     got      %q\n' "$2" "$1"
-  return 1
-}
-contains() {
-  grep -qF -- "$2" <<<"$1" && return 0
-  printf '     %q not found in:\n%s\n' "$2" "$1"
-  return 1
-}
-not_contains() {
-  grep -qF -- "$2" <<<"$1" || return 0
-  printf '     %q unexpectedly found in:\n%s\n' "$2" "$1"
-  return 1
-}
-mode_owner() { stat -c '%a %U:%G' "$1"; }
 sshd_setting() { sshd -T -C "user=$1,host=client.example,addr=127.0.0.1" | grep -i "^$2 " || true; }
 groups_of() { id -nG "$1" | tr ' ' '\n'; }
 
@@ -169,9 +144,4 @@ cat /tmp/keys/root.pub >>/etc/ssh/authorized_keys/deploy
 check "third run succeeds" run_bootstrap /tmp/run3.log
 check "third run warns about the unrestricted key" contains "$(cat /tmp/run3.log)" "without restrict,command="
 
-echo
-if ((failures)); then
-  echo "$failures check(s) failed"
-  exit 1
-fi
-echo "all checks passed"
+finish

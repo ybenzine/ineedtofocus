@@ -33,43 +33,15 @@ export function soundForEvents(events: readonly TimerEvent[]): SoundName | null 
   return sound
 }
 
-/** Where the alert volume (0–100) comes from; the Settings API backs it later (#12, #22). */
+/** Where the alert volume (0–100) comes from: the Settings API's `alert_volume` (#22). */
 export interface AlertVolumeStore {
   load(): number
   save(volume: number): void
 }
 
-export const ALERT_VOLUME_KEY = 'ineedtofocus.alertVolume'
-
 export function clampVolume(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_ALERT_VOLUME
   return Math.min(100, Math.max(0, Math.round(value)))
-}
-
-export class LocalAlertVolumeStore implements AlertVolumeStore {
-  readonly #storage: Storage
-
-  constructor(storage: Storage = window.localStorage) {
-    this.#storage = storage
-  }
-
-  load(): number {
-    try {
-      const raw = this.#storage.getItem(ALERT_VOLUME_KEY)
-      if (raw === null || raw.trim() === '') return DEFAULT_ALERT_VOLUME
-      return clampVolume(Number(raw))
-    } catch {
-      return DEFAULT_ALERT_VOLUME
-    }
-  }
-
-  save(volume: number): void {
-    try {
-      this.#storage.setItem(ALERT_VOLUME_KEY, String(clampVolume(volume)))
-    } catch {
-      // Remembering is a convenience.
-    }
-  }
 }
 
 export class MemoryAlertVolumeStore implements AlertVolumeStore {

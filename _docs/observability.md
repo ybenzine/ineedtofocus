@@ -18,10 +18,10 @@ Never sent to logs, traces or metrics: email addresses, passwords, cookies or se
 
 ## Alerts (user impact, not resources)
 
-| Alert | Condition |
-|---|---|
+| Alert                 | Condition                                                |
+| --------------------- | -------------------------------------------------------- |
 | Session saves failing | Error rate > 5% over 5 min, with a minimum request count |
-| History slow | p95 latency > 2 s over 5 min |
+| History slow          | p95 latency > 2 s over 5 min                             |
 
 ## Where to look
 

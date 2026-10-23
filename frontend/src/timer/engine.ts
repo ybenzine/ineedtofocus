@@ -161,29 +161,59 @@ export function isPaused(session: ActiveSession): boolean {
   return last !== undefined && last.resumedAt === null
 }
 
+/**
+ * The pauses with their timestamps made monotonic and capped at `now`. If the device clock
+ * jumped backwards (manual change, NTP, DST bugs), the time between the earlier and the later
+ * reading counts as zero elapsed, so no duration is negative; readings taken while the clock
+ * was fast are capped at the current time, so nothing lies in the future. Together the pieces
+ * always fit between the start and the end.
+ */
+export function effectivePauses(session: ActiveSession, now: number = Infinity): Pause[] {
+  const cap = effectiveNow(session, now)
+  let high = session.startedAt
+  return session.pauses.map((pause) => {
+    const pausedAt = Math.min(cap, Math.max(high, pause.pausedAt))
+    high = pausedAt
+    if (pause.resumedAt === null) return { pausedAt, resumedAt: null }
+    const resumedAt = Math.min(cap, Math.max(high, pause.resumedAt))
+    high = resumedAt
+    return { pausedAt, resumedAt }
+  })
+}
+
+/** `now`, but never before the start. */
+export function effectiveNow(session: ActiveSession, now: number): number {
+  return Math.max(now, session.startedAt)
+}
+
 /** Paused wall-clock time between the start and `now`. */
 export function pausedMsAt(session: ActiveSession, now: number): number {
+  const at = effectiveNow(session, now)
   let total = 0
-  for (const pause of session.pauses) {
-    if (pause.pausedAt >= now) break
-    total += Math.min(pause.resumedAt ?? now, now) - pause.pausedAt
+  for (const pause of effectivePauses(session, now)) {
+    if (pause.pausedAt >= at) break
+    total += Math.min(pause.resumedAt ?? at, at) - pause.pausedAt
   }
   return total
 }
 
 /** Active (unpaused) time between the start and `now`. */
 export function activeMsAt(session: ActiveSession, now: number): number {
-  return Math.max(0, now - session.startedAt - pausedMsAt(session, now))
+  return Math.max(0, effectiveNow(session, now) - session.startedAt - pausedMsAt(session, now))
 }
 
 /**
  * The wall-clock time at which the session's active time reaches `activeMs`, or `null` if it
  * hasn't yet because the session is paused before that point.
  */
-export function wallTimeAtActive(session: ActiveSession, activeMs: number): number | null {
+export function wallTimeAtActive(
+  session: ActiveSession,
+  activeMs: number,
+  now: number = Infinity,
+): number | null {
   let cursor = session.startedAt
   let remaining = activeMs
-  for (const pause of session.pauses) {
+  for (const pause of effectivePauses(session, now)) {
     const runSpan = pause.pausedAt - cursor
     if (remaining <= runSpan) return cursor + remaining
     remaining -= runSpan
@@ -193,8 +223,8 @@ export function wallTimeAtActive(session: ActiveSession, activeMs: number): numb
   return cursor + remaining
 }
 
-function wallTimeAtReachedActive(session: ActiveSession, activeMs: number): number {
-  const at = wallTimeAtActive(session, activeMs)
+function wallTimeAtReachedActive(session: ActiveSession, activeMs: number, now: number): number {
+  const at = wallTimeAtActive(session, activeMs, now)
   if (at === null) throw new TimerError('Active time not reached yet')
   return at
 }
@@ -266,10 +296,13 @@ function blocksCompletedAtActive(session: ActiveSession, activeMs: number): numb
 }
 
 /** Active-time points at which events fall, in order. */
-function eventPoints(session: ActiveSession): { atActiveMs: number; make: () => TimerEvent }[] {
+function eventPoints(
+  session: ActiveSession,
+  now: number,
+): { atActiveMs: number; make: () => TimerEvent }[] {
   const points: { atActiveMs: number; make: () => TimerEvent }[] = []
   const end = totalActiveMs(session)
-  const at = (activeMs: number) => wallTimeAtReachedActive(session, activeMs)
+  const at = (activeMs: number) => wallTimeAtReachedActive(session, activeMs, now)
   const config = session.config
   if (config.mode === 'pomodoro') {
     const phases = pomodoroPhases(session)
@@ -318,8 +351,9 @@ export function eventsBetween(
   session: ActiveSession,
   fromActiveMs: number,
   toActiveMs: number,
+  now: number = Infinity,
 ): TimerEvent[] {
-  return eventPoints(session)
+  return eventPoints(session, now)
     .filter((p) => p.atActiveMs > fromActiveMs && p.atActiveMs <= toActiveMs)
     .map((p) => p.make())
 }
@@ -352,7 +386,7 @@ export function snapshot(session: ActiveSession, now: number): TimerSnapshot {
     nextReminderInMs = next < end ? next - activeMs : null
   }
 
-  const nextEvent = eventPoints(session).find((p) => p.atActiveMs > activeMs)
+  const nextEvent = eventPoints(session, now).find((p) => p.atActiveMs > activeMs)
   return {
     id: session.id,
     mode: config.mode,
@@ -415,10 +449,10 @@ export interface AdvanceResult {
 export function advance(session: ActiveSession, now: number): AdvanceResult {
   const end = totalActiveMs(session)
   const activeMs = Math.min(activeMsAt(session, now), end)
-  const events = eventsBetween(session, session.observedActiveMs, activeMs)
+  const events = eventsBetween(session, session.observedActiveMs, activeMs, now)
   const next =
     activeMs > session.observedActiveMs ? { ...session, observedActiveMs: activeMs } : session
-  const endedAt = activeMs >= end ? wallTimeAtReachedActive(session, end) : null
+  const endedAt = activeMs >= end ? wallTimeAtReachedActive(session, end, now) : null
   return { session: next, events, endedAt }
 }
 
@@ -481,6 +515,8 @@ export function finishSession(
   endedAt: number,
   status: SessionStatus,
 ): FinishOutcome {
+  // A clock that went backwards must not put the end before the start or the last event.
+  endedAt = effectiveNow(session, endedAt)
   const activeMs = Math.min(activeMsAt(session, endedAt), totalActiveMs(session))
   const focusMs = focusMsAtActive(session, activeMs)
   const focusSeconds = Math.floor(focusMs / 1000)

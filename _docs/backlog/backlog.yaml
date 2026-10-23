@@ -1,30 +1,127 @@
 labels:
-  - {name: "agent:product_manager", color: "5319e7", description: "Owned by the product manager agent"}
-  - {name: "agent:backend", color: "1d76db", description: "Owned by the backend agent"}
-  - {name: "agent:frontend", color: "0e8a16", description: "Owned by the frontend agent"}
-  - {name: "agent:qa", color: "fbca04", description: "Owned by the QA/test agent"}
-  - {name: "agent:devops", color: "d93f0b", description: "Owned by the DevOps agent"}
-  - {name: "agent:oncall", color: "b60205", description: "Owned by / used by the on-call agent"}
-  - {name: "owner:human", color: "c5def5", description: "Needs Yacine (accounts, DNS, secrets)"}
-  - {name: "type:feature", color: "a2eeef", description: "User-facing functionality"}
-  - {name: "type:infra", color: "bfdadc", description: "Infrastructure, CI/CD, hosting"}
-  - {name: "type:docs", color: "0075ca", description: "Documentation and specs"}
-  - {name: "type:test", color: "f9d0c4", description: "Tests and test tooling"}
-  - {name: "type:observability", color: "d4c5f9", description: "Metrics, traces, logs, alerting"}
-  - {name: "type:incident", color: "e11d21", description: "Production incident handled by the on-call agent"}
-  - {name: "P0", color: "b60205", description: "Must have for submission"}
-  - {name: "P1", color: "ff9f1c", description: "Should have; first to cut if late"}
-  - {name: "accepted", color: "0e8a16", description: "Product manager accepted the delivered work"}
-  - {name: "needs-yacine", color: "fbca04", description: "Waiting on Yacine at a human gate; remove when answered"}
-  - {name: "post-mvp", color: "ededed", description: "After the course submission"}
+  - {
+      name: "agent:product_manager",
+      color: "5319e7",
+      description: "Owned by the product manager agent",
+    }
+  - {
+      name: "agent:backend",
+      color: "1d76db",
+      description: "Owned by the backend agent",
+    }
+  - {
+      name: "agent:frontend",
+      color: "0e8a16",
+      description: "Owned by the frontend agent",
+    }
+  - {
+      name: "agent:qa",
+      color: "fbca04",
+      description: "Owned by the QA/test agent",
+    }
+  - {
+      name: "agent:devops",
+      color: "d93f0b",
+      description: "Owned by the DevOps agent",
+    }
+  - {
+      name: "agent:oncall",
+      color: "b60205",
+      description: "Owned by / used by the on-call agent",
+    }
+  - {
+      name: "owner:human",
+      color: "c5def5",
+      description: "Needs Yacine (accounts, DNS, secrets)",
+    }
+  - {
+      name: "type:feature",
+      color: "a2eeef",
+      description: "User-facing functionality",
+    }
+  - {
+      name: "type:infra",
+      color: "bfdadc",
+      description: "Infrastructure, CI/CD, hosting",
+    }
+  - {
+      name: "type:docs",
+      color: "0075ca",
+      description: "Documentation and specs",
+    }
+  - {
+      name: "type:test",
+      color: "f9d0c4",
+      description: "Tests and test tooling",
+    }
+  - {
+      name: "type:observability",
+      color: "d4c5f9",
+      description: "Metrics, traces, logs, alerting",
+    }
+  - {
+      name: "type:incident",
+      color: "e11d21",
+      description: "Production incident handled by the on-call agent",
+    }
+  - { name: "P0", color: "b60205", description: "Must have for submission" }
+  - {
+      name: "P1",
+      color: "ff9f1c",
+      description: "Should have; first to cut if late",
+    }
+  - {
+      name: "accepted",
+      color: "0e8a16",
+      description: "Product manager accepted the delivered work",
+    }
+  - {
+      name: "needs-yacine",
+      color: "fbca04",
+      description: "Waiting on Yacine at a human gate; remove when answered",
+    }
+  - {
+      name: "post-mvp",
+      color: "ededed",
+      description: "After the course submission",
+    }
 
 milestones:
-  - {key: M1, title: "M1 · Foundations", due_on: "2026-10-21T23:00:00Z", description: "Repo, agent team and docs, local stack, CI skeleton, schema."}
-  - {key: M2, title: "M2 · MVP app", due_on: "2026-10-23T23:00:00Z", description: "All MVP features from product_decisions.md §4, tested."}
-  - {key: M3, title: "M3 · Ship", due_on: "2026-10-24T23:00:00Z", description: "Droplet, DNS, CD to dev, manual prod deploy, rollback."}
-  - {key: M4, title: "M4 · Operate", due_on: "2026-10-25T23:00:00Z", description: "Observability, user-impact alerting, alert trigger, on-call agent."}
-  - {key: M5, title: "M5 · Submission", due_on: "2026-10-26T20:00:00Z", description: "README, demo evidence, final check against grading criteria. Hard deadline 23:00 UTC."}
-  - {key: PM, title: "Post-MVP", description: "Backlog after the course submission."}
+  - {
+      key: M1,
+      title: "M1 · Foundations",
+      due_on: "2026-10-21T23:00:00Z",
+      description: "Repo, agent team and docs, local stack, CI skeleton, schema.",
+    }
+  - {
+      key: M2,
+      title: "M2 · MVP app",
+      due_on: "2026-10-23T23:00:00Z",
+      description: "All MVP features from product_decisions.md §4, tested.",
+    }
+  - {
+      key: M3,
+      title: "M3 · Ship",
+      due_on: "2026-10-24T23:00:00Z",
+      description: "Droplet, DNS, CD to dev, manual prod deploy, rollback.",
+    }
+  - {
+      key: M4,
+      title: "M4 · Operate",
+      due_on: "2026-10-25T23:00:00Z",
+      description: "Observability, user-impact alerting, alert trigger, on-call agent.",
+    }
+  - {
+      key: M5,
+      title: "M5 · Submission",
+      due_on: "2026-10-26T20:00:00Z",
+      description: "README, demo evidence, final check against grading criteria. Hard deadline 23:00 UTC.",
+    }
+  - {
+      key: PM,
+      title: "Post-MVP",
+      description: "Backlog after the course submission.",
+    }
 
 issues:
   # ---------------- M1 Foundations ----------------
@@ -336,7 +433,7 @@ issues:
     ac:
       - "Gandi nameservers point to the Route 53 hosted zone's four nameservers"
       - "A records for `ineedtofoc.us` and `dev.ineedtofoc.us` → Droplet IPv4, TTL 300"
-      - "Optional CAA record `0 issue \"letsencrypt.org\"`"
+      - 'Optional CAA record `0 issue "letsencrypt.org"`'
       - "`dig` resolves both names to the Droplet"
     refs: ["_docs/tech_stack.md §2"]
 
@@ -469,7 +566,10 @@ issues:
   - title: "Daily focus goal and streaks"
     milestone: PM
     labels: [post-mvp, type:feature]
-    ac: ["Set a daily focus target; see progress and a gentle streak count (no shaming)"]
+    ac:
+      [
+        "Set a daily focus target; see progress and a gentle streak count (no shaming)",
+      ]
   - title: "Custom tags with colors"
     milestone: PM
     labels: [post-mvp, type:feature]
@@ -477,15 +577,27 @@ issues:
   - title: "Add a session manually and edit session times"
     milestone: PM
     labels: [post-mvp, type:feature]
-    ac: ["Add a past session by hand", "Edit start/end times of an existing session"]
+    ac:
+      [
+        "Add a past session by hand",
+        "Edit start/end times of an existing session",
+      ]
   - title: "Session-end notifications"
     milestone: PM
     labels: [post-mvp, type:feature]
-    ac: ["Notify the user when a session or phase ends while the app is in the background"]
+    ac:
+      [
+        "Notify the user when a session or phase ends while the app is in the background",
+      ]
   - title: "Password reset, Google sign-in and account deletion"
     milestone: PM
     labels: [post-mvp, type:feature]
-    ac: ["Password reset by email", "Sign in with Google", "Delete account and export data"]
+    ac:
+      [
+        "Password reset by email",
+        "Sign in with Google",
+        "Delete account and export data",
+      ]
   - title: "Native iOS and Android apps with Capacitor (stretch)"
     milestone: PM
     labels: [post-mvp, type:feature]

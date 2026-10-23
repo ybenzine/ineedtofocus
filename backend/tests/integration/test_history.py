@@ -7,9 +7,6 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.integration.test_sessions import ada as ada
-from tests.integration.test_sessions import app_url as app_url
-from tests.integration.test_sessions import bob as bob
 from tests.integration.test_sessions import make_session
 
 pytestmark = pytest.mark.integration

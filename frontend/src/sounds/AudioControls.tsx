@@ -2,7 +2,8 @@
 // timer runs (through breaks too), pauses with it and stops when the session's screen goes away
 // (AC8.2). YouTube arrives with #18; until then, offline, it only offers to switch to Rain (AC8.7).
 
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId } from 'react'
+import { useSettingsState } from '../settings/SettingsContext.ts'
 import type { AudioSource } from '../setup/options.ts'
 import type { RainPlayer } from './rain.ts'
 import { useOnline } from './useOnline.ts'
@@ -35,7 +36,9 @@ export default function AudioControls({
 }: AudioControlsProps) {
   const online = useOnline()
   const volumeId = useId()
-  const [volume, setVolume] = useState(() => rain.volume)
+  // The same value the Settings screen edits: moving one moves the other.
+  const { values } = useSettingsState()
+  const volume = values.background_volume
   const shouldPlay = source === 'rain' && !paused
 
   useEffect(() => {
@@ -58,9 +61,7 @@ export default function AudioControls({
             max={100}
             value={volume}
             onChange={(event) => {
-              const next = Number(event.target.value)
-              setVolume(next)
-              rain.setVolume(next)
+              rain.setVolume(Number(event.target.value))
             }}
           />
         </div>

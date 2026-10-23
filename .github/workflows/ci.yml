@@ -7,16 +7,20 @@
 # Each job goes through the same `make` targets as local work (Makefile). Test jobs write
 # JUnit XML to reports/ and upload it as a workflow artifact, even when tests fail.
 #
-# Two more jobs, not required checks (#27):
-#   image    builds the app image, validates the production configs and smoke-tests the
-#            production stack (Caddy + prod + dev) on it. Every PR and push. No credentials.
-#   publish  pushes that same image to ghcr.io/ybenzine/ineedtofocus:<commit sha>. Only on
-#            push to main, only after all five required jobs and `image` passed on that
-#            commit (`needs:`), with GITHUB_TOKEN limited to `packages: write` for this job.
-#            PRs (forks included) never push. No tag or release trigger publishes anything.
-# The dev deploy (#28) hangs off `publish` (a job that `needs: publish`, or a workflow_run
-# on this workflow that deploys github.event.workflow_run.head_sha), so a red main never
-# reaches dev.
+# Three more jobs, not required checks:
+#   image       (#27) builds the app image, validates the production configs and
+#               smoke-tests the production stack (Caddy + prod + dev) on it. Every PR and
+#               push. No credentials.
+#   publish     (#27) pushes that same image to ghcr.io/ybenzine/ineedtofocus:<commit sha>.
+#               Only on push to main, only after all five required jobs and `image` passed
+#               on that commit (`needs:`), with GITHUB_TOKEN limited to `packages: write`
+#               for this job. PRs (forks included) never push. No tag or release trigger
+#               publishes anything. Outputs the pushed digest.
+#   deploy-dev  (#28) deploys exactly that digest to focus-dev over SSH, then smoke-tests
+#               https://dev.ineedtofoc.us. `needs: publish`, so a red main never reaches
+#               dev. Runs in the `dev` environment, whose SSH key the server pins to the
+#               forced command /opt/focus/bin/focus-ci dev (infra/server/focus-ci.sh).
+#               Skips with a notice while that environment's secrets aren't set.
 
 name: CI
 
@@ -66,6 +70,8 @@ jobs:
         run: make lint-scripts
       - name: shellcheck on every tracked shell script
         run: make lint-shell
+      - name: actionlint on the workflows
+        run: make lint-workflows
 
   backend-unit:
     name: Backend unit tests
@@ -130,7 +136,8 @@ jobs:
         run: |
           docker exec "$PG_CONTAINER" psql -U postgres -v ON_ERROR_STOP=1 \
             -c "CREATE ROLE focus LOGIN PASSWORD 'focus' NOSUPERUSER CREATEDB" \
-            -c "CREATE DATABASE focus OWNER focus"
+            -c "CREATE DATABASE focus OWNER focus" \
+            -c "GRANT pg_signal_backend TO focus"
       - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
         with:
           version: ${{ env.UV_VERSION }}
@@ -188,7 +195,7 @@ jobs:
           persist-credentials: false
       - name: Start the stack (build the app image, wait until healthy)
         run: make up
-      - name: Check health, frontend and telemetry (no query strings or cookies leak)
+      - name: Check health, frontend, sign-up and telemetry (no query strings or cookies leak)
         run: make check-stack
       - name: Look for Playwright suites
         id: suites
@@ -283,6 +290,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      # sha256:<64 hex>, what deploy-dev deploys and records (a re-push of the tag
+      # can't change what this run deploys).
+      digest: ${{ steps.push.outputs.digest }}
     env:
       IMAGE: ghcr.io/ybenzine/ineedtofocus:${{ github.sha }}
     steps:
@@ -298,6 +309,7 @@ jobs:
           label=$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
           [[ $label == "$REVISION" ]] || { echo "::error::image revision $label != $REVISION"; exit 1; }
       - name: Push to GHCR, tagged with the commit SHA
+        id: push
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_USER: ${{ github.actor }}
@@ -306,6 +318,8 @@ jobs:
           docker push "$IMAGE"
           digest=$(docker image inspect "$IMAGE" --format '{{ index .RepoDigests 0 }}')
           docker logout ghcr.io
+          [[ ${digest#*@} =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for $IMAGE: $digest"; exit 1; }
+          echo "digest=${digest#*@}" >> "$GITHUB_OUTPUT"
           {
             echo "### Published image"
             echo ""
@@ -313,3 +327,130 @@ jobs:
             echo "|---|---|"
             echo "| \`$IMAGE\` | \`$digest\` |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-dev:
+    name: Deploy to dev
+    # Only after publish pushed this commit's image, and publish needs all five required
+    # jobs and `image`: a red main never reaches dev (#28).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # The dev deploy key and the server's host key are secrets of this environment only
+    # (deployment branches: main). The key can only run focus-ci's dev profile.
+    environment:
+      name: dev
+      url: https://dev.ineedtofoc.us
+    # One dev deploy at a time; a newer commit's deploy waits, it doesn't cancel this one.
+    # Deploys of different environments are serialized on the server by flock on
+    # /opt/focus/deploy.lock, not by sharing this group: GitHub cancels a *pending* job
+    # when another one joins its group, which would drop a queued prod rollback.
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    env:
+      DEPLOY_HOST: 159.223.188.176
+      DEV_URL: https://dev.ineedtofoc.us
+      TAG: ${{ github.sha }}
+      DIGEST: ${{ needs.publish.outputs.digest }}
+    steps:
+      - name: Check the dev environment is set up
+        id: config
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        # Both secrets: deploy. Neither: not set up yet, skip green with a notice.
+        # Only one: a misconfiguration, fail red.
+        run: |
+          if [[ -n $DEPLOY_SSH_KEY && -n $DEPLOY_KNOWN_HOSTS ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -n $DEPLOY_SSH_KEY || -n $DEPLOY_KNOWN_HOSTS ]]; then
+            missing=DEPLOY_KNOWN_HOSTS
+            [[ -n $DEPLOY_SSH_KEY ]] || missing=DEPLOY_SSH_KEY
+            echo "::error title=Dev environment half set up::the dev environment has one of DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS but not $missing. Set both (_docs/deployment.md, Deploy to dev)."
+            exit 1
+          fi
+          echo "configured=false" >> "$GITHUB_OUTPUT"
+          msg="Not deployed: the dev environment has neither DEPLOY_SSH_KEY nor DEPLOY_KNOWN_HOSTS yet. The image is published; see _docs/deployment.md (Deploy to dev) for the one-time setup."
+          echo "::notice title=Dev deploy skipped::$msg"
+          printf '### Deploy to dev: skipped\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.config.outputs.configured == 'true'
+        with:
+          persist-credentials: false
+      - name: Set up the deploy key
+        if: steps.config.outputs.configured == 'true'
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          [[ $TAG =~ ^[0-9a-f]{40}$ && $DIGEST =~ ^sha256:[0-9a-f]{64}$ ]] ||
+            { echo "::error::bad tag or digest from publish: '$TAG' '$DIGEST'"; exit 1; }
+          dir=$RUNNER_TEMP/deploy-ssh
+          install -d -m 700 "$dir"
+          (umask 077 && printf '%s\n' "$DEPLOY_SSH_KEY" > "$dir/key")
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$dir/known_hosts"
+          cat > "$dir/config" << EOF
+          Host focus-dev
+            HostName $DEPLOY_HOST
+            User deploy
+            IdentityFile $dir/key
+            IdentitiesOnly yes
+            UserKnownHostsFile $dir/known_hosts
+            StrictHostKeyChecking yes
+            BatchMode yes
+            ConnectTimeout 20
+            ServerAliveInterval 30
+            ServerAliveCountMax 4
+          EOF
+          echo "SSH_CONFIG=$dir/config" >> "$GITHUB_ENV"
+      - name: Deploy over SSH (pull by digest, migrate, start, check, record)
+        id: deploy
+        if: steps.config.outputs.configured == 'true'
+        run: ssh -F "$SSH_CONFIG" focus-dev "deploy $TAG $DIGEST"
+      - name: Read the server's release record
+        id: record
+        if: steps.config.outputs.configured == 'true'
+        run: |
+          ssh -F "$SSH_CONFIG" focus-dev status > "$RUNNER_TEMP/release"
+          cat "$RUNNER_TEMP/release"
+          get() { sed -n "s/^$1=//p" "$RUNNER_TEMP/release"; }
+          [[ $(get tag) == "$TAG" && $(get digest) == "$DIGEST" ]] ||
+            { echo "::error::dev's record doesn't show $TAG $DIGEST"; exit 1; }
+          for key in deployed_at infra_revision previous_tag; do
+            echo "$key=$(get "$key")" >> "$GITHUB_OUTPUT"
+          done
+      - name: Smoke-test https://dev.ineedtofoc.us
+        id: smoke
+        if: steps.config.outputs.configured == 'true'
+        run: python3 scripts/smoke_deploy.py "$DEV_URL" --summary "$RUNNER_TEMP/smoke.md"
+      - name: Summary
+        if: ${{ !cancelled() && steps.config.outputs.configured == 'true' }}
+        env:
+          DEPLOYED_AT: ${{ steps.record.outputs.deployed_at }}
+          INFRA_REVISION: ${{ steps.record.outputs.infra_revision }}
+          PREVIOUS_TAG: ${{ steps.record.outputs.previous_tag }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          {
+            echo "### Deploy to dev: ${DEPLOY_OUTCOME/success/deployed}, smoke tests: ${SMOKE_OUTCOME/success/passed}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| URL | $DEV_URL |"
+            echo "| Tag (commit) | \`$TAG\` |"
+            echo "| Image | \`ghcr.io/ybenzine/ineedtofocus@$DIGEST\` |"
+            echo "| Deployed at (server, UTC) | ${DEPLOYED_AT:-not recorded} |"
+            echo "| Previous tag (rollback target) | \`${PREVIOUS_TAG:-none}\` |"
+            echo "| Infra revision on the server | \`${INFRA_REVISION:-unknown}\` |"
+            echo ""
+            cat "$RUNNER_TEMP/smoke.md" 2> /dev/null || true
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove the deploy key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/deploy-ssh"
