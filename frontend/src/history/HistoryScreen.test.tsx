@@ -118,6 +118,19 @@ describe('HistoryScreen', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Next day' })).toBeEnabled())
   })
 
+  it('draws month bars for a custom range of 63 days or more', async () => {
+    const api = new FakeApi()
+    api.sessions = [synced({ startedAt: '2026-08-10T08:00:00Z' })]
+    renderScreen(api)
+    fireEvent.click(await screen.findByRole('button', { name: 'Custom' }))
+    expect(screen.queryByText('All time', { selector: 'p' })).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Start date'), { target: { value: '2026-07-01' } })
+    fireEvent.change(screen.getByLabelText('End date'), { target: { value: '2026-09-01' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Show' }))
+    await screen.findByRole('heading', { name: 'Focus time by month' })
+    expect(document.querySelectorAll('.history-chart li')).toHaveLength(3)
+  })
+
   it('ac10_1 refuses a custom range that ends before it starts', async () => {
     const api = new FakeApi()
     renderScreen(api)
@@ -191,6 +204,65 @@ describe('HistoryScreen', () => {
       expect(
         screen.getByText(/Includes 2 sessions not saved to your account yet/),
       ).toBeInTheDocument()
+      store.close()
+    })
+
+    it('leaves out an archived session even when it has a queued edit', async () => {
+      const store = await deviceStore()
+      const r = makeRecord({ startedAt: '2026-10-21T09:00:00Z' })
+      await store.save(r, 'me')
+      await store.markSynced(r.id, {
+        id: r.id,
+        tag: 'work',
+        goal: null,
+        archivedAt: '2026-10-21T11:00:00Z',
+      })
+      await store.edit('me', r.id, { tag: 'read' })
+      renderScreen(new FakeApi(), { sessions: store })
+      await screen.findByText('No sessions in this period.')
+      store.close()
+    })
+
+    it('does not count a synced session with a pending edit as not saved', async () => {
+      const store = await deviceStore()
+      const r = makeRecord({ startedAt: '2026-10-21T09:00:00Z' })
+      await store.save(r, 'me')
+      await store.markSynced(r.id, { id: r.id, tag: 'work', goal: null, archivedAt: null })
+      await store.edit('me', r.id, { tag: 'read' })
+      const api = new FakeApi()
+      api.sessions = [synced({ id: r.id, tag: 'work' })]
+      renderScreen(api, { sessions: store })
+      await screen.findByText('Focus time')
+      expect(screen.queryByText(/not saved to your account/)).not.toBeInTheDocument()
+      // The server decides what a tag filter shows; the edited session isn't added under 'read'.
+      fireEvent.click(screen.getByRole('button', { name: 'read' }))
+      await screen.findByText('No sessions with these tags in this period.')
+      store.close()
+    })
+
+    it('offline with an earlier answer keeps sessions that synced after it', async () => {
+      const store = await deviceStore()
+      const api = new FakeApi()
+      api.sessions = [synced({ goal: 'From the server' })]
+      renderScreen(api, { sessions: store })
+      await screen.findByText('From the server')
+      const later = makeRecord({ startedAt: '2026-10-21T09:00:00Z', goal: 'Synced later' })
+      await store.save(later, 'me')
+      await store.markSynced(later.id, null)
+      const gone = makeRecord({ startedAt: '2026-10-21T09:30:00Z', goal: 'Archived one' })
+      await store.save(gone, 'me')
+      await store.markSynced(gone.id, {
+        id: gone.id,
+        tag: 'work',
+        goal: null,
+        archivedAt: '2026-10-21T10:00:00Z',
+      })
+      api.offline = true
+      window.dispatchEvent(new Event('online'))
+      expect(await screen.findByText('Synced later')).toBeInTheDocument()
+      expect(screen.getByText('From the server')).toBeInTheDocument()
+      expect(screen.queryByText('Archived one')).not.toBeInTheDocument()
+      expect(screen.getByText(/You’re offline/)).toBeInTheDocument()
       store.close()
     })
 

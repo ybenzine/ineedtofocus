@@ -119,10 +119,15 @@ export default function HistoryScreen({
           focusSeconds: d.record.focusSeconds,
           status: d.record.status,
           indicator: d.indicator,
+          unsaved: d.syncState !== 'synced',
         } satisfies HistorySession,
         archived: d.archivedAt !== null,
+        // Selected by upload state, not by the badge: a synced session with a queued edit also
+        // shows a badge, but the server already has it.
+        notUploaded: d.syncState !== 'synced',
       }))
-      const unsynced = device.map((d) => d.session).filter((s) => s.indicator !== 'synced')
+      const alive = device.filter((d) => !d.archived)
+      const unsynced = alive.filter((d) => d.notUploaded).map((d) => d.session)
       if (result.kind === 'ok') {
         weekStart.current = result.value.weekStartDay
         cache.current.set(queryKey, result.value)
@@ -143,7 +148,9 @@ export default function HistoryScreen({
       const cached = cache.current.get(queryKey)
       const period = periodOf(query, weekStart.current)
       const base = cached ?? emptyData(query.view, tz, weekStart.current, period)
-      const extra = cached ? unsynced : device.filter((d) => !d.archived).map((d) => d.session)
+      // Everything on the device that isn't archived (merging de-duplicates by id), so a session
+      // that synced after the cached answer was fetched isn't lost.
+      const extra = alive.map((d) => d.session)
       setLoad({ kind: 'ready', data: mergeSessions(base, extra, query.tags), offline: true })
     })()
     return () => {
@@ -245,14 +252,14 @@ export default function HistoryScreen({
           <p aria-live="polite">{data ? periodLabel(data) : ''}</p>
           <button
             type="button"
-            disabled={periodEnd !== null && periodEnd >= today}
+            disabled={load.kind === 'loading' || (periodEnd !== null && periodEnd >= today)}
             onClick={() => setAnchor(shiftAnchor(stepper, anchor, 1))}
           >
             Next {stepper}
           </button>
         </div>
       )}
-      {!stepper && data && <p className="history-period">{periodLabel(data)}</p>}
+      {!stepper && !needsRange && data && <p className="history-period">{periodLabel(data)}</p>}
 
       {needsRange ? (
         <p className="field-hint">Choose a start and an end date.</p>
@@ -291,7 +298,7 @@ function Results({
   filtered: boolean
   onNewSession?: () => void
 }) {
-  const unsynced = data.sessions.filter((s) => s.indicator !== 'synced').length
+  const unsynced = data.sessions.filter((s) => s.unsaved).length
   return (
     <>
       {offline && (
@@ -365,7 +372,7 @@ function Chart({ data }: { data: HistoryData }) {
       <h2 id="chart-title">
         {data.bucket === 'month' ? 'Focus time by month' : 'Focus time by day'}
       </h2>
-      <ol className="history-chart" data-bucket={data.bucket}>
+      <ol className="history-chart" aria-labelledby="chart-title" data-bucket={data.bucket}>
         {data.buckets.map((b, i) => (
           <li key={b.date}>
             <span className="bar-track">

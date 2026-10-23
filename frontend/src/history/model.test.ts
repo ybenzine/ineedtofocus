@@ -54,6 +54,18 @@ describe('periods', () => {
     expect(localDate('2026-10-21T23:30:00Z', 'Asia/Tokyo')).toBe('2026-10-22')
     expect(localDate('2026-10-21T01:30:00Z', 'America/New_York')).toBe('2026-10-20')
   })
+
+  it('assigns the right local date across DST changes', () => {
+    const ny = 'America/New_York'
+    // Fall back (25 h day): 1 Nov 2026.
+    expect(localDate('2026-11-01T05:30:00Z', ny)).toBe('2026-11-01')
+    expect(localDate('2026-11-02T04:59:00Z', ny)).toBe('2026-11-01')
+    expect(localDate('2026-11-02T05:00:00Z', ny)).toBe('2026-11-02')
+    // Spring forward (23 h day): 8 Mar 2026.
+    expect(localDate('2026-03-08T06:59:00Z', ny)).toBe('2026-03-08')
+    expect(localDate('2026-03-09T03:59:00Z', ny)).toBe('2026-03-08')
+    expect(localDate('2026-03-09T04:00:00Z', ny)).toBe('2026-03-09')
+  })
 })
 
 describe('mergeSessions', () => {

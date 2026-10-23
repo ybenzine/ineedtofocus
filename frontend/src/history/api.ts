@@ -31,6 +31,8 @@ export interface HistorySession {
   focusSeconds: number
   status: SessionStatus
   indicator: SyncIndicator
+  /** True for a session on the device that the server doesn't have yet (not for an edit). */
+  unsaved?: boolean
 }
 
 export interface HistoryData {

@@ -75,7 +75,15 @@ export default function SessionSummary({
           className="secondary link-button"
           href={HISTORY_PATH}
           onClick={(event) => {
-            if (!onViewHistory || event.button !== 0 || event.metaKey || event.ctrlKey) return
+            if (
+              !onViewHistory ||
+              event.button !== 0 ||
+              event.metaKey ||
+              event.ctrlKey ||
+              event.shiftKey ||
+              event.altKey
+            )
+              return
             event.preventDefault()
             onViewHistory()
           }}
