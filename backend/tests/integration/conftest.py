@@ -7,18 +7,27 @@ compose `db` by default), dropped afterwards, so tests never touch the dev datab
 
 import asyncio
 import uuid
-from collections.abc import Coroutine, Iterator
+from collections.abc import Callable, Coroutine, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Any
 
 import pytest
+from alembic import command
 from alembic.config import Config
+from fastapi import APIRouter
+from fastapi.testclient import TestClient
+from httpx import Response
 from sqlalchemy import text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.config import Settings
+from app.deps import CurrentUser, DbSession
+from app.main import create_app
+
+PASSWORD = "correct horse battery"
 
 BACKEND = Path(__file__).resolve().parents[2]
 
@@ -87,3 +96,62 @@ def alembic_config(test_db_url: str) -> Config:
     cfg.set_main_option("script_location", str(BACKEND / "migrations"))
     cfg.set_main_option("sqlalchemy.url", test_db_url.replace("%", "%%"))
     return cfg
+
+
+MakeClient = Callable[..., AbstractContextManager[TestClient]]
+
+
+@pytest.fixture
+def make_client(alembic_config: Config, test_db_url: str) -> MakeClient:
+    """Factory for app clients on one migrated throwaway database.
+
+    Each client is its own app (and event loop); all talk to the same database.
+    Keyword arguments override `Settings`.
+    """
+    command.upgrade(alembic_config, "head")
+
+    @contextmanager
+    def make(**overrides: Any) -> Iterator[TestClient]:
+        overrides.setdefault("cookie_secure", False)  # tests talk plain http
+        app = create_app(Settings(database_url=test_db_url, **overrides))
+
+        # A stand-in for the data endpoints that later issues add (AC1.2, AC1.3).
+        router = APIRouter()
+
+        @router.get("/api/_whoami")
+        async def whoami(user: CurrentUser, db: DbSession) -> dict[str, str]:
+            rows = await db.execute(text("SELECT email FROM users WHERE id = :id"), {"id": user.id})
+            return {"email": rows.scalar_one()}
+
+        app.include_router(router)
+        with TestClient(app) as c:
+            yield c
+
+    return make
+
+
+def signup(c: TestClient, email: str = "ada@example.com", password: str = PASSWORD) -> Response:
+    r: Response = c.post("/api/auth/signup", json={"email": email, "password": password})
+    return r
+
+
+@pytest.fixture
+def app_url(alembic_config: Config, test_db_url: str) -> str:
+    command.upgrade(alembic_config, "head")
+    return test_db_url
+
+
+@pytest.fixture
+def ada(make_client: MakeClient) -> Iterator[TestClient]:
+    """Ada, signed up; her `.bob` attribute is a second signed-up client (the `bob` fixture)."""
+    with make_client() as c, make_client() as bob:
+        assert signup(c, "ada@example.com").status_code == 201
+        assert signup(bob, "bob@example.com").status_code == 201
+        c.bob = bob
+        yield c
+
+
+@pytest.fixture
+def bob(ada: TestClient) -> TestClient:
+    client: TestClient = ada.bob
+    return client

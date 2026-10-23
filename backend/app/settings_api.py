@@ -63,11 +63,18 @@ class SettingsOut(BaseModel):
     updated_at: datetime
 
 
-class SettingsPatch(BaseModel):
-    """Partial update: send only the fields to change. `null` is a value for
-    `default_reminder_minutes` (Off), `pomodoro_config` and `last_tag` (back to none)."""
+def _drop_defaults(schema: dict[str, Any]) -> None:
+    """An omitted field means "unchanged", so the schema must not advertise a default."""
+    for prop in schema.get("properties", {}).values():
+        prop.pop("default", None)
 
-    model_config = ConfigDict(extra="forbid")
+
+class SettingsPatch(BaseModel):
+    """Partial update: send only the fields to change. An omitted field means unchanged; no
+    field has a default. `null` is a value for `default_reminder_minutes` (Off),
+    `pomodoro_config` and `last_tag` (back to none)."""
+
+    model_config = ConfigDict(extra="forbid", json_schema_extra=_drop_defaults)
 
     week_start_day: Annotated[StrictInt, Field(ge=0, le=6)] = 0
     alert_volume: Annotated[StrictInt, Field(ge=0, le=100)] = 80
@@ -148,13 +155,25 @@ _YOUTUBE_HOSTS = {
 
 
 def _check_youtube_url(value: str) -> str:
+    """Accept only plain web links to the YouTube hosts. Anything a browser and `urlsplit`
+    could read differently (a backslash, userinfo, a port) or that holds whitespace or
+    control characters is refused."""
     value = value.strip()
+    if "\\" in value or any(c.isspace() or not c.isprintable() for c in value):
+        raise ValueError("Enter a valid YouTube link")
     try:
         parts = urlsplit(value)
         host = (parts.hostname or "").lower()
+        port = parts.port
     except ValueError:
         raise ValueError("Enter a valid YouTube link") from None
-    if parts.scheme not in ("http", "https") or host not in _YOUTUBE_HOSTS:
+    default_port = {"http": 80, "https": 443}.get(parts.scheme)
+    if (
+        default_port is None
+        or host not in _YOUTUBE_HOSTS
+        or "@" in parts.netloc
+        or port not in (None, default_port)
+    ):
         raise ValueError("Enter a valid YouTube link")
     return value
 

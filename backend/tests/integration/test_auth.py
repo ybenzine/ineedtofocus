@@ -1,65 +1,24 @@
 """Accounts API (#8) against a real, migrated, throwaway Postgres."""
 
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractContextManager, contextmanager
 from typing import Any
 
 import pytest
-from alembic import command
-from alembic.config import Config
-from fastapi import APIRouter
 from fastapi.testclient import TestClient
-from httpx import Response
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
-from app.config import Settings
-from app.deps import CurrentUser, DbSession
-from app.main import create_app
-from tests.integration.conftest import run
+from tests.integration.conftest import PASSWORD, MakeClient, run, signup
 
 pytestmark = pytest.mark.integration
-
-PASSWORD = "correct horse battery"
-
-MakeClient = Callable[..., AbstractContextManager[TestClient]]
-
-
-@pytest.fixture
-def make_client(alembic_config: Config, test_db_url: str) -> MakeClient:
-    command.upgrade(alembic_config, "head")
-
-    @contextmanager
-    def make(**overrides: Any) -> Iterator[TestClient]:
-        overrides.setdefault("cookie_secure", False)  # tests talk plain http
-        app = create_app(Settings(database_url=test_db_url, **overrides))
-
-        # A stand-in for the data endpoints that later issues add (AC1.2, AC1.3).
-        router = APIRouter()
-
-        @router.get("/api/_whoami")
-        async def whoami(user: CurrentUser, db: DbSession) -> dict[str, str]:
-            rows = await db.execute(text("SELECT email FROM users WHERE id = :id"), {"id": user.id})
-            return {"email": rows.scalar_one()}
-
-        app.include_router(router)
-        with TestClient(app) as c:
-            yield c
-
-    return make
 
 
 @pytest.fixture
 def client(make_client: MakeClient) -> Iterator[TestClient]:
     with make_client() as c:
         yield c
-
-
-def signup(c: TestClient, email: str = "ada@example.com", password: str = PASSWORD) -> Response:
-    r: Response = c.post("/api/auth/signup", json={"email": email, "password": password})
-    return r
 
 
 async def _scalar(url: str, sql: str) -> list[Any]:

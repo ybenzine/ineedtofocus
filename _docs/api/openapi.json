@@ -568,17 +568,15 @@
       },
       "SettingsPatch": {
         "additionalProperties": false,
-        "description": "Partial update: send only the fields to change. `null` is a value for\n`default_reminder_minutes` (Off), `pomodoro_config` and `last_tag` (back to none).",
+        "description": "Partial update: send only the fields to change. An omitted field means unchanged; no\nfield has a default. `null` is a value for `default_reminder_minutes` (Off),\n`pomodoro_config` and `last_tag` (back to none).",
         "properties": {
           "alert_volume": {
-            "default": 80,
             "maximum": 100.0,
             "minimum": 0.0,
             "title": "Alert Volume",
             "type": "integer"
           },
           "background_volume": {
-            "default": 50,
             "maximum": 100.0,
             "minimum": 0.0,
             "title": "Background Volume",
@@ -604,7 +602,6 @@
             "title": "Default Reminder Minutes"
           },
           "keep_screen_awake": {
-            "default": false,
             "title": "Keep Screen Awake",
             "type": "boolean"
           },
@@ -629,7 +626,6 @@
             ]
           },
           "week_start_day": {
-            "default": 0,
             "maximum": 6.0,
             "minimum": 0.0,
             "title": "Week Start Day",

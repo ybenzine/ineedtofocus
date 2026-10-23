@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -11,9 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.logging_config import configure_logging
-from tests.integration.conftest import run
-from tests.integration.test_auth import MakeClient, signup
-from tests.integration.test_auth import make_client as make_client
+from tests.integration.conftest import MakeClient, run, signup
 
 pytestmark = pytest.mark.integration
 
@@ -293,6 +292,12 @@ def test_ac8_6_links_are_per_user(make_client: MakeClient) -> None:
         "https://music.youtube.com/watch?v=abc",
         "https://www.youtube-nocookie.com/embed/abc",
         "  https://www.youtube.com/watch?v=abc  ",
+        "https://www.youtube.com/shorts/abc123",
+        "https://www.youtube.com/playlist?list=PLabc",
+        "https://www.youtube.com/live/abc123",
+        "https://www.youtube.com/embed/abc123",
+        "https://www.youtube.com:443/watch?v=abc",
+        "http://youtube.com:80/watch?v=abc",
     ],
 )
 def test_ac8_6_accepts_youtube_links(client: TestClient, url: str) -> None:
@@ -311,6 +316,20 @@ def test_ac8_6_accepts_youtube_links(client: TestClient, url: str) -> None:
         "javascript:alert(1)//youtube.com",
         "ftp://youtube.com/x",
         "https://[bad",
+        "https://evil.example\\@youtube.com/x",
+        "https://www.youtube.com\\@evil.example/x",
+        "https://user:pass@youtube.com/watch?v=abc",
+        "https://user@www.youtube.com/watch?v=abc",
+        "https://@youtube.com/watch?v=abc",
+        "https://www.youtube.com:8080/watch?v=abc",
+        "https://www.youtube.com:80/watch?v=abc",
+        "https://www.youtube.com:443x/watch?v=abc",
+        "https://www.youtube.com/watch?v=a bc",
+        "https://www.youtube.com/watch?v=a\tbc",
+        "https://www.youtube.com/watch?v=a\nbc",
+        "https://www.youtube.com/wat\x00ch",
+        "https://www.youtube.com/watch?v=a\u200bbc",
+        "https://www.youtube.com/watch?v=a\u00a0bc",
         pytest.param("https://www.youtube.com/" + "a" * 2048, id="too-long"),
     ],
 )
@@ -358,3 +377,18 @@ def test_no_youtube_link_in_logs_on_request_or_database_error(
     out = capsys.readouterr().out
     assert "unhandled exception" in out and "IntegrityError" in out
     assert "secret000" not in out and "youtube.com" not in out  # ... the log does not
+
+
+def test_first_gets_for_a_new_user_race_to_one_row(
+    make_client: MakeClient, test_db_url: str
+) -> None:
+    """Two concurrent first GETs both succeed and leave a single settings row."""
+    with make_client() as c:
+        signup(c)
+        run(_exec(test_db_url, "DELETE FROM user_settings"))  # as if sign-up had not made one
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            codes = [
+                f.result().status_code for f in [pool.submit(c.get, "/api/settings") for _ in "ab"]
+            ]
+    assert codes == [200, 200]
+    assert run(_scalar(test_db_url, "SELECT count(*) FROM user_settings"))[0][0] == 1
