@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Check the running local stack (`make up`): app health, frontend, and telemetry in Grafana.
+"""Check the running local stack (`make up`): app health, frontend, sign-in, telemetry in Grafana.
 
     make check-stack                      # or: python3 scripts/check_local_stack.py
 
 1. GET /healthz and /readyz answer 200 and / serves the built frontend.
+   Signs up a throwaway account: the session cookie must not be `Secure` (the local stack
+   is plain http, where browsers and curl drop Secure cookies; #79), and it must sign in.
 2. Sends a request (unique path) whose query string and cookie carry a secret marker.
 3. Polls Grafana (from grafana/otel-lgtm) until it has, for service `ineedtofocus`:
    traces (Tempo), metrics (Prometheus) and logs (Loki).
@@ -43,6 +45,7 @@ def setting(name: str, default: str) -> str:
 
 
 SERVICE = "ineedtofocus"
+SESSION_COOKIE = "focus_session"  # backend/app/deps.py
 APP = f"http://localhost:{setting('APP_PORT', '8000')}"
 GRAFANA = f"http://localhost:{setting('GRAFANA_PORT', '3000')}"
 PROXY = f"{GRAFANA}/api/datasources/proxy/uid"
@@ -58,6 +61,52 @@ def get(url: str, headers: dict[str, str] | None = None) -> tuple[int, str]:
             return r.status, r.read().decode()
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode()
+
+
+def post_json(url: str, payload: dict[str, str]) -> tuple[int, list[str], str]:
+    """POST a JSON body; returns the status, the Set-Cookie headers and the body."""
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, r.headers.get_all("Set-Cookie") or [], r.read().decode()
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get_all("Set-Cookie") or [], e.read().decode()
+
+
+def find_cookie(set_cookies: list[str], name: str) -> tuple[str, set[str]] | None:
+    """The named cookie in Set-Cookie headers: (value, lower-cased attribute names)."""
+    for header in set_cookies:
+        first, *attrs = header.split(";")
+        key, sep, value = first.partition("=")
+        if sep and key.strip() == name:
+            return value.strip(), {a.split("=", 1)[0].strip().lower() for a in attrs}
+    return None
+
+
+def check_sign_up() -> None:
+    """Sign up a throwaway account over plain http and use its session cookie."""
+    email = f"stack-check-{uuid.uuid4().hex[:12]}@example.com"
+    status, set_cookies, body = post_json(
+        f"{APP}/api/auth/signup", {"email": email, "password": uuid.uuid4().hex}
+    )
+    if status != 201:
+        sys.exit(f"FAIL  POST /api/auth/signup -> {status}: {body[:200]}")
+    cookie = find_cookie(set_cookies, SESSION_COOKIE)
+    if cookie is None:
+        sys.exit(f"FAIL  POST /api/auth/signup set no {SESSION_COOKIE} cookie")
+    token, attrs = cookie
+    if "secure" in attrs:
+        sys.exit(
+            f"FAIL  the {SESSION_COOKIE} cookie is Secure, which plain http drops: "
+            "the local app needs COOKIE_SECURE=0 (compose.yaml)"
+        )
+    print(f"ok    POST /api/auth/signup -> 201, {SESSION_COOKIE} cookie not Secure")
+    status, _ = get(f"{APP}/api/auth/me", {"Cookie": f"{SESSION_COOKIE}={token}"})
+    if status != 200:
+        sys.exit(f"FAIL  GET /api/auth/me with the sign-up cookie -> {status}")
+    print("ok    GET /api/auth/me with that cookie -> 200 (signed in over http)")
 
 
 def get_json(url: str, **params: str) -> Any:
@@ -91,6 +140,7 @@ def main() -> None:
     if status != 200 or "<html" not in body.lower():
         sys.exit(f"FAIL  GET / did not serve the frontend ({status})")
     print("ok    GET / serves the frontend")
+    check_sign_up()
 
     # The path identifies this run's trace; the marker is the secret that must not leak.
     probe_path = f"/api/stack-check-{uuid.uuid4().hex[:12]}"
