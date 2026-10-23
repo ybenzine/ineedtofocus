@@ -143,7 +143,7 @@ class SessionIn(BaseModel):
         except (OverflowError, ValueError):
             raise ValueError("Time is out of range") from None
         if not EARLIEST_START <= utc <= _now() + FUTURE_SLACK:
-            raise ValueError("Time is outside the accepted window (2020-01-01 to tomorrow)")
+            raise ValueError("Time is outside the accepted window (2020-01-01 to 24 hours ahead)")
         return utc
 
     @field_validator("focus_seconds")
