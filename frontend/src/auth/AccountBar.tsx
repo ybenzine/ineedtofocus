@@ -1,22 +1,30 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TimerController } from '../timer/index.ts'
 import { useAccount } from './AccountContext.tsx'
-import { countUnsynced, hasActiveTimer, trySyncAll } from './localData.ts'
+import {
+  ACTIVE_TIMER_MESSAGE,
+  countUnsynced,
+  hasActiveTimer,
+  trySyncAll,
+  unsyncedWarning,
+  type UnsyncedCount,
+} from './localData.ts'
 
 /**
  * Who is signed in, and Sign out. Shown on the setup screen only, never over a running timer.
- * Sign out is refused while a timer runs; unsaved finished sessions are retried first and, if any
- * remain, deleted only after a confirmation (Cancel is the default).
+ * Sign out is refused while a timer runs; unsynced sessions and edits get one last sync (at most
+ * 10 s, skipped offline) and, if any remain, are deleted only after a confirmation (Cancel is
+ * the default).
  */
 export default function AccountBar({ controller }: { controller: TimerController }) {
   const account = useAccount()
   const [message, setMessage] = useState('')
-  const [unsynced, setUnsynced] = useState(0)
+  const [unsynced, setUnsynced] = useState<UnsyncedCount | null>(null)
   const [busy, setBusy] = useState(false)
   const cancelRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
-    if (unsynced > 0) cancelRef.current?.focus()
+    if (unsynced) cancelRef.current?.focus()
   }, [unsynced])
 
   if (!account) return null
@@ -24,7 +32,12 @@ export default function AccountBar({ controller }: { controller: TimerController
 
   async function finish() {
     setMessage('')
-    setUnsynced(0)
+    setUnsynced(null)
+    // Another tab may have started a timer while the confirmation was open.
+    if (hasActiveTimer()) {
+      setMessage(ACTIVE_TIMER_MESSAGE)
+      return
+    }
     const problem = await signOut()
     if (problem) setMessage(problem)
   }
@@ -32,7 +45,7 @@ export default function AccountBar({ controller }: { controller: TimerController
   async function request() {
     setMessage('')
     if (hasActiveTimer()) {
-      setMessage('End your session before signing out.')
+      setMessage(ACTIVE_TIMER_MESSAGE)
       return
     }
     setBusy(true)
@@ -40,7 +53,7 @@ export default function AccountBar({ controller }: { controller: TimerController
       await controller.retryPending()
       await trySyncAll()
       const count = await countUnsynced()
-      if (count > 0) setUnsynced(count)
+      if (count.sessions > 0 || count.edits > 0) setUnsynced(count)
       else await finish()
     } finally {
       setBusy(false)
@@ -54,14 +67,10 @@ export default function AccountBar({ controller }: { controller: TimerController
         Sign out
       </button>
       {message && <span role="alert">{message}</span>}
-      {unsynced > 0 && (
+      {unsynced && (
         <div role="alertdialog" aria-label="Confirm sign out" className="account-confirm">
-          <p>
-            {unsynced === 1
-              ? "1 finished session hasn't been saved and will be deleted from this device."
-              : `${unsynced} finished sessions haven't been saved and will be deleted from this device.`}
-          </p>
-          <button type="button" ref={cancelRef} onClick={() => setUnsynced(0)}>
+          <p>{unsyncedWarning(unsynced)}</p>
+          <button type="button" ref={cancelRef} onClick={() => setUnsynced(null)}>
             Cancel
           </button>
           <button type="button" onClick={() => void finish()}>

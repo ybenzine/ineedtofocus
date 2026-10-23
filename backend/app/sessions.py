@@ -9,7 +9,7 @@ import logging
 import re
 import uuid
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Response
@@ -42,6 +42,16 @@ MAX_BATCH = 100
 MAX_INT4 = 2_147_483_647  # column limit, not a product rule
 # The client rounds to whole seconds from millisecond timestamps.
 CLOCK_TOLERANCE_SECONDS = 2
+# Saved sessions must fall inside this window (UTC, inclusive): a fixed lower bound (the app
+# is newer than this) and a day of slack for fast or mislabelled device clocks (#98).
+EARLIEST_START = datetime(2020, 1, 1, tzinfo=UTC)
+FUTURE_SLACK = timedelta(hours=24)
+
+
+def _now() -> datetime:
+    """The server's current time; tests replace it to freeze the clock."""
+    return datetime.now(UTC)
+
 
 # Every boundary str.splitlines() recognises: CR, LF, VT, FF, FS/GS/RS, NEL, LS, PS (tabs are
 # not line breaks). CRLF is a run of two.
@@ -127,11 +137,14 @@ class SessionIn(BaseModel):
     @field_validator("started_at", "ended_at")
     @classmethod
     def _to_utc(cls, value: datetime) -> datetime:
-        """Store UTC; an offset that pushes the instant outside years 1-9999 is invalid."""
+        """Store UTC; the instant must be inside the accepted window (2020-01-01 .. now + 24 h)."""
         try:
-            return value.astimezone(UTC)
+            utc = value.astimezone(UTC)
         except (OverflowError, ValueError):
             raise ValueError("Time is out of range") from None
+        if not EARLIEST_START <= utc <= _now() + FUTURE_SLACK:
+            raise ValueError("Time is outside the accepted window (2020-01-01 to 24 hours ahead)")
+        return utc
 
     @field_validator("focus_seconds")
     @classmethod
@@ -164,8 +177,13 @@ class SyncRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Items are validated one by one in the handler, so one bad item doesn't fail the batch.
-    # `SessionIn | Any` documents the item shape; an invalid item falls through as raw JSON.
-    sessions: list[SessionIn | Any] = Field(min_length=1, max_length=MAX_BATCH)
+    # Typed `list[Any]` so FastAPI doesn't pre-validate items; the handler validates each one
+    # once. The schema override keeps documenting the item shape (SessionIn) for the frontend.
+    sessions: list[Any] = Field(
+        min_length=1,
+        max_length=MAX_BATCH,
+        json_schema_extra={"items": {"$ref": "#/components/schemas/SessionIn"}},
+    )
 
 
 class SessionEdit(BaseModel):
@@ -329,7 +347,7 @@ async def sync_sessions(body: SyncRequest, user: CurrentUser, db: DbSession) -> 
     valid: list[tuple[int, SessionIn]] = []
     for index, raw in enumerate(body.sessions):
         try:
-            item = raw if isinstance(raw, SessionIn) else SessionIn.model_validate(raw)
+            item = SessionIn.model_validate(raw)
         except ValidationError as exc:
             details = [
                 ErrorDetail(
