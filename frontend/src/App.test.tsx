@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { AlertPlayer, MemoryAlertVolumeStore } from './sounds/alerts.ts'
 import App from './App.tsx'
@@ -86,8 +86,9 @@ describe('App', () => {
       <App controller={controller} preferences={new MemoryPreferencesStore()} alerts={alerts} />,
     )
     await screen.findByRole('timer')
+    await act(async () => undefined) // let the gesture listener attach
     expect(unlock).not.toHaveBeenCalled()
-    fireEvent.pointerDown(screen.getByRole('timer'))
+    fireEvent.click(screen.getByRole('timer'))
     expect(unlock).toHaveBeenCalledTimes(1)
   })
 

@@ -143,16 +143,35 @@ export class AlertPlayer {
     return resumed
   }
 
+  /** True once audio is unlocked and sounds can play. */
+  get running(): boolean {
+    return this.#context?.state === 'running'
+  }
+
+  /** The alert volume (0–100). The player's store is the single source of truth. */
+  get volume(): number {
+    return this.#volume.load()
+  }
+
+  setVolume(value: number): void {
+    this.#volume.save(value)
+  }
+
   /**
-   * For a session restored after a reload, where no Start press unlocked audio: unlocks on the
-   * next press or key, then stops listening. Returns the cleanup.
+   * For a session restored after a reload, where no Start press unlocked audio: tries to unlock
+   * on each user activation (click, key, touch end, pointer up; a touch `pointerdown` does not
+   * count as activation) and keeps listening until the context is actually running.
+   * Returns the cleanup.
    */
   unlockOnGesture(target: EventTarget = window): () => void {
-    const events = ['pointerdown', 'keydown']
+    const events = ['click', 'keydown', 'touchend', 'pointerup']
     const stop = () => events.forEach((name) => target.removeEventListener(name, handler))
     const handler = () => {
-      void this.unlock()
-      stop()
+      // Synchronously, inside the event: iOS only lets resume() run during the gesture.
+      const unlocked = this.unlock()
+      void unlocked.then(() => {
+        if (this.running || this.#context === null) stop()
+      })
     }
     events.forEach((name) => target.addEventListener(name, handler))
     return stop

@@ -11,18 +11,18 @@ Entry point for every coding agent (and human) working in this repo. Keep this f
 
 ## Read before you start
 
-| Doc                                                      | What it is                                                                                 | Read when                   |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------ | --------------------------- |
-| [_docs/product_decisions.md](_docs/product_decisions.md) | Requirements and acceptance criteria (`F1`–`F13`, `ACx.y`) — **source of truth for scope** | Always                      |
-| [_docs/tech_stack.md](_docs/tech_stack.md)               | Stack, hosting, CI/CD, observability, on-call plan — **source of truth for technology**    | Always                      |
-| [_docs/process.md](_docs/process.md)                     | Issue → branch → PR → review → merge workflow, definition of done, tracker rules           | Always                      |
-| [_docs/agents.md](_docs/agents.md)                       | The agent team, ownership, hand-offs                                                       | Always                      |
-| [_docs/architecture.md](_docs/architecture.md)           | Components, data model, API contract                                                       | Writing code                |
-| [_docs/testing.md](_docs/testing.md)                     | Test layers, commands, what to test                                                        | Writing code or tests       |
-| [_docs/assets.md](_docs/assets.md)                       | Shipped assets (sounds) with source and license                                            | Adding or changing an asset |
-| [_docs/deployment.md](_docs/deployment.md)               | Environments, deploy, rollback                                                             | Touching CI/CD or infra     |
-| [_docs/observability.md](_docs/observability.md)         | Metrics, traces, logs, alerts, telemetry privacy                                           | Touching instrumentation    |
-| [_docs/runbooks/](_docs/runbooks/)                       | Incident runbooks                                                                          | On call                     |
+| Doc | What it is | Read when |
+|---|---|---|
+| [_docs/product_decisions.md](_docs/product_decisions.md) | Requirements and acceptance criteria (`F1`–`F13`, `ACx.y`) — **source of truth for scope** | Always |
+| [_docs/tech_stack.md](_docs/tech_stack.md) | Stack, hosting, CI/CD, observability, on-call plan — **source of truth for technology** | Always |
+| [_docs/process.md](_docs/process.md) | Issue → branch → PR → review → merge workflow, definition of done, tracker rules | Always |
+| [_docs/agents.md](_docs/agents.md) | The agent team, ownership, hand-offs | Always |
+| [_docs/architecture.md](_docs/architecture.md) | Components, data model, API contract | Writing code |
+| [_docs/testing.md](_docs/testing.md) | Test layers, commands, what to test | Writing code or tests |
+| [_docs/assets.md](_docs/assets.md) | Shipped assets (sounds) with source and license | Adding or changing an asset |
+| [_docs/deployment.md](_docs/deployment.md) | Environments, deploy, rollback | Touching CI/CD or infra |
+| [_docs/observability.md](_docs/observability.md) | Metrics, traces, logs, alerts, telemetry privacy | Touching instrumentation |
+| [_docs/runbooks/](_docs/runbooks/) | Incident runbooks | On call |
 
 ## Repository layout
 
@@ -45,16 +45,16 @@ Folders fill in as their issues land.
 
 All entry points go through `make` (`make help` lists them). Needs Docker with Compose v2, [uv](https://docs.astral.sh/uv/) and Node.js ≥ 22.
 
-| Command        | Does                                                                                                                                                                                                                                                                                             |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `make install` | Install backend (uv) and frontend (npm) dependencies; the other targets do this on demand                                                                                                                                                                                                        |
-| `make up`      | Start the full local stack (app, Postgres, Grafana/OTel) with Docker Compose; the app service arrives with #4                                                                                                                                                                                    |
-| `make down`    | Stop it (keeps the database volume)                                                                                                                                                                                                                                                              |
-| `make test`    | Run every test suite: backend unit + integration, frontend unit, repo scripts, the server bootstrap in an Ubuntu container, the production config checks (`test-infra`), Playwright end-to-end (Playwright arrives with #23). `make test-prod-stack` smoke-tests the production stack separately |
-| `make lint`    | Linters and type checks for backend (ruff, mypy), frontend (ESLint, Prettier, tsc), repo scripts and shell scripts (shellcheck)                                                                                                                                                                  |
-| `make fmt`     | Auto-format                                                                                                                                                                                                                                                                                      |
-| `make openapi` | Regenerate `_docs/api/openapi.json` (commit it with any API change)                                                                                                                                                                                                                              |
-| `make hooks`   | Install the pre-commit hooks (ruff, ESLint, Prettier, hygiene checks)                                                                                                                                                                                                                            |
+| Command | Does |
+|---|---|
+| `make install` | Install backend (uv) and frontend (npm) dependencies; the other targets do this on demand |
+| `make up` | Start the full local stack (app, Postgres, Grafana/OTel) with Docker Compose; the app service arrives with #4 |
+| `make down` | Stop it (keeps the database volume) |
+| `make test` | Run every test suite: backend unit + integration, frontend unit, repo scripts, the server bootstrap in an Ubuntu container, the production config checks (`test-infra`), Playwright end-to-end (Playwright arrives with #23). `make test-prod-stack` smoke-tests the production stack separately |
+| `make lint` | Linters and type checks for backend (ruff, mypy), frontend (ESLint, Prettier, tsc), repo scripts and shell scripts (shellcheck) |
+| `make fmt` | Auto-format |
+| `make openapi` | Regenerate `_docs/api/openapi.json` (commit it with any API change) |
+| `make hooks` | Install the pre-commit hooks (ruff, ESLint, Prettier, hygiene checks) |
 
 ## Conventions
 

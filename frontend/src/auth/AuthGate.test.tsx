@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PREFERENCES_KEY } from '../setup/preferences.ts'
+import { ALERT_VOLUME_KEY } from '../sounds/alerts.ts'
 import { KEEP_AWAKE_KEY } from '../timerscreen/wakeLock.ts'
 import { LocalActiveSessionStore, TimerController } from '../timer/index.ts'
 import { ACTIVE_SESSION_KEY } from '../timer/store.ts'
@@ -69,6 +70,7 @@ function fill(email: string, password: string) {
 function seedUserData() {
   localStorage.setItem(PREFERENCES_KEY, '{"tag":"work"}')
   localStorage.setItem(KEEP_AWAKE_KEY, '1')
+  localStorage.setItem(ALERT_VOLUME_KEY, '40')
   localStorage.setItem('someone.elses.key', 'keep me')
 }
 
@@ -236,7 +238,7 @@ describe('sign out', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     expect(api.signOut).toHaveBeenCalled()
-    for (const key of [PREFERENCES_KEY, KEEP_AWAKE_KEY, USER_KEY, OWNER_KEY]) {
+    for (const key of [PREFERENCES_KEY, KEEP_AWAKE_KEY, ALERT_VOLUME_KEY, USER_KEY, OWNER_KEY]) {
       expect(localStorage.getItem(key)).toBeNull()
     }
     expect(localStorage.getItem('someone.elses.key')).toBe('keep me')

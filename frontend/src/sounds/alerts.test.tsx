@@ -140,15 +140,52 @@ describe('AlertPlayer', () => {
     expect(sources).toHaveLength(1)
   })
 
-  it('unlockOnGesture unlocks on the first press, then stops listening', async () => {
+  it('unlockOnGesture calls resume() synchronously inside the activating event', () => {
     const { alerts, context } = player(80, fakeAudio('suspended'))
     const target = new EventTarget()
     alerts.unlockOnGesture(target)
     expect(context.resume).not.toHaveBeenCalled()
+    target.dispatchEvent(new Event('click'))
+    expect(context.resume).toHaveBeenCalledTimes(1) // same tick as the dispatch
+  })
+
+  it('unlockOnGesture ignores pointerdown, which is not an activation for touch', () => {
+    const audio = fakeAudio('suspended')
+    audio.context.resume.mockImplementation(async () => undefined) // stays suspended
+    const { alerts, context } = player(80, audio)
+    const target = new EventTarget()
+    alerts.unlockOnGesture(target)
     target.dispatchEvent(new Event('pointerdown'))
-    expect(context.resume).toHaveBeenCalledTimes(1)
+    expect(context.resume).not.toHaveBeenCalled()
+    for (const name of ['keydown', 'touchend', 'pointerup']) {
+      target.dispatchEvent(new Event(name))
+    }
+    expect(context.resume).toHaveBeenCalledTimes(3)
+  })
+
+  it('unlockOnGesture keeps listening while the context is still suspended', async () => {
+    const audio = fakeAudio('suspended')
+    audio.context.resume.mockImplementation(async () => undefined) // the browser refused
+    const { alerts, context } = player(80, audio)
+    const target = new EventTarget()
+    alerts.unlockOnGesture(target)
+    target.dispatchEvent(new Event('click'))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    target.dispatchEvent(new Event('click'))
+    expect(context.resume).toHaveBeenCalledTimes(2)
+  })
+
+  it('unlockOnGesture detaches once the context reports running', async () => {
+    const { alerts } = player(80, fakeAudio('suspended'))
+    const unlock = vi.spyOn(alerts, 'unlock')
+    const target = new EventTarget()
+    alerts.unlockOnGesture(target)
+    target.dispatchEvent(new Event('click'))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(alerts.running).toBe(true)
+    target.dispatchEvent(new Event('click'))
     target.dispatchEvent(new Event('keydown'))
-    expect(context.resume).toHaveBeenCalledTimes(1)
+    expect(unlock).toHaveBeenCalledTimes(1)
   })
 
   it('never throws when audio fails', async () => {
@@ -176,14 +213,21 @@ describe('LocalAlertVolumeStore', () => {
 })
 
 describe('SoundPreview', () => {
-  it('previews each sound and saves the alert volume', async () => {
+  it('previews each sound', async () => {
     const { alerts, sources } = player()
-    const volume = new MemoryAlertVolumeStore(80)
-    render(<SoundPreview player={alerts} volume={volume} />)
+    render(<SoundPreview player={alerts} />)
     fireEvent.click(screen.getByRole('button', { name: 'Preview chime' }))
     fireEvent.click(screen.getByRole('button', { name: 'Preview bell' }))
     await vi.waitFor(() => expect(sources).toHaveLength(2))
+  })
+
+  it('plays previews at the volume the slider was moved to (one source of truth)', async () => {
+    const { alerts, sources, gain } = player()
+    render(<SoundPreview player={alerts} />)
     fireEvent.change(screen.getByLabelText('Alert volume'), { target: { value: '30' } })
-    expect(volume.load()).toBe(30)
+    expect(alerts.volume).toBe(30)
+    fireEvent.click(screen.getByRole('button', { name: 'Preview bell' }))
+    await vi.waitFor(() => expect(sources).toHaveLength(1))
+    expect(gain.gain.value).toBe(0.3)
   })
 })
