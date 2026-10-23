@@ -6,20 +6,20 @@ Production: https://ineedtofoc.us · Dev: https://dev.ineedtofoc.us
 
 ## 1. Tech stack
 
-| Layer           | Choice                                                                                                                                        |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Backend         | Python, FastAPI, SQLAlchemy, Alembic migrations, served by Uvicorn                                                                            |
-| Database        | PostgreSQL                                                                                                                                    |
-| Frontend        | React + TypeScript (Vite), installable web app (vite-plugin-pwa service worker)                                                               |
-| Offline storage | IndexedDB via Dexie; sessions get a client-generated UUID so sync is idempotent                                                               |
-| Auth            | Email + password, argon2 hashing, secure HTTP-only session cookie (frontend and API on the same origin)                                       |
-| Audio           | Web Audio API for the gapless rain loop and chimes; YouTube IFrame Player API for YouTube                                                     |
-| Tests           | pytest (unit + integration against a real Postgres), Vitest + Testing Library (frontend), Playwright (end-to-end); all run with `make test`   |
-| Containers      | Docker + Docker Compose; one command (`make up` / `docker compose up`) starts app, database and local observability stack                     |
-| Observability   | OpenTelemetry (traces + metrics), structured JSON logs carrying the trace ID; locally `grafana/otel-lgtm`, deployed Grafana Cloud (free tier) |
-| CI/CD           | GitHub Actions; images in GitHub Container Registry (GHCR)                                                                                    |
-| Coding agents   | Claude Code — subagents for the build team, headless Claude Code in GitHub Actions for the on-call responder                                  |
-| Native stretch  | Capacitor wrapping the same React app (background audio, local notifications)                                                                 |
+| Layer | Choice |
+|---|---|
+| Backend | Python, FastAPI, SQLAlchemy, Alembic migrations, served by Uvicorn |
+| Database | PostgreSQL |
+| Frontend | React + TypeScript (Vite), installable web app (vite-plugin-pwa service worker) |
+| Offline storage | IndexedDB via Dexie; sessions get a client-generated UUID so sync is idempotent |
+| Auth | Email + password, argon2 hashing, secure HTTP-only session cookie (frontend and API on the same origin) |
+| Audio | Web Audio API for the gapless rain loop and chimes; YouTube IFrame Player API for YouTube |
+| Tests | pytest (unit + integration against a real Postgres), Vitest + Testing Library (frontend), Playwright (end-to-end); all run with `make test` |
+| Containers | Docker + Docker Compose; one command (`make up` / `docker compose up`) starts app, database and local observability stack |
+| Observability | OpenTelemetry (traces + metrics), structured JSON logs carrying the trace ID; locally `grafana/otel-lgtm`, deployed Grafana Cloud (free tier) |
+| CI/CD | GitHub Actions; images in GitHub Container Registry (GHCR) |
+| Coding agents | Claude Code — subagents for the build team, headless Claude Code in GitHub Actions for the on-call responder |
+| Native stretch | Capacitor wrapping the same React app (background audio, local notifications) |
 
 ## 2. Environments and hosting
 
@@ -28,11 +28,11 @@ Production: https://ineedtofoc.us · Dev: https://dev.ineedtofoc.us
 - **Security:** DigitalOcean Cloud Firewall allows only 22 (SSH, key-only), 80 and 443. Secrets live in per-environment `.env` files on the server and in GitHub environment secrets, never in the repo.
 - **Domain:** `ineedtofoc.us` registered at Gandi, DNS hosted on AWS Route 53.
 
-| Record (Route 53)          | Type | Value                       | TTL  |
-| -------------------------- | ---- | --------------------------- | ---- |
-| `ineedtofoc.us`            | A    | Droplet IPv4                | 300  |
-| `dev.ineedtofoc.us`        | A    | Droplet IPv4                | 300  |
-| `ineedtofoc.us` (optional) | CAA  | `0 issue "letsencrypt.org"` | 3600 |
+| Record (Route 53) | Type | Value | TTL |
+|---|---|---|---|
+| `ineedtofoc.us` | A | Droplet IPv4 | 300 |
+| `dev.ineedtofoc.us` | A | Droplet IPv4 | 300 |
+| `ineedtofoc.us` (optional) | CAA | `0 issue "letsencrypt.org"` | 3600 |
 
 Prerequisite: the domain's nameservers at Gandi must be the four Route 53 nameservers of the hosted zone.
 

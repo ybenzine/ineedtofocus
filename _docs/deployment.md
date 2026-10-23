@@ -4,20 +4,20 @@
 
 ## Environments
 
-| Env   | URL                       | Deployed                                   | Compose project |
-| ----- | ------------------------- | ------------------------------------------ | --------------- |
-| Local | http://localhost:8000     | `make up`                                  | `focus-local`   |
-| Dev   | https://dev.ineedtofoc.us | Automatically on merge to `main`           | `focus-dev`     |
-| Prod  | https://ineedtofoc.us     | Manual workflow run with Yacine's approval | `focus-prod`    |
+| Env | URL | Deployed | Compose project |
+|---|---|---|---|
+| Local | http://localhost:8000 | `make up` | `focus-local` |
+| Dev | https://dev.ineedtofoc.us | Automatically on merge to `main` | `focus-dev` |
+| Prod | https://ineedtofoc.us | Manual workflow run with Yacine's approval | `focus-prod` |
 
 ## App image and migrations
 
 One image (root `Dockerfile`, #4) serves the API and the built frontend. Its entrypoint (`infra/app/entrypoint.sh`) runs `alembic upgrade head` and then starts the server. A failed migration exits non-zero, so the container never serves on a schema it doesn't expect.
 
-| `MIGRATE_ON_START` | Behaviour                                        | Use                     |
-| ------------------ | ------------------------------------------------ | ----------------------- |
-| `1` (default)      | Migrate, then start                              | Local stack (`make up`) |
-| `0`                | Skip migrations and start (logs that it skipped) | Deploys and rollbacks   |
+| `MIGRATE_ON_START` | Behaviour | Use |
+|---|---|---|
+| `1` (default) | Migrate, then start | Local stack (`make up`) |
+| `0` | Skip migrations and start (logs that it skipped) | Deploys and rollbacks |
 
 The default doesn't suit rollbacks: an older image started against a database that a newer image migrated fails with `Can't locate revision …` and never serves. Migrations are expand-only (`backend/tests/unit/test_migration_safety.py`), so the older app runs fine on the newer schema once the step is skipped. Deploys therefore run migrations as their own one-shot step (`infra/compose.sh <env> run --rm app alembic upgrade head`), and `infra/compose.prod.yml` runs the app with `MIGRATE_ON_START=0` ([Running it on the server](#running-it-on-the-server)). That way a rollback only swaps the image tag.
 
@@ -44,15 +44,15 @@ ssh -t yacine@159.223.188.176 'sudo bash /tmp/focus-bootstrap.sh'
 
 What it does, in order:
 
-| Step                           | Result                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Checks                         | Refuses to run unless it's root on Ubuntu 24.04, or if Ubuntu's `docker.io`/`podman-docker` is installed (they conflict with `docker-ce`)                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Base packages                  | Installs any of `ca-certificates curl gnupg openssh-server unattended-upgrades` that are missing                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| Docker Engine + Compose plugin | Adds Docker's apt repo (`/etc/apt/sources.list.d/docker.sources`), with its signing key checked against the published fingerprint `9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88`. Installs `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin`. `/etc/docker/daemon.json` rotates container logs (3 × 10 MB per container) and turns on `live-restore`, so containers keep running while dockerd restarts or is upgraded                                                                                                               |
-| Unattended security upgrades   | `/etc/apt/apt.conf.d/20auto-upgrades` refreshes package lists and runs `unattended-upgrade` daily. Ubuntu's own `50unattended-upgrades` limits that to the `-security` pocket (and ESM). `52focus-unattended-upgrades` turns automatic reboots off and removes unused kernels. Enables `unattended-upgrades.service` and the `apt-daily` timers                                                                                                                                                                                                                                        |
-| `deploy` user                  | For CI only. No usable password (`*`), shell `/bin/bash` (needed to run forced commands), member of `docker`, **no sudo**: the script removes it from `sudo`/`admin` and stops if a sudoers rule names it. Its keys live in `/etc/ssh/authorized_keys/deploy`, owned by `root:deploy`, mode 640, so the account can't add keys of its own. The script creates that file once, empty apart from a comment showing the format, and never changes it afterwards. It warns about any key line without `restrict,command=…`                                                                 |
-| SSH hardening                  | `/etc/ssh/sshd_config.d/00-focus-hardening.conf`: `PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PubkeyAuthentication yes`. Named `00-` because the first value wins, so it beats cloud-init's `50-cloud-init.conf`. A `Match User deploy` block reads keys from `/etc/ssh/authorized_keys/%u` (not `~deploy/.ssh`) and turns off PTYs, forwarding, tunnels and `~/.ssh/rc`. The new file is checked with `sshd -t` before sshd reloads; if the check fails, the previous file is put back and the script stops. Open sessions aren't affected |
-| `/opt/focus` layout            | `/opt/focus` (root, 755); `/opt/focus/bin` (root, 755) for the forced-command scripts (#28–#30), root-owned so `deploy` can't change what its own keys run; `/opt/focus/prod` and `/opt/focus/dev` (`deploy`, 750) with their `.env` files set to `deploy`, 600. The `.env` contents are never read or changed; a missing one is a warning                                                                                                                                                                                                                                             |
+| Step | Result |
+|---|---|
+| Checks | Refuses to run unless it's root on Ubuntu 24.04, or if Ubuntu's `docker.io`/`podman-docker` is installed (they conflict with `docker-ce`) |
+| Base packages | Installs any of `ca-certificates curl gnupg openssh-server unattended-upgrades` that are missing |
+| Docker Engine + Compose plugin | Adds Docker's apt repo (`/etc/apt/sources.list.d/docker.sources`), with its signing key checked against the published fingerprint `9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88`. Installs `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`, `docker-compose-plugin`. `/etc/docker/daemon.json` rotates container logs (3 × 10 MB per container) and turns on `live-restore`, so containers keep running while dockerd restarts or is upgraded |
+| Unattended security upgrades | `/etc/apt/apt.conf.d/20auto-upgrades` refreshes package lists and runs `unattended-upgrade` daily. Ubuntu's own `50unattended-upgrades` limits that to the `-security` pocket (and ESM). `52focus-unattended-upgrades` turns automatic reboots off and removes unused kernels. Enables `unattended-upgrades.service` and the `apt-daily` timers |
+| `deploy` user | For CI only. No usable password (`*`), shell `/bin/bash` (needed to run forced commands), member of `docker`, **no sudo**: the script removes it from `sudo`/`admin` and stops if a sudoers rule names it. Its keys live in `/etc/ssh/authorized_keys/deploy`, owned by `root:deploy`, mode 640, so the account can't add keys of its own. The script creates that file once, empty apart from a comment showing the format, and never changes it afterwards. It warns about any key line without `restrict,command=…` |
+| SSH hardening | `/etc/ssh/sshd_config.d/00-focus-hardening.conf`: `PermitRootLogin no`, `PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PubkeyAuthentication yes`. Named `00-` because the first value wins, so it beats cloud-init's `50-cloud-init.conf`. A `Match User deploy` block reads keys from `/etc/ssh/authorized_keys/%u` (not `~deploy/.ssh`) and turns off PTYs, forwarding, tunnels and `~/.ssh/rc`. The new file is checked with `sshd -t` before sshd reloads; if the check fails, the previous file is put back and the script stops. Open sessions aren't affected |
+| `/opt/focus` layout | `/opt/focus` (root, 755); `/opt/focus/bin` (root, 755) for the forced-command scripts (#28–#30), root-owned so `deploy` can't change what its own keys run; `/opt/focus/prod` and `/opt/focus/dev` (`deploy`, 750) with their `.env` files set to `deploy`, 600. The `.env` contents are never read or changed; a missing one is a warning |
 
 The `docker` group is root-equivalent. That's acceptable only because no `deploy` key can open a shell: each one is pinned to a root-owned forced command.
 
@@ -106,24 +106,24 @@ Three Compose projects ([tech_stack.md §2](tech_stack.md#2-environments-and-hos
                      volume focus-prod_db-data          volume focus-dev_db-data
 ```
 
-| File                                               | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File | Role |
+|---|---|
 | `infra/compose.edge.yml` + `infra/caddy/Caddyfile` | Project `focus-edge`: one Caddy. Automatic HTTPS from Let's Encrypt for `ineedtofoc.us` and `dev.ineedtofoc.us`; certificates persist in the `caddy-data` volume. http redirects to https. HTTP/1.1 and HTTP/2 only, since the firewall doesn't open 443/udp. Owns both edge networks, so start it first. Caddy has a fixed address in the lower half of each subnet; Docker hands the apps addresses from the upper half only (`ip_range` …128/25). An app that starts before Caddy after a reboot therefore can't take Caddy's address |
-| `infra/compose.prod.yml`                           | One file, run as `focus-prod` and as `focus-dev`. Each project has an app, Postgres 17 with a named volume, and an OpenTelemetry Collector. Only the app joins its environment's edge network, under the alias Caddy routes to. Dev's app can't reach prod's                                                                                                                                                                                                                                                                             |
-| `infra/env/prod.env`, `infra/env/dev.env`          | Committed, non-secret settings per environment: memory limits, OOM score, CPU weight, Postgres `shared_buffers`, edge network, Caddy's address                                                                                                                                                                                                                                                                                                                                                                                           |
-| `/opt/focus/<env>/.env` (server only)              | That environment's secrets: `POSTGRES_PASSWORD` and, from #32, the `GRAFANA_CLOUD_*` values ([.env.example](../.env.example), "Deployed environments")                                                                                                                                                                                                                                                                                                                                                                                   |
-| `infra/compose.sh`                                 | `APP_TAG=<sha> infra/compose.sh prod\|dev <compose args>`: passes `-f infra/compose.prod.yml --env-file /opt/focus/<env>/.env --env-file infra/env/<env>.env`. The committed file comes last, so its values win over anything in the server file                                                                                                                                                                                                                                                                                         |
+| `infra/compose.prod.yml` | One file, run as `focus-prod` and as `focus-dev`. Each project has an app, Postgres 17 with a named volume, and an OpenTelemetry Collector. Only the app joins its environment's edge network, under the alias Caddy routes to. Dev's app can't reach prod's |
+| `infra/env/prod.env`, `infra/env/dev.env` | Committed, non-secret settings per environment: memory limits, OOM score, CPU weight, Postgres `shared_buffers`, edge network, Caddy's address |
+| `/opt/focus/<env>/.env` (server only) | That environment's secrets: `POSTGRES_PASSWORD` and, from #32, the `GRAFANA_CLOUD_*` values ([.env.example](../.env.example), "Deployed environments") |
+| `infra/compose.sh` | `APP_TAG=<sha> infra/compose.sh prod\|dev <compose args>`: passes `-f infra/compose.prod.yml --env-file /opt/focus/<env>/.env --env-file infra/env/<env>.env`. The committed file comes last, so its values win over anything in the server file |
 
 Compose refuses to start an environment without `APP_TAG`, `POSTGRES_PASSWORD` or any committed setting. All containers use `restart: unless-stopped`, so they come back after a reboot.
 
 ### Memory: dev can't starve prod
 
-| Container                   | prod            | dev             |
-| --------------------------- | --------------- | --------------- |
-| app                         | 320 MiB         | 256 MiB         |
+| Container | prod | dev |
+|---|---|---|
+| app | 320 MiB | 256 MiB |
 | Postgres (`shared_buffers`) | 256 MiB (64 MB) | 128 MiB (32 MB) |
-| OpenTelemetry Collector     | 96 MiB          | 96 MiB          |
-| Caddy (shared)              | 96 MiB          |                 |
+| OpenTelemetry Collector | 96 MiB | 96 MiB |
+| Caddy (shared) | 96 MiB | |
 
 The limits add up to 1,248 MiB. Adding a one-shot migration container (up to 320 MiB) gives 1,568 MiB, under the 1,600 MiB budget that leaves about 350 MiB of the 2 GiB Droplet to the kernel, dockerd, containerd and sshd. So the limits never overcommit the host. Dev's containers also get `oom_score_adj: 500`, so the kernel kills them first if memory runs out anyway, and a quarter of prod's CPU weight (`cpu_shares` 256 against 1024). The collectors run with `GOMEMLIMIT` and a `memory_limiter` at 80% of their limit. `make test-infra` fails if the limits break these rules (`scripts/check_prod_compose.py`).
 
@@ -199,13 +199,13 @@ Why not have the forced command fetch `infra/` itself? Then any merge to `main` 
 
 Every push to `main` runs CI. Once the five required checks and `image` pass, `publish` pushes `ghcr.io/ybenzine/ineedtofocus:<sha>` and outputs its digest. Then `deploy-dev` (`.github/workflows/ci.yml`, `needs: publish`) deploys that exact digest. A red `main` never reaches dev, and a re-run that re-pushes the tag can't change what was deployed.
 
-| Step    | Where                  | What                                                                                                                                                                                                                                                                                                                                                                                                 |
-| ------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Gate    | runner                 | Neither `DEPLOY_SSH_KEY` nor `DEPLOY_KNOWN_HOSTS` set in the `dev` environment: skips with a notice, green (not set up yet). Only one of them set: fails red, since the environment is half configured. Both: deploys                                                                                                                                                                                |
-| Deploy  | server, `focus-ci dev` | `ssh deploy@159.223.188.176 "deploy <sha> sha256:<digest>"`: waits for the deploy lock, pulls by digest, checks the image's `org.opencontainers.image.revision` label is `<sha>`, tags it `:<sha>`, migrates (`run --rm`), starts (`up -d --wait`, the `/healthz` healthcheck), checks that the app container runs exactly that image and that `/readyz` answers inside it, then records the release |
-| Record  | runner                 | `ssh … status` reads the record back; the job fails if it doesn't show this tag and digest                                                                                                                                                                                                                                                                                                           |
-| Smoke   | runner                 | `scripts/smoke_deploy.py https://dev.ineedtofoc.us`: `/healthz` and `/readyz` answer `{"status":"ok"}`, `/` serves the frontend, `http://` redirects to `https://`, the certificate verifies. Retried for up to 90 s                                                                                                                                                                                 |
-| Summary | runner                 | Tag, image digest, server time of the deploy, rollback target, infra revision, smoke results                                                                                                                                                                                                                                                                                                         |
+| Step | Where | What |
+|---|---|---|
+| Gate | runner | Neither `DEPLOY_SSH_KEY` nor `DEPLOY_KNOWN_HOSTS` set in the `dev` environment: skips with a notice, green (not set up yet). Only one of them set: fails red, since the environment is half configured. Both: deploys |
+| Deploy | server, `focus-ci dev` | `ssh deploy@159.223.188.176 "deploy <sha> sha256:<digest>"`: waits for the deploy lock, pulls by digest, checks the image's `org.opencontainers.image.revision` label is `<sha>`, tags it `:<sha>`, migrates (`run --rm`), starts (`up -d --wait`, the `/healthz` healthcheck), checks that the app container runs exactly that image and that `/readyz` answers inside it, then records the release |
+| Record | runner | `ssh … status` reads the record back; the job fails if it doesn't show this tag and digest |
+| Smoke | runner | `scripts/smoke_deploy.py https://dev.ineedtofoc.us`: `/healthz` and `/readyz` answer `{"status":"ok"}`, `/` serves the frontend, `http://` redirects to `https://`, the certificate verifies. Retried for up to 90 s |
+| Summary | runner | Tag, image digest, server time of the deploy, rollback target, infra revision, smoke results |
 
 A failed step stops the deploy and exits non-zero, which turns the job red. The record keeps the last successful release, and the attempt is logged with the step that failed. If the failure came after `up`, dev may be running the new image unhealthy; automatic revert to the previous release is #30.
 
@@ -213,15 +213,15 @@ A failed step stops the deploy and exits non-zero, which turns the job red. The 
 
 `/opt/focus/bin/focus-ci <profile>` (source `infra/server/focus-ci.sh`) accepts exactly these requests in `$SSH_ORIGINAL_COMMAND`, matched whole, in the C locale:
 
-| Request                                               | Profile `dev` | Does                                                                                                                               |
-| ----------------------------------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `deploy <40 lowercase hex> sha256:<64 lowercase hex>` | yes           | The deploy above                                                                                                                   |
-| `rollback`                                            | yes           | Starts the record's previous release again by digest, no migration, same checks. Rolling back again goes further back, not forward |
-| `status`                                              | yes           | Prints the record                                                                                                                  |
+| Request | Profile `dev` | Does |
+|---|---|---|
+| `deploy <40 lowercase hex> sha256:<64 lowercase hex>` | yes | The deploy above |
+| `rollback` | yes | Starts the record's previous release again by digest, no migration, same checks. Rolling back again goes further back, not forward |
+| `status` | yes | Prints the record |
 
 Anything else gets exit status 2 and `focus-ci: refused`, before anything runs: another verb, extra or malformed arguments, a shell, scp or sftp, a newline, or an unknown profile. Requests are logged to syslog (`journalctl -t focus-ci`). Every `docker` and `compose.sh` call runs under `env -i` with only `PATH`, `HOME` and `APP_TAG`, so nothing from the SSH session (such as `LC_*`, which sshd accepts) can override `infra/env/<env>.env`. #29 and #30 add profiles (prod deploy; prod rollback restricted to recorded releases) and the automatic revert in the same `case`.
 
-**Serialization.** Every deploy and rollback takes `flock /opt/focus/deploy.lock` (waits up to 15 minutes), across environments, and `install.sh` takes the same lock. The memory budget counts one migration container at a time ([Memory](#memory-dev-cant-starve-prod)). In GitHub, `deploy-dev` has its own concurrency group (`deploy-dev`, no cancelling of the running deploy). Deploys of different environments don't share one group: GitHub cancels a _pending_ job when another one joins the group, so a dev deploy queued behind a prod deploy would cancel a pending prod rollback. The server lock is what orders them. When merges queue up, the group keeps only the newest pending deploy: an intermediate commit's `Deploy to dev` shows as cancelled and dev goes straight to the newest commit. That's intended.
+**Serialization.** Every deploy and rollback takes `flock /opt/focus/deploy.lock` (waits up to 15 minutes), across environments, and `install.sh` takes the same lock. The memory budget counts one migration container at a time ([Memory](#memory-dev-cant-starve-prod)). In GitHub, `deploy-dev` has its own concurrency group (`deploy-dev`, no cancelling of the running deploy). Deploys of different environments don't share one group: GitHub cancels a *pending* job when another one joins the group, so a dev deploy queued behind a prod deploy would cancel a pending prod rollback. The server lock is what orders them. When merges queue up, the group keeps only the newest pending deploy: an intermediate commit's `Deploy to dev` shows as cancelled and dev goes straight to the newest commit. That's intended.
 
 ### The release record
 
@@ -243,15 +243,15 @@ infra_revision=<sha>           # /opt/focus/infra/REVISION when it ran
 
 ### Credentials
 
-| Where                                                                    | What                                                                                                            | Who sets it   |
-| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- | ------------- |
-| GitHub environment `dev` (deployment branches: `main` only, no reviewer) | `DEPLOY_SSH_KEY`: the private half of the `focus-ci-dev` key. `DEPLOY_KNOWN_HOSTS`: the Droplet's host key line | Yacine        |
-| `/etc/ssh/authorized_keys/deploy`                                        | `restrict,command="/opt/focus/bin/focus-ci dev" ssh-ed25519 … focus-ci-dev`                                     | Yacine (sudo) |
+| Where | What | Who sets it |
+|---|---|---|
+| GitHub environment `dev` (deployment branches: `main` only, no reviewer) | `DEPLOY_SSH_KEY`: the private half of the `focus-ci-dev` key. `DEPLOY_KNOWN_HOSTS`: the Droplet's host key line | Yacine |
+| `/etc/ssh/authorized_keys/deploy` | `restrict,command="/opt/focus/bin/focus-ci dev" ssh-ed25519 … focus-ci-dev` | Yacine (sudo) |
 
 Nothing is stored at repo level. The key can only run the `dev` profile: deploy, roll back or read dev's release. Even if it leaked, it can't open a shell, touch prod's project or change the compose files. What the image checks do and don't guarantee:
 
 - `deploy` pulls only from `ghcr.io/ybenzine/ineedtofocus`, by digest, so the bytes deployed and recorded are the ones requested. A re-pushed tag can't swap them.
-- The revision label check only proves the image _claims_ to be built from `<sha>`. Anyone able to push to that package can set any label, and any workflow run in this repo that asks for `packages: write` can push there, including runs on PR branches. So the checks don't prove an image was built on `main`. That guarantee comes from the workflow: `deploy-dev` deploys only the digest `publish` pushed for a `main` commit that passed CI. The key itself is held only by the `main`-only `dev` environment.
+- The revision label check only proves the image *claims* to be built from `<sha>`. Anyone able to push to that package can set any label, and any workflow run in this repo that asks for `packages: write` can push there, including runs on PR branches. So the checks don't prove an image was built on `main`. That guarantee comes from the workflow: `deploy-dev` deploys only the digest `publish` pushed for a `main` commit that passed CI. The key itself is held only by the `main`-only `dev` environment.
 - An image runs as dev's app, with the root-installed `compose.prod.yml`: no volumes, ports, Docker socket, privileges or host network, on dev's own networks and database. Host disk and process limits come with #117.
 
 **The local `:<sha>` tag is host-wide.** Both environments' Compose projects resolve `ghcr.io/ybenzine/ineedtofocus:<sha>` from the same local image store, and `focus-ci` moves that tag (`docker tag …@<digest> …:<sha>`) on every deploy and rollback. `focus-ci` therefore never trusts an existing local tag. It re-tags from the digest it was given or has recorded, under the lock, and then checks the running container's image. Anything else that starts an app container must do the same: #29's prod deploy, #30's auto-revert and rollback, and any manual `compose.sh prod up` from a runbook.

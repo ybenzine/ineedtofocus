@@ -36,6 +36,8 @@ export function clampBackgroundVolume(value: number): number {
 export interface BackgroundVolumeStore {
   load(): number
   save(volume: number): void
+  /** Optional: told when the stored volume changes (e.g. from the Settings screen). */
+  subscribe?(listener: () => void): () => void
 }
 
 export class MemoryBackgroundVolumeStore implements BackgroundVolumeStore {
@@ -77,6 +79,7 @@ export class RainPlayer {
   #source: AudioBufferSourceNode | null = null
   #gain: GainNode | null = null
   #context: AudioContext | null = null
+  #unsubscribe: (() => void) | null = null
 
   constructor(options: RainPlayerOptions) {
     this.#alerts = options.alerts
@@ -139,6 +142,12 @@ export class RainPlayer {
       this.#source = source
       this.#context = context
       this.#gain = gain
+      // A volume moved elsewhere (the Settings screen) reaches the loop that is playing.
+      this.#unsubscribe?.()
+      this.#unsubscribe =
+        this.#store.subscribe?.(() => {
+          if (this.#gain === gain) gain.gain.value = this.#store.load() / 100
+        }) ?? null
     } catch {
       // Blocked or unavailable audio: stay silent.
     }
@@ -152,6 +161,8 @@ export class RainPlayer {
     const context = this.#context
     this.#source = null
     this.#gain = null
+    this.#unsubscribe?.()
+    this.#unsubscribe = null
     if (source) {
       try {
         const now = context?.currentTime ?? 0
@@ -159,6 +170,11 @@ export class RainPlayer {
           gain.gain.cancelScheduledValues(now)
           gain.gain.setValueAtTime(gain.gain.value, now)
           gain.gain.linearRampToValueAtTime(0, now + FADE_SECONDS)
+        }
+        // Free the nodes once the fade has finished and the source has stopped.
+        source.onended = () => {
+          source.disconnect()
+          gain?.disconnect()
         }
         source.stop(now + FADE_SECONDS)
       } catch {

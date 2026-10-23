@@ -88,4 +88,8 @@ export class SettingsBackgroundVolumeStore implements BackgroundVolumeStore {
   save(volume: number): void {
     this.#settings.update({ background_volume: clampBackgroundVolume(volume) })
   }
+
+  subscribe(listener: () => void): () => void {
+    return this.#settings.subscribe(listener)
+  }
 }

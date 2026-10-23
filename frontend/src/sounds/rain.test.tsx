@@ -36,6 +36,7 @@ function fakeAudio(state: AudioContextState = 'running') {
       cancelScheduledValues: ReturnType<typeof vi.fn>
     }
     connect: ReturnType<typeof vi.fn>
+    disconnect: ReturnType<typeof vi.fn>
   }[] = []
   const context = {
     state: state as AudioContextState,
@@ -59,6 +60,7 @@ function fakeAudio(state: AudioContextState = 'running') {
           cancelScheduledValues: vi.fn(),
         },
         connect: vi.fn(),
+        disconnect: vi.fn(),
       }
       gains.push(gain)
       return gain
@@ -117,6 +119,32 @@ describe('RainPlayer', () => {
     await rain.play()
     rain.stop()
     expect(sources[1].stop).toHaveBeenCalledWith(expect.closeTo(1.04, 5))
+  })
+
+  it('frees the nodes when the stopped source ends', async () => {
+    const { rain, sources } = fakeAudio()
+    await rain.play()
+    rain.pause()
+    expect(sources[0].disconnect).not.toHaveBeenCalled() // the fade is still running
+    ;(sources[0] as unknown as { onended: () => void }).onended()
+    expect(sources[0].disconnect).toHaveBeenCalled()
+  })
+
+  it('applies a volume change from the settings store to the loop that is playing', async () => {
+    const settings = new SettingsStore()
+    const audio = fakeAudio()
+    const rain = new RainPlayer({
+      alerts: audio.alerts,
+      volume: new SettingsBackgroundVolumeStore(settings),
+      fetchSound: audio.fetchSound,
+    })
+    await rain.play()
+    expect(audio.gains[0].gain.value).toBe(0.5)
+    settings.update({ background_volume: 10 })
+    expect(audio.gains[0].gain.value).toBe(0.1)
+    rain.pause()
+    settings.update({ background_volume: 90 })
+    expect(audio.gains[0].gain.value).not.toBe(0.9)
   })
 
   it('does not start a second loop when played twice', async () => {
@@ -242,6 +270,29 @@ describe('rain.mp3 (AC8.3)', () => {
       const end = Math.round(RAIN_LOOP_END * rate) - shift
       expect(silentRun(samples, start, rate, 1)).toBeLessThan(0.005)
       expect(silentRun(samples, end - 1, rate, -1)).toBeLessThan(0.005)
+    }
+  })
+
+  it('is continuous across the loop point: the wrap is no bigger a step than the rest', async () => {
+    const { samples, rate } = await decode()
+    const steps: number[] = []
+    for (let i = 1; i < samples.length; i++) steps.push(Math.abs(samples[i] - samples[i - 1]))
+    const sorted = [...steps].sort((a, b) => a - b)
+    const p999 = sorted[Math.floor(sorted.length * 0.999)]
+    const rms = (from: number, to: number) => {
+      let sum = 0
+      for (let i = from; i < to; i++) sum += samples[i] * samples[i]
+      return Math.sqrt(sum / (to - from))
+    }
+    const window = Math.round(0.02 * rate)
+    for (const shift of [0, Math.round(0.06 * rate)]) {
+      const start = Math.round(RAIN_LOOP_START * rate) - shift
+      const end = Math.round(RAIN_LOOP_END * rate) - shift
+      expect(Math.abs(samples[start] - samples[end - 1])).toBeLessThanOrEqual(p999)
+      // The level over 20 ms before the wrap matches the level after it.
+      const ratio = rms(end - window, end) / rms(start, start + window)
+      expect(ratio).toBeGreaterThan(0.6)
+      expect(ratio).toBeLessThan(1.6)
     }
   })
 
