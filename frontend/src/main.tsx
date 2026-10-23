@@ -15,6 +15,7 @@ if (!root) {
 // hook to quarantine the previous owner's unsaved session before the app renders (#9, #19).
 const services = createAppServices()
 if (services.hook) registerLocalDataHook(services.hook)
+void services.drainParked?.()
 
 createRoot(root).render(
   <StrictMode>

@@ -11,6 +11,7 @@ import {
   OWNER_KEY,
   PENDING_LOGOUT_KEY,
   USER_KEY,
+  notifySessionExpired,
   registerLocalDataHook,
   type LocalDataHook,
 } from './localData.ts'
@@ -538,6 +539,32 @@ describe('offline sign out', () => {
 })
 
 describe('local data belongs to one user', () => {
+  it('a 401 from sync re-checks the sign-in: expired shows sign-in and keeps the data', async () => {
+    const me = vi.fn().mockResolvedValueOnce(user).mockResolvedValue(null)
+    renderGate(makeApi({ me }))
+    await screen.findByText('the timer app')
+    seedUserData()
+    act(() => {
+      notifySessionExpired()
+    })
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+    expect(me).toHaveBeenCalledTimes(2)
+    expect(localStorage.getItem(USER_KEY)).toBeNull()
+    expect(localStorage.getItem(OWNER_KEY)).toBe(user.id)
+    expect(localStorage.getItem(PREFERENCES_KEY)).not.toBeNull()
+  })
+
+  it('a 401 from sync while the server is unreachable leaves the user signed in', async () => {
+    const me = vi.fn().mockResolvedValueOnce(user).mockRejectedValue(offline)
+    renderGate(makeApi({ me }))
+    await screen.findByText('the timer app')
+    act(() => {
+      notifySessionExpired()
+    })
+    await waitFor(() => expect(me).toHaveBeenCalledTimes(2))
+    expect(screen.getByText('the timer app')).toBeInTheDocument()
+  })
+
   it('keeps the data when /me returns 401 for a remembered user', async () => {
     localStorage.setItem(USER_KEY, JSON.stringify(user))
     localStorage.setItem(OWNER_KEY, user.id)

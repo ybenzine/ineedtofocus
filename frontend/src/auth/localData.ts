@@ -1,5 +1,7 @@
 import { PREFERENCES_KEY } from '../setup/preferences.ts'
 import { ACTIVE_OWNER_KEY } from '../sync/owner.ts'
+import { finishedRecordOf, parkSession } from '../sync/parked.ts'
+import { SAVE_TIMEOUT_MS, withTimeout } from '../sync/saveRecord.ts'
 import { KEEP_AWAKE_KEY } from '../timerscreen/wakeLock.ts'
 import { ACTIVE_SESSION_KEY, parseStoredTimer } from '../timer/store.ts'
 import type { User } from './api.ts'
@@ -7,6 +9,9 @@ import type { User } from './api.ts'
 export const USER_KEY = 'ineedtofocus.user'
 /** Id of the user whose data is on this device; survives an involuntary sign-out. */
 export const OWNER_KEY = 'ineedtofocus.owner'
+
+/** How long a different user's sign-in waits for each hook's `quarantine` (plus a margin). */
+export const QUARANTINE_TIMEOUT_MS = SAVE_TIMEOUT_MS + 1_000
 
 /** Data that belongs to one user. Cleared on sign-out and when a different user signs in. */
 const USER_DATA_KEYS = [PREFERENCES_KEY, KEEP_AWAKE_KEY, ACTIVE_SESSION_KEY, ACTIVE_OWNER_KEY]
@@ -164,13 +169,30 @@ export async function claimLocalData(user: User): Promise<void> {
   const owner = read(OWNER_KEY)
   if (owner !== null && owner !== user.id) {
     for (const hook of hooks) {
+      if (!hook.quarantine) continue
       try {
-        await hook.quarantine?.(owner)
+        // Bounded, so a stalled IndexedDB can't hold sign-in (or start-up) on "Loading…".
+        await withTimeout(hook.quarantine(owner), QUARANTINE_TIMEOUT_MS)
       } catch {
-        // Couldn't keep it on the device: it is removed below rather than given to this account.
+        // Handled below: whatever finished session is still here gets parked, never deleted.
       }
     }
-    for (const key of USER_DATA_KEYS) remove(key)
+    // Safety net (F13): a finished session of the previous owner still in the timer's store is
+    // parked under them in localStorage, outside the per-user keys, and moved into the session
+    // store at the next start-up. If even that fails, the timer's copy is not removed.
+    let keepActive = false
+    const finished = finishedRecordOf(parseStoredTimer(read(ACTIVE_SESSION_KEY)), Date.now())
+    if (finished !== null) {
+      try {
+        parkSession(owner, finished)
+      } catch {
+        keepActive = true
+      }
+    }
+    for (const key of USER_DATA_KEYS) {
+      if (keepActive && (key === ACTIVE_SESSION_KEY || key === ACTIVE_OWNER_KEY)) continue
+      remove(key)
+    }
   }
   try {
     localStorage.setItem(OWNER_KEY, user.id)
@@ -193,6 +215,13 @@ export async function clearLocalUserData(): Promise<void> {
     }
   }
   for (const key of [...USER_DATA_KEYS, USER_KEY, OWNER_KEY]) remove(key)
+}
+
+/** Fired when a data request (sync, #19) gets 401: AuthGate re-checks the sign-in. */
+export const SESSION_EXPIRED_EVENT = 'ineedtofocus:session-expired'
+
+export function notifySessionExpired(): void {
+  window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT))
 }
 
 /**

@@ -326,8 +326,60 @@ describe('SyncEngine', () => {
       state.owner = BOB // someone else signed in while the device was reading its queue
       return batch
     }
-    expect((await engine.syncNow()).outcome).toBe('unauthorized')
+    expect((await engine.syncNow()).outcome).toBe('owner-changed')
     expect(server.syncRequests).toEqual([])
+  })
+
+  it('a stalled device store fails the pass in time, releasing the cross-tab lock', async () => {
+    const { server, store } = setup()
+    await store.save(makeRecord(), ALICE)
+    let held = 0
+    let stall = true
+    const engine = new SyncEngine({
+      store: {
+        uploadQueue: (owner: string, limit: number) =>
+          stall ? new Promise<never>(() => undefined) : store.uploadQueue(owner, limit),
+        markSynced: (id: string, s: Parameters<typeof store.markSynced>[1]) =>
+          store.markSynced(id, s),
+        markRejected: (id: string, e: Parameters<typeof store.markRejected>[1]) =>
+          store.markRejected(id, e),
+        editQueue: (owner: string) => store.editQueue(owner),
+      } as unknown as IndexedDbSessionStore,
+      api: new HttpSessionsApi({ fetch: server.fetch }),
+      currentOwner: () => ALICE,
+      isOnline: () => true,
+      storeTimeoutMs: 20,
+      exclusive: async (run) => {
+        held += 1
+        try {
+          return await run()
+        } finally {
+          held -= 1
+        }
+      },
+    })
+    expect((await engine.syncNow()).outcome).toBe('unavailable')
+    expect(held).toBe(0)
+    stall = false
+    expect((await engine.syncNow()).synced).toBe(1)
+  })
+
+  it('reports a 401 to the accounts UI, but not a change of user', async () => {
+    const { server, store, state } = setup()
+    const expired: string[] = []
+    const engine = new SyncEngine({
+      store,
+      api: new HttpSessionsApi({ fetch: server.fetch }),
+      currentOwner: () => state.owner,
+      isOnline: () => true,
+      exclusive: (run) => run(),
+      onUnauthorized: () => expired.push('401'),
+    })
+    await store.save(makeRecord(), ALICE)
+    server.mode = 'signed-out'
+    await engine.syncNow()
+    expect(expired).toEqual(['401'])
+    expect(await store.countUnsynced(ALICE)).toEqual({ sessions: 1, edits: 0 })
   })
 
   it('trySync syncs before sign-out, skips the wait offline and gives up after the time limit', async () => {

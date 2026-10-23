@@ -12,6 +12,7 @@
 // - Only the signed-in user's items are sent; other accounts' stay quarantined on the device.
 
 import { SYNC_BATCH_LIMIT, type SessionsApi } from './api.ts'
+import { SAVE_TIMEOUT_MS, withTimeout } from './saveRecord.ts'
 import type { SessionStore } from './sessionStore.ts'
 
 export type SyncOutcome =
@@ -19,8 +20,10 @@ export type SyncOutcome =
   | 'done'
   /** The device is offline; waits for the `online` event. */
   | 'offline'
-  /** 401: waits for a new sign-in or another trigger. */
+  /** 401: the sign-in expired; reported through `onUnauthorized`, waits for a new sign-in. */
   | 'unauthorized'
+  /** The signed-in user changed during the pass; nothing more was sent. */
+  | 'owner-changed'
   /** Network or server error; a retry is scheduled with backoff. */
   | 'unavailable'
 
@@ -59,6 +62,13 @@ export interface SyncEngineOptions {
    * would still be safe (idempotent by id), just wasteful.
    */
   exclusive?: <T>(run: () => Promise<T>) => Promise<T>
+  /**
+   * Time limit for each device-store call inside a pass. A stalled IndexedDB then fails the pass
+   * (kept, retried with backoff) instead of holding the cross-tab lock forever.
+   */
+  storeTimeoutMs?: number
+  /** Called when the server answers 401: the sign-in expired (the accounts UI re-checks it). */
+  onUnauthorized?: () => void
 }
 
 const browserScheduler: Scheduler = {
@@ -86,6 +96,8 @@ export class SyncEngine {
   readonly #isOnline: () => boolean
   readonly #random: () => number
   readonly #exclusive: <T>(run: () => Promise<T>) => Promise<T>
+  readonly #storeTimeoutMs: number
+  readonly #onUnauthorized: () => void
   #running: Promise<SyncReport> | null = null
   #again = false
   #failures = 0
@@ -100,6 +112,8 @@ export class SyncEngine {
     this.#isOnline = options.isOnline ?? (() => navigator.onLine)
     this.#random = options.random ?? Math.random
     this.#exclusive = options.exclusive ?? browserExclusive
+    this.#storeTimeoutMs = options.storeTimeoutMs ?? SAVE_TIMEOUT_MS
+    this.#onUnauthorized = options.onUnauthorized ?? (() => undefined)
   }
 
   /** Consecutive failed passes; drives the backoff. */
@@ -181,6 +195,7 @@ export class SyncEngine {
   }
 
   #afterPass(report: SyncReport): void {
+    if (report.outcome === 'unauthorized') this.#onUnauthorized()
     if (report.outcome === 'unavailable') {
       this.#failures += 1
       this.#scheduleRetry()
@@ -207,6 +222,11 @@ export class SyncEngine {
     if (this.#retry === null) return
     this.#scheduler.cancel(this.#retry)
     this.#retry = null
+  }
+
+  /** A device-store call with the pass's time limit. */
+  #io<T>(operation: Promise<T>): Promise<T> {
+    return withTimeout(operation, this.#storeTimeoutMs)
   }
 
   async #pass(): Promise<SyncReport> {
@@ -236,9 +256,9 @@ export class SyncEngine {
 
   async #upload(owner: string, report: SyncReport): Promise<SyncOutcome> {
     for (;;) {
-      const batch = await this.#store.uploadQueue(owner, SYNC_BATCH_LIMIT)
+      const batch = await this.#io(this.#store.uploadQueue(owner, SYNC_BATCH_LIMIT))
       if (batch.length === 0) return 'done'
-      if (this.#ownerChanged(owner)) return 'unauthorized'
+      if (this.#ownerChanged(owner)) return 'owner-changed'
       const result = await this.#api.sync(batch.map((entry) => entry.record))
       if (result.kind === 'unauthorized') return 'unauthorized'
       // Anything but per-item results (5xx, network, a whole-request 422) saves nothing: retry.
@@ -249,10 +269,10 @@ export class SyncEngine {
         // Only trust a result that clearly belongs to the item we sent.
         if (entry === undefined || (item.id !== null && item.id !== entry.id)) continue
         if (item.status === 'rejected') {
-          await this.#store.markRejected(entry.id, item.error)
+          await this.#io(this.#store.markRejected(entry.id, item.error))
           report.rejected += 1
         } else {
-          await this.#store.markSynced(entry.id, item.session)
+          await this.#io(this.#store.markSynced(entry.id, item.session))
           report.synced += 1
         }
         settled += 1
@@ -263,23 +283,25 @@ export class SyncEngine {
   }
 
   async #sendEdits(owner: string, report: SyncReport): Promise<SyncOutcome> {
-    for (const entry of await this.#store.editQueue(owner)) {
+    for (const entry of await this.#io(this.#store.editQueue(owner))) {
       if (entry.edit === null) continue
-      if (this.#ownerChanged(owner)) return 'unauthorized'
+      if (this.#ownerChanged(owner)) return 'owner-changed'
       const version = entry.editVersion
       const result = await this.#api.edit(entry.id, entry.edit)
       switch (result.kind) {
         case 'ok':
-          await this.#store.resolveEdit(entry.id, version, result.value)
+          await this.#io(this.#store.resolveEdit(entry.id, version, result.value))
           report.edited += 1
           break
         case 'conflict':
           // Archived on the server (AC11.4): the edit can never apply; the session is untouched.
-          await this.#store.dropEdit(entry.id, version)
+          await this.#io(this.#store.dropEdit(entry.id, version))
           break
         case 'invalid':
         case 'not_found':
-          await this.#store.rejectEdit(entry.id, version, 'error' in result ? result.error : null)
+          await this.#io(
+            this.#store.rejectEdit(entry.id, version, 'error' in result ? result.error : null),
+          )
           break
         case 'unauthorized':
           return 'unauthorized'

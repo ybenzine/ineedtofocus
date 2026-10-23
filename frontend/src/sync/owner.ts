@@ -3,6 +3,8 @@
 // if someone else signs in before it is handed over.
 
 import type { ActiveSessionStore, StoredTimer } from '../timer/store.ts'
+import { finishedRecordOf, parkSession } from './parked.ts'
+import { SAVE_TIMEOUT_MS, withTimeout } from './saveRecord.ts'
 import type { SessionStore } from './sessionStore.ts'
 
 // The signed-in user comes from the accounts UI (#9): `signedInUserId()` in `auth/localData.ts`.
@@ -68,17 +70,28 @@ export class OwnedActiveSessionStore implements ActiveSessionStore {
 }
 
 /**
- * Moves a finished session that the timer hasn't handed over yet into the session store under
- * `ownerId`, then clears it from the timer. For a different user signing in (#9): the previous
- * owner's session is kept, quarantined, instead of being dropped or given to the new account.
+ * For a different user signing in (#9): keeps the previous owner's finished session (a
+ * `pendingRecord`, or a countdown/Pomodoro that ended while the app was closed, AC6.5) under
+ * `ownerId` instead of dropping it or giving it to the new account. It goes into the session
+ * store if that works within `timeoutMs`; otherwise it is parked in localStorage and moved into
+ * the store at the next start-up. Only then is it cleared from the timer. Throws only if it
+ * could be neither stored nor parked; then the timer's copy is left in place.
  */
 export async function quarantinePendingRecord(
   active: ActiveSessionStore,
   sessions: SessionStore,
   ownerId: string,
+  options: { now?: () => number; timeoutMs?: number; storage?: Storage } = {},
 ): Promise<void> {
-  const record = active.load()?.pendingRecord
-  if (!record) return
-  await sessions.save(record, ownerId)
-  if (active.load()?.pendingRecord?.id === record.id) active.clear()
+  const { now = () => Date.now(), timeoutMs = SAVE_TIMEOUT_MS, storage } = options
+  const record = finishedRecordOf(active.load(), now())
+  if (record === null) return
+  try {
+    await withTimeout(sessions.save(record, ownerId), timeoutMs)
+  } catch {
+    parkSession(ownerId, record, storage)
+  }
+  const stored = active.load()
+  const still = stored?.pendingRecord?.id ?? stored?.session.id
+  if (still === record.id) active.clear()
 }
