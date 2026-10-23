@@ -62,6 +62,10 @@ def env_config(env: str, app: int, db: int, otel: int, oom: int, cpu: int) -> Co
     }
 
 
+def pool(octet: str) -> Config:
+    return {"subnet": f"172.16.{octet}.0/24", "ip_range": f"172.16.{octet}.128/25"}
+
+
 def edge_config() -> Config:
     return {
         "name": "focus-edge",
@@ -76,7 +80,10 @@ def edge_config() -> Config:
                 },
             }
         },
-        "networks": {"prod": {"name": "focus-edge_prod"}, "dev": {"name": "focus-edge_dev"}},
+        "networks": {
+            "prod": {"name": "focus-edge_prod", "ipam": {"config": [pool("10")]}},
+            "dev": {"name": "focus-edge_dev", "ipam": {"config": [pool("20")]}},
+        },
     }
 
 
@@ -204,6 +211,24 @@ def swapped_routes(c: dict[str, Config]) -> None:
     )
 
 
+def edge_pool(c: dict[str, Config], net: str) -> Config:
+    config: Config = c["edge"]["networks"][net]["ipam"]["config"][0]
+    return config
+
+
+def no_ip_range(c: dict[str, Config]) -> None:
+    del edge_pool(c, "prod")["ip_range"]
+
+
+def caddy_in_ip_range(c: dict[str, Config]) -> None:
+    edge_pool(c, "dev")["ip_range"] = "172.16.20.0/25"
+
+
+def caddy_outside_subnet(c: dict[str, Config]) -> None:
+    edge_pool(c, "prod")["subnet"] = "172.16.11.0/24"
+    edge_pool(c, "prod")["ip_range"] = "172.16.11.128/25"
+
+
 def wrong_project(c: dict[str, Config]) -> None:
     c["dev"]["name"] = "focus-prod"
 
@@ -229,6 +254,9 @@ def wrong_project(c: dict[str, Config]) -> None:
         (bind_mounted_data, "prod/db: /var/lib/postgresql/data must be a named volume"),
         (swapped_routes, "caddy: ineedtofoc.us goes to"),
         (wrong_project, "dev: project name"),
+        (no_ip_range, "edge/caddy: fixed address 172.16.10.2 on network prod: the subnet needs"),
+        (caddy_in_ip_range, "edge/caddy: fixed address 172.16.20.2 on network dev is inside"),
+        (caddy_outside_subnet, "is outside every subnet"),
     ],
 )
 def test_each_rule_catches_its_mistake(

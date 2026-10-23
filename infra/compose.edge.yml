@@ -47,14 +47,20 @@ services:
 networks:
   # Outside Docker's default address pools (172.17-31.0.0/16, 192.168.0.0/16) and
   # DigitalOcean's VPC range (10.x), so nothing else on the host takes these subnets.
+  # Docker hands out dynamic addresses (the apps') from ip_range only, the upper half.
+  # Caddy's fixed address sits in the lower half, so an app that starts first after a
+  # reboot or restart can never take it (Caddy would then fail with "invalid IP" and
+  # both sites would stay down). scripts/check_prod_compose.py enforces this.
   prod:
     ipam:
       config:
         - subnet: 172.16.10.0/24
+          ip_range: 172.16.10.128/25
   dev:
     ipam:
       config:
         - subnet: 172.16.20.0/24
+          ip_range: 172.16.20.128/25
 
 volumes:
   caddy-data:

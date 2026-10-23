@@ -11,6 +11,8 @@
 #     from Caddy's internal CA here, Let's Encrypt on the server) and redirects http;
 #   - each host reaches its own environment: with the dev app stopped, dev answers 502
 #     and prod still answers 200;
+#   - after the apps restart before Caddy (as after a reboot), Caddy still gets its
+#     fixed addresses: the apps' come from the networks' ip_range;
 #   - sign-up and sign-in through Caddy set the session cookie Secure, HttpOnly and
 #     SameSite=Lax (#8);
 #   - the app trusts X-Forwarded-* from Caddy's address only: through Caddy it sees
@@ -182,6 +184,28 @@ ok "routing: with the dev app stopped, dev answers 502 and prod still 200"
 dev up -d --wait app > /dev/null 2>&1
 expect 200 dev.ineedtofoc.us /healthz
 ok "routing: dev is back after restarting its app"
+
+# Reboot order: the apps may start before Caddy. Their dynamic addresses come from the
+# edge networks' ip_range, so neither can take Caddy's fixed address and Caddy starts.
+edge stop caddy > /dev/null 2>&1
+prod stop app > /dev/null 2>&1
+dev stop app > /dev/null 2>&1
+prod start app > /dev/null 2>&1
+dev start app > /dev/null 2>&1
+edge start caddy > "$work/caddy-start.log" 2>&1 ||
+  fail "Caddy didn't start after the apps: $(cat "$work/caddy-start.log")"
+edge up -d --wait > /dev/null 2>&1 || fail "Caddy isn't healthy after the apps started first"
+prod up -d --wait app > /dev/null 2>&1
+dev up -d --wait app > /dev/null 2>&1
+for env_name in prod dev; do
+  address=$(docker inspect "$("$env_name" ps -q app)" \
+    --format "{{ (index .NetworkSettings.Networks \"$edge_project""_$env_name\").IPAddress }}")
+  [[ ${address##*.} -ge 128 ]] ||
+    fail "$env_name app got $address on its edge network, outside the ip_range (.128/25)"
+done
+expect 200 ineedtofoc.us /healthz
+expect 200 dev.ineedtofoc.us /healthz
+ok "restart order: apps first, then Caddy; the apps' addresses stay out of Caddy's"
 
 # The session cookie behind Caddy (#8): sign up and sign in over HTTPS through Caddy;
 # both answers must set focus_session with Secure, HttpOnly and SameSite=Lax.

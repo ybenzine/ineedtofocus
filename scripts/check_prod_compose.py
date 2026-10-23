@@ -15,6 +15,8 @@ them. Exits non-zero, listing every broken rule:
   - dev never outranks prod: per service, dev's memory limit and CPU weight are at most
     prod's, and dev's OOM score is higher (the kernel kills dev first);
   - only Caddy publishes ports (80 and 443);
+  - every fixed address (Caddy's) lies inside its network's subnet but outside the
+    network's ip_range, so Docker never hands it to another container first;
   - the app runs with COOKIE_SECURE=1 and MIGRATE_ON_START=0, and trusts proxy headers only
     from Caddy's fixed address on its own edge network (never `*`);
   - each environment has its own edge network, Postgres keeps its data in a named volume,
@@ -28,6 +30,7 @@ Stdlib only.
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import sys
 from collections.abc import Iterator
@@ -80,6 +83,40 @@ def caddy_addresses(edge: Config) -> dict[str, str]:
         if address:
             result[real_name] = address
     return result
+
+
+def static_address_errors(config: Config, project: str) -> list[str]:
+    """Each fixed IPv4 address must be inside its network's subnet and outside ip_range.
+
+    Docker assigns dynamic addresses from ip_range (the whole subnet without one) and holds
+    nothing back for a stopped container's fixed address, so a container that starts first
+    could take it and the fixed one would fail with "invalid IP".
+    """
+    errors: list[str] = []
+    networks = config.get("networks") or {}
+    for name, service in services(config).items():
+        for key, attachment in (service.get("networks") or {}).items():
+            raw = (attachment or {}).get("ipv4_address")
+            if not raw:
+                continue
+            where = f"{project}/{name}: fixed address {raw} on network {key}"
+            address = ipaddress.ip_address(raw)
+            pools = ((networks.get(key) or {}).get("ipam") or {}).get("config") or []
+            pool = next(
+                (
+                    p
+                    for p in pools
+                    if p.get("subnet") and address in ipaddress.ip_network(p["subnet"])
+                ),
+                None,
+            )
+            if pool is None:
+                errors.append(f"{where} is outside every subnet of that network")
+            elif not pool.get("ip_range"):
+                errors.append(f"{where}: the subnet needs an ip_range that excludes it")
+            elif address in ipaddress.ip_network(pool["ip_range"]):
+                errors.append(f"{where} is inside ip_range {pool['ip_range']}")
+    return errors
 
 
 def caddy_routes(caddy: Config) -> dict[str, list[str]]:
@@ -140,6 +177,7 @@ def check(
     published = {str(p.get("target")) for p in caddy_service.get("ports") or []}
     if published != {"80", "443"}:
         errors.append(f"edge/caddy: publishes {sorted(published)}, expected 80 and 443")
+    errors.extend(static_address_errors(edge, "edge"))
     for name in services(edge):
         if name != "caddy":
             errors.append(f"edge/{name}: unexpected service in the edge project")
