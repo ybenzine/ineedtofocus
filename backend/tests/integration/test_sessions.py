@@ -3,14 +3,11 @@
 import json
 import logging
 import uuid
-from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy import text
@@ -25,8 +22,6 @@ from app.sessions import SessionIn
 from tests.integration.conftest import run
 
 pytestmark = pytest.mark.integration
-
-PASSWORD = "correct horse battery"
 
 
 def make_session(**over: Any) -> dict[str, Any]:
@@ -55,34 +50,6 @@ POMODORO_CONFIG = {
     "long_break_enabled": False,
     "long_break_minutes": 15,
 }
-
-
-@pytest.fixture
-def app_url(alembic_config: Config, test_db_url: str) -> str:
-    command.upgrade(alembic_config, "head")
-    return test_db_url
-
-
-@pytest.fixture
-def ada(app_url: str) -> Iterator[TestClient]:
-    # One app (and event loop) per client; both talk to the same database.
-    settings = Settings(database_url=app_url, cookie_secure=False)
-    with TestClient(create_app(settings)) as c, TestClient(create_app(settings)) as bob:
-        assert _signup(c, "ada@example.com").status_code == 201
-        assert _signup(bob, "bob@example.com").status_code == 201
-        c.bob = bob
-        yield c
-
-
-@pytest.fixture
-def bob(ada: TestClient) -> TestClient:
-    client: TestClient = ada.bob
-    return client
-
-
-def _signup(c: TestClient, email: str) -> Response:
-    r: Response = c.post("/api/auth/signup", json={"email": email, "password": PASSWORD})
-    return r
 
 
 async def _query(url: str, sql: str) -> list[Any]:

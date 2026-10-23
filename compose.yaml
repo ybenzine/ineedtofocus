@@ -31,6 +31,15 @@ services:
       # so sign-in needs the flag off here. Local only: the app defaults it on, and the
       # dev and prod Compose files in infra/ leave it on (#27, #28).
       COOKIE_SECURE: ${COOKIE_SECURE:-0}
+      # Sign-in lifetime and the sign-in / sign-up rate limits (#8, #77), so editing
+      # them in .env takes effect locally. The defaults are the app's own
+      # (backend/app/config.py); scripts/tests/test_local_compose.py keeps them in step.
+      SESSION_TTL_DAYS: ${SESSION_TTL_DAYS:-30}
+      SIGNIN_MAX_FAILURES: ${SIGNIN_MAX_FAILURES:-5}
+      SIGNIN_MAX_FAILURES_PER_CLIENT: ${SIGNIN_MAX_FAILURES_PER_CLIENT:-20}
+      SIGNIN_WINDOW_SECONDS: ${SIGNIN_WINDOW_SECONDS:-900}
+      SIGNUP_MAX_PER_CLIENT: ${SIGNUP_MAX_PER_CLIENT:-10}
+      SIGNUP_WINDOW_SECONDS: ${SIGNUP_WINDOW_SECONDS:-3600}
       # Run `alembic upgrade head` before the server starts (image entrypoint).
       MIGRATE_ON_START: ${MIGRATE_ON_START:-1}
       # OpenTelemetry: traces, metrics and logs over OTLP/HTTP to the lgtm container.

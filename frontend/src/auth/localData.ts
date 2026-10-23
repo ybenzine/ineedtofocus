@@ -1,9 +1,7 @@
-import { ALERT_VOLUME_KEY } from '../sounds/alerts.ts'
-import { PREFERENCES_KEY } from '../setup/preferences.ts'
+import { SETTINGS_KEY } from '../settings/store.ts'
 import { ACTIVE_OWNER_KEY } from '../sync/owner.ts'
 import { finishedRecordOf, parkSession } from '../sync/parked.ts'
 import { SAVE_TIMEOUT_MS, withTimeout } from '../sync/saveRecord.ts'
-import { KEEP_AWAKE_KEY } from '../timerscreen/wakeLock.ts'
 import { ACTIVE_SESSION_KEY, parseStoredTimer } from '../timer/store.ts'
 import type { User } from './api.ts'
 
@@ -14,13 +12,23 @@ export const OWNER_KEY = 'ineedtofocus.owner'
 /** How long a different user's sign-in waits for each hook's `quarantine` (plus a margin). */
 export const QUARANTINE_TIMEOUT_MS = SAVE_TIMEOUT_MS + 1_000
 
+/**
+ * Keys of earlier versions (device-local preferences, keep-awake, alert volume). Nothing reads
+ * them any more and their values are not migrated; they are only removed, so an old per-user
+ * value doesn't linger on the device after sign-out.
+ */
+const LEGACY_USER_DATA_KEYS = [
+  'ineedtofocus.preferences',
+  'ineedtofocus.keepAwake',
+  'ineedtofocus.alertVolume',
+]
+
 /** Data that belongs to one user. Cleared on sign-out and when a different user signs in. */
 const USER_DATA_KEYS = [
-  PREFERENCES_KEY,
-  KEEP_AWAKE_KEY,
+  SETTINGS_KEY,
   ACTIVE_SESSION_KEY,
   ACTIVE_OWNER_KEY,
-  ALERT_VOLUME_KEY,
+  ...LEGACY_USER_DATA_KEYS,
 ]
 
 /** What would be lost if this user's data were deleted from the device now. */
@@ -169,8 +177,8 @@ export function forgetCachedUser(): void {
 /**
  * Binds the device's local data to `user`. If it belonged to someone else, that user's finished
  * session not handed over yet is first moved into the session store under their id (quarantined,
- * #19); then their preferences, keep-awake setting and active session are removed, so nothing of
- * theirs is shown to or saved into this account.
+ * #19); then their settings (with any edits not yet sent) and active session are removed, so
+ * nothing of theirs is shown to or saved into this account.
  */
 export async function claimLocalData(user: User): Promise<void> {
   const owner = read(OWNER_KEY)

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { notifySessionExpired, signedInUserId } from '../auth/localData.ts'
+import { useSettingsState } from '../settings/SettingsContext.ts'
 import type { SessionStore } from '../sync/sessionStore.ts'
 import { TAGS, type Tag } from '../timer/config.ts'
 import { formatDuration } from '../timerscreen/format.ts'
@@ -77,7 +78,9 @@ export default function HistoryScreen({
   const [load, setLoad] = useState<Load>({ kind: 'loading' })
   const [reload, setReload] = useState(0)
   const cache = useRef(new Map<string, HistoryData>())
-  const weekStart = useRef(0)
+  // The offline fallback's week start: the settings copy (cached on the device).
+  const { values } = useSettingsState()
+  const weekStart = values.week_start_day
   const heading = useRef<HTMLHeadingElement>(null)
 
   useEffect(() => heading.current?.focus(), [])
@@ -129,7 +132,6 @@ export default function HistoryScreen({
       const alive = device.filter((d) => !d.archived)
       const unsynced = alive.filter((d) => d.notUploaded).map((d) => d.session)
       if (result.kind === 'ok') {
-        weekStart.current = result.value.weekStartDay
         cache.current.set(queryKey, result.value)
         setLoad({
           kind: 'ready',
@@ -146,8 +148,8 @@ export default function HistoryScreen({
       // Offline or the server is down: the last answer for this view plus what is on the
       // device, or, with no earlier answer, the view built from the device's own sessions.
       const cached = cache.current.get(queryKey)
-      const period = periodOf(query, weekStart.current)
-      const base = cached ?? emptyData(query.view, tz, weekStart.current, period)
+      const period = periodOf(query, weekStart)
+      const base = cached ?? emptyData(query.view, tz, weekStart, period)
       // Everything on the device that isn't archived (merging de-duplicates by id), so a session
       // that synced after the cached answer was fetched isn't lost.
       const extra = alive.map((d) => d.session)
@@ -156,7 +158,7 @@ export default function HistoryScreen({
     return () => {
       cancelled = true
     }
-  }, [api, sessions, owner, query, queryKey, tz, needsRange, reload])
+  }, [api, sessions, owner, query, queryKey, tz, needsRange, reload, weekStart])
 
   function toggleTag(tag: Tag) {
     setTags((current) =>

@@ -1,13 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { TimerEvent } from '../timer/index.ts'
-import {
-  AlertPlayer,
-  LocalAlertVolumeStore,
-  MemoryAlertVolumeStore,
-  soundForEvents,
-  ALERT_VOLUME_KEY,
-} from './alerts.ts'
+import { AlertPlayer, MemoryAlertVolumeStore, soundForEvents } from './alerts.ts'
 import SoundPreview from './SoundPreview.tsx'
 
 const phaseChange = (skipped: boolean): TimerEvent => ({
@@ -193,22 +187,6 @@ describe('AlertPlayer', () => {
     audio.fetchSound.mockRejectedValue(new Error('offline'))
     const { alerts } = player(80, audio)
     await expect(alerts.play('bell')).resolves.toBeUndefined()
-  })
-})
-
-describe('LocalAlertVolumeStore', () => {
-  it('defaults to 80 and clamps what was stored', () => {
-    const storage = window.localStorage
-    storage.removeItem(ALERT_VOLUME_KEY)
-    const store = new LocalAlertVolumeStore(storage)
-    expect(store.load()).toBe(80)
-    store.save(35)
-    expect(store.load()).toBe(35)
-    storage.setItem(ALERT_VOLUME_KEY, '900')
-    expect(store.load()).toBe(100)
-    storage.setItem(ALERT_VOLUME_KEY, 'loud')
-    expect(store.load()).toBe(80)
-    storage.removeItem(ALERT_VOLUME_KEY)
   })
 })
 

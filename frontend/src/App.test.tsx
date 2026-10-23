@@ -4,6 +4,7 @@ import { AlertPlayer, MemoryAlertVolumeStore } from './sounds/alerts.ts'
 import App from './App.tsx'
 import { AccountContext } from './auth/AccountContext.tsx'
 import { MemoryPreferencesStore } from './setup/preferences.ts'
+import { SettingsStore } from './settings/store.ts'
 import type { SyncEngine } from './sync/index.ts'
 import {
   ACTIVE_SESSION_KEY,
@@ -53,6 +54,32 @@ describe('App account bar', () => {
     await screen.findByRole('heading', { name: 'History' })
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
     // A session running in another tab: Sign out is refused.
+    const other = new TimerController({
+      store: new LocalActiveSessionStore(),
+      saveRecord: () => undefined,
+    })
+    await other.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'End your session before signing out.',
+    )
+    window.localStorage.removeItem(ACTIVE_SESSION_KEY)
+    window.history.replaceState(null, '', '/')
+  })
+
+  it('offers Sign out on the Settings screen, refused while a session runs', async () => {
+    const controller = new TimerController({
+      store: new MemoryActiveSessionStore(),
+      saveRecord: () => undefined,
+    })
+    render(
+      <AccountContext.Provider value={account}>
+        <App controller={controller} settings={new SettingsStore()} />
+      </AccountContext.Provider>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    await screen.findByRole('heading', { name: 'Settings' })
+    expect(window.location.pathname).toBe('/settings')
     const other = new TimerController({
       store: new LocalActiveSessionStore(),
       saveRecord: () => undefined,

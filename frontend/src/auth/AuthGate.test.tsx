@@ -1,8 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { PREFERENCES_KEY } from '../setup/preferences.ts'
-import { ALERT_VOLUME_KEY } from '../sounds/alerts.ts'
-import { KEEP_AWAKE_KEY } from '../timerscreen/wakeLock.ts'
+import { SETTINGS_KEY } from '../settings/store.ts'
 import { LocalActiveSessionStore, TimerController } from '../timer/index.ts'
 import { ACTIVE_SESSION_KEY } from '../timer/store.ts'
 import AccountBar from './AccountBar.tsx'
@@ -69,9 +67,13 @@ function fill(email: string, password: string) {
 }
 
 function seedUserData() {
-  localStorage.setItem(PREFERENCES_KEY, '{"tag":"work"}')
-  localStorage.setItem(KEEP_AWAKE_KEY, '1')
-  localStorage.setItem(ALERT_VOLUME_KEY, '40')
+  localStorage.setItem(
+    SETTINGS_KEY,
+    JSON.stringify({ owner: 'u', values: { alert_volume: 40 }, pending: { week_start_day: 1 } }),
+  )
+  for (const legacy of ['preferences', 'keepAwake', 'alertVolume']) {
+    localStorage.setItem(`ineedtofocus.${legacy}`, '1')
+  }
   localStorage.setItem('someone.elses.key', 'keep me')
 }
 
@@ -239,8 +241,11 @@ describe('sign out', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     expect(api.signOut).toHaveBeenCalled()
-    for (const key of [PREFERENCES_KEY, KEEP_AWAKE_KEY, ALERT_VOLUME_KEY, USER_KEY, OWNER_KEY]) {
+    for (const key of [SETTINGS_KEY, USER_KEY, OWNER_KEY]) {
       expect(localStorage.getItem(key)).toBeNull()
+    }
+    for (const legacy of ['preferences', 'keepAwake', 'alertVolume']) {
+      expect(localStorage.getItem(`ineedtofocus.${legacy}`)).toBeNull()
     }
     expect(localStorage.getItem('someone.elses.key')).toBe('keep me')
     expect(sessionStorage.getItem('anything')).toBe('x')
@@ -289,7 +294,7 @@ describe('sign out', () => {
     )
     expect(api.signOut).not.toHaveBeenCalled()
     expect(localStorage.getItem(ACTIVE_SESSION_KEY)).not.toBeNull()
-    expect(localStorage.getItem(PREFERENCES_KEY)).not.toBeNull()
+    expect(localStorage.getItem(SETTINGS_KEY)).not.toBeNull()
     expect(screen.getByText('the timer app')).toBeInTheDocument()
   })
 
@@ -307,7 +312,7 @@ describe('sign out', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(api.signOut).not.toHaveBeenCalled()
     expect(localStorage.getItem(ACTIVE_SESSION_KEY)).not.toBeNull()
-    expect(localStorage.getItem(PREFERENCES_KEY)).not.toBeNull()
+    expect(localStorage.getItem(SETTINGS_KEY)).not.toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Sign out anyway' }))
@@ -389,7 +394,7 @@ describe('sign out', () => {
     expect(api.signOut).not.toHaveBeenCalled()
     expect(hook.clear).not.toHaveBeenCalled()
     expect(localStorage.getItem(ACTIVE_SESSION_KEY)).not.toBeNull()
-    expect(localStorage.getItem(PREFERENCES_KEY)).not.toBeNull()
+    expect(localStorage.getItem(SETTINGS_KEY)).not.toBeNull()
     unregister()
   })
 
@@ -413,7 +418,7 @@ describe('sign out', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     expect(other.clear).toHaveBeenCalled()
-    expect(localStorage.getItem(PREFERENCES_KEY)).toBeNull()
+    expect(localStorage.getItem(SETTINGS_KEY)).toBeNull()
     expect(localStorage.getItem(USER_KEY)).toBeNull()
     expect(log).not.toHaveBeenCalled()
     expect(warn).not.toHaveBeenCalled()
@@ -448,7 +453,7 @@ describe('offline sign out', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(await screen.findByText(OFFLINE_SIGN_OUT_NOTICE)).toBeInTheDocument()
     expect(localStorage.getItem(PENDING_LOGOUT_KEY)).not.toBeNull()
-    expect(localStorage.getItem(PREFERENCES_KEY)).toBeNull()
+    expect(localStorage.getItem(SETTINGS_KEY)).toBeNull()
     expect(localStorage.getItem(USER_KEY)).toBeNull()
     expect(localStorage.getItem('someone.elses.key')).toBe('keep me')
   })
@@ -553,7 +558,7 @@ describe('local data belongs to one user', () => {
     expect(me).toHaveBeenCalledTimes(2)
     expect(localStorage.getItem(USER_KEY)).toBeNull()
     expect(localStorage.getItem(OWNER_KEY)).toBe(user.id)
-    expect(localStorage.getItem(PREFERENCES_KEY)).not.toBeNull()
+    expect(localStorage.getItem(SETTINGS_KEY)).not.toBeNull()
   })
 
   it('a 401 from sync while the server is unreachable leaves the user signed in', async () => {
@@ -573,7 +578,7 @@ describe('local data belongs to one user', () => {
     seedUserData()
     renderGate(makeApi())
     await screen.findByRole('heading', { name: 'Sign in' })
-    expect(localStorage.getItem(PREFERENCES_KEY)).not.toBeNull()
+    expect(localStorage.getItem(SETTINGS_KEY)).not.toBeNull()
     expect(localStorage.getItem(OWNER_KEY)).toBe(user.id)
   })
 
@@ -586,7 +591,7 @@ describe('local data belongs to one user', () => {
     fill('a@b.co', 'password1')
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
     await screen.findByText('the timer app')
-    expect(localStorage.getItem(PREFERENCES_KEY)).not.toBeNull()
+    expect(localStorage.getItem(SETTINGS_KEY)).not.toBeNull()
     expect(localStorage.getItem(ACTIVE_SESSION_KEY)).not.toBeNull()
   })
 
@@ -601,8 +606,7 @@ describe('local data belongs to one user', () => {
     fill('c@d.co', 'password1')
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
     await screen.findByText('the timer app')
-    expect(localStorage.getItem(PREFERENCES_KEY)).toBeNull()
-    expect(localStorage.getItem(KEEP_AWAKE_KEY)).toBeNull()
+    expect(localStorage.getItem(SETTINGS_KEY)).toBeNull()
     expect(localStorage.getItem(ACTIVE_SESSION_KEY)).toBeNull()
     expect(localStorage.getItem(OWNER_KEY)).toBe(other.id)
     expect(localStorage.getItem('someone.elses.key')).toBe('keep me')

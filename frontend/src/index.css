@@ -94,6 +94,33 @@ main {
   }
 }
 
+.screen-nav {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 1rem;
+}
+
+.screen-nav button {
+  font: inherit;
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.screen-nav [aria-current='page'] {
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.settings {
+  display: grid;
+  gap: 1.25rem;
+  padding: 1rem;
+  max-width: 32rem;
+  margin: 0 auto;
+}
+
 .account-bar {
   display: flex;
   justify-content: flex-end;
@@ -239,25 +266,6 @@ main.dark-screen {
 .summary-details dd {
   margin: 0;
   overflow-wrap: anywhere;
-}
-
-/* Screen navigation (also used by Settings, #22). */
-.screen-nav {
-  display: flex;
-  gap: 0.5rem;
-  padding: 0 1rem;
-}
-
-.screen-nav button {
-  font: inherit;
-  min-height: 2.75rem;
-  padding: 0 1rem;
-  border-radius: 0.5rem;
-  cursor: pointer;
-}
-
-.screen-nav button[aria-current='page'] {
-  font-weight: 700;
 }
 
 /* History (F10): dark, from 360 px up. */

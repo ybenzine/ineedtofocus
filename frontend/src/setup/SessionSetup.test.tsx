@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { DEFAULT_PREFERENCES, MemoryPreferencesStore, parsePreferences } from './preferences.ts'
+import { DEFAULT_PREFERENCES, MemoryPreferencesStore } from './preferences.ts'
 import SessionSetup, { type SessionRequest } from './SessionSetup.tsx'
 
 function setup(preferences = new MemoryPreferencesStore()) {
@@ -221,15 +221,5 @@ describe('SessionSetup accessibility', () => {
     expect(counter).toHaveTextContent('0/120')
     fireEvent.change(goal, { target: { value: 'Write' } })
     expect(counter).toHaveTextContent('5/120')
-  })
-})
-
-describe('parsePreferences', () => {
-  it('falls back to Work and the defaults for missing or corrupt data', () => {
-    expect(parsePreferences(null)).toEqual(DEFAULT_PREFERENCES)
-    expect(parsePreferences('not json')).toEqual(DEFAULT_PREFERENCES)
-    expect(
-      parsePreferences(JSON.stringify({ tag: 'party', pomodoro: { focusMinutes: 1 } })),
-    ).toEqual(DEFAULT_PREFERENCES)
   })
 })

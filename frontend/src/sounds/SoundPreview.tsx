@@ -7,10 +7,13 @@ import { type AlertPlayer } from './alerts.ts'
 export interface SoundPreviewProps {
   /** Owns the alert volume, so the slider and the playback can't disagree. */
   player: AlertPlayer
+  /** The current alert volume, when it can change under the slider (a synced value arriving). */
+  volume?: number
 }
 
-export default function SoundPreview({ player }: SoundPreviewProps) {
-  const [level, setLevel] = useState(() => player.volume)
+export default function SoundPreview({ player, volume }: SoundPreviewProps) {
+  const [local, setLevel] = useState(() => player.volume)
+  const level = volume ?? local
 
   function preview(name: 'chime' | 'bell') {
     // A button press is a user gesture: unlock first, then play once the context is running.
