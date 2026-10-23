@@ -502,7 +502,7 @@
                 }
               }
             },
-            "description": "Too many failed sign-ins; see the Retry-After header"
+            "description": "Too many attempts; see the Retry-After header"
           }
         },
         "summary": "Sign In",
@@ -528,7 +528,7 @@
     },
     "/api/auth/signup": {
       "post": {
-        "description": "Create an account and sign in (AC1.1). Emails are unique case-insensitively.",
+        "description": "Create an account and sign in (AC1.1). Emails are unique case-insensitively.\n\nRate limited per client: each sign-up runs a full argon2 hash.",
         "operationId": "sign_up_api_auth_signup_post",
         "requestBody": {
           "content": {
@@ -570,6 +570,16 @@
               }
             },
             "description": "Validation error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many attempts; see the Retry-After header"
           }
         },
         "summary": "Sign Up",

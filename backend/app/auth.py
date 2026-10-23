@@ -7,13 +7,14 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
 from app.config import Settings
-from app.deps import SESSION_COOKIE, CurrentUser, DbSession
+from app.deps import CurrentUser, DbSession, session_cookie_name
 from app.errors import ErrorResponse
 from app.models import AuthSession, User, UserSettings
+from app.rate_limit import client_key
 from app.security import hash_password, new_token, token_hash, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -65,7 +66,7 @@ def _errors(*codes: int) -> dict[int | str, dict[str, Any]]:
 _DESCRIPTIONS = {
     401: "Not signed in, or wrong email or password",
     409: "An account with this email already exists",
-    429: "Too many failed sign-ins; see the Retry-After header",
+    429: "Too many attempts; see the Retry-After header",
 }
 
 
@@ -75,13 +76,23 @@ def _settings(request: Request) -> Settings:
 
 
 def _client(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    return client_key(request.client.host if request.client else None)
+
+
+EXPIRED_CLEANUP_BATCH = 100
 
 
 async def _start_session(request: Request, response: Response, db: DbSession, user: User) -> None:
     settings = _settings(request)
     token = new_token()
     ttl = timedelta(days=settings.session_ttl_days)
+    # Opportunistic, bounded cleanup of expired sessions (#77): at most one batch per sign-in.
+    expired = (
+        select(AuthSession.token_hash)
+        .where(AuthSession.expires_at <= func.now())
+        .limit(EXPIRED_CLEANUP_BATCH)
+    )
+    await db.execute(delete(AuthSession).where(AuthSession.token_hash.in_(expired)))
     db.add(
         AuthSession(
             token_hash=token_hash(token), user_id=user.id, expires_at=datetime.now(UTC) + ttl
@@ -89,7 +100,7 @@ async def _start_session(request: Request, response: Response, db: DbSession, us
     )
     await db.commit()
     response.set_cookie(
-        SESSION_COOKIE,
+        session_cookie_name(settings.cookie_secure),
         token,
         max_age=int(ttl.total_seconds()),
         httponly=True,
@@ -99,11 +110,19 @@ async def _start_session(request: Request, response: Response, db: DbSession, us
     )
 
 
-@router.post("/signup", status_code=201, responses=_errors(409))
+@router.post("/signup", status_code=201, responses=_errors(409, 429))
 async def sign_up(
     body: SignUpRequest, request: Request, response: Response, db: DbSession
 ) -> UserOut:
-    """Create an account and sign in (AC1.1). Emails are unique case-insensitively."""
+    """Create an account and sign in (AC1.1). Emails are unique case-insensitively.
+
+    Rate limited per client: each sign-up runs a full argon2 hash.
+    """
+    wait = request.app.state.signup_limiter.try_acquire(_client(request), "")
+    if wait is not None:
+        raise HTTPException(
+            429, "Too many sign-ups. Try again later.", headers={"Retry-After": str(wait)}
+        )
     taken = HTTPException(409, "An account with this email already exists")
     if await db.scalar(select(User.id).where(User.email == body.email)):
         raise taken
@@ -144,14 +163,18 @@ async def sign_in(
 @router.post("/signout", status_code=204)
 async def sign_out(request: Request, db: DbSession) -> Response:
     """End this device's sign-in. Safe to call when already signed out."""
-    token = request.cookies.get(SESSION_COOKIE)
+    token = request.cookies.get(session_cookie_name(_settings(request).cookie_secure))
     if token:
         await db.execute(delete(AuthSession).where(AuthSession.token_hash == token_hash(token)))
         await db.commit()
     response = Response(status_code=204)
     settings = _settings(request)
     response.delete_cookie(
-        SESSION_COOKIE, httponly=True, secure=settings.cookie_secure, samesite="lax", path="/"
+        session_cookie_name(settings.cookie_secure),
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        path="/",
     )
     return response
 

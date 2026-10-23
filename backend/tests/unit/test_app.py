@@ -237,3 +237,8 @@ def test_log_scrub_redacts_postgres_detail_line() -> None:
     out = scrub(msg)
     assert "a@b.c" not in out
     assert out.startswith("duplicate key") and out.endswith("more")
+
+
+def test_cookie_secure_defaults_to_true_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("COOKIE_SECURE", raising=False)
+    assert Settings().cookie_secure is True

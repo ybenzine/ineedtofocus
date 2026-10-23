@@ -2,7 +2,7 @@
 
 import asyncio
 
-from app.rate_limit import FailureLimiter
+from app.rate_limit import FailureLimiter, client_key
 from app.security import hash_password, token_hash, verify_password
 
 
@@ -64,3 +64,16 @@ def test_ac1_5_password_is_hashed_with_argon2_and_verifies() -> None:
 def test_token_hash_is_sha256_hex() -> None:
     assert len(token_hash("abc")) == 64
     assert token_hash("abc") == token_hash("abc")
+
+
+def test_ipv6_clients_are_grouped_by_64_prefix() -> None:
+    a = client_key("2001:db8:1:2:aaaa:bbbb:cccc:dddd")
+    assert a == client_key("2001:db8:1:2::1") == "2001:db8:1:2::/64"
+    assert client_key("2001:db8:1:3::1") != a
+    assert client_key("203.0.113.7") == "203.0.113.7"
+    assert client_key("::ffff:203.0.113.7") == "203.0.113.7"
+    assert client_key(None) == "unknown"
+    lim = make(Clock())
+    for i in range(5):  # rotating addresses in one /64 still hit the client limit
+        assert lim.try_acquire(client_key(f"2001:db8::{i:x}"), f"u{i}@x.io") is None
+    assert lim.try_acquire(client_key("2001:db8::ff"), "z@x.io") is not None
