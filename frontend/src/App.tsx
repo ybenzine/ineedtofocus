@@ -9,17 +9,21 @@ import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
 import type { AudioSource } from './setup/options.ts'
 import SessionSummary from './timerscreen/SessionSummary.tsx'
 import TimerScreen from './timerscreen/TimerScreen.tsx'
-import {
-  LocalActiveSessionStore,
-  TimerController,
-  type SessionRecord,
-  type TimerUpdate,
-} from './timer/index.ts'
+import { createAppServices, type AppServices } from './services.ts'
+import type { TimerController, TimerUpdate } from './timer/index.ts'
 
 export interface AppProps {
-  /** Injectable for tests; the app uses the device's localStorage by default. */
+  /**
+   * The timer, session store and sync (`main.tsx` creates them once). Without them the app
+   * makes its own: the active session in localStorage, finished sessions in IndexedDB, synced
+   * to the server (F13).
+   */
+  services?: AppServices
+  /** For tests: just a timer, with nothing stored or synced beyond what it is given. */
   controller?: TimerController
   preferences?: PreferencesStore
+  /** How often a finished session that couldn't be saved on the device is tried again. */
+  pendingRetryMs?: number
   /** Injectable for tests; plays the chime and the end bell (#16). */
   alerts?: AlertPlayer
   /** Injectable for tests; plays the background rain (#17). */
@@ -28,18 +32,7 @@ export interface AppProps {
   audioStore?: AudioSourceStore
 }
 
-// The session store (IndexedDB, #19) isn't built yet; until it is, finished records are dropped.
-// #19 replaces this.
-function saveRecordPlaceholder(record: SessionRecord): void {
-  void record
-}
-
-function createController(): TimerController {
-  return new TimerController({
-    store: new LocalActiveSessionStore(),
-    saveRecord: saveRecordPlaceholder,
-  })
-}
+export const PENDING_RETRY_MS = 10_000
 
 type View =
   | { name: 'loading' }
@@ -47,8 +40,20 @@ type View =
   | { name: 'timer' }
   | { name: 'summary'; update: TimerUpdate }
 
-export default function App({ controller, preferences, alerts, rain, audioStore }: AppProps) {
-  const timer = useMemo(() => controller ?? createController(), [controller])
+export default function App({
+  services: given,
+  controller,
+  preferences,
+  alerts,
+  rain,
+  audioStore,
+  pendingRetryMs = PENDING_RETRY_MS,
+}: AppProps) {
+  const services = useMemo<AppServices>(
+    () => given ?? (controller ? { controller, sync: null, hook: null } : createAppServices()),
+    [given, controller],
+  )
+  const timer = services.controller
   const prefs = useMemo(() => preferences ?? new LocalPreferencesStore(), [preferences])
   const player = useMemo(
     () => alerts ?? new AlertPlayer({ volume: new LocalAlertVolumeStore() }),
@@ -90,6 +95,36 @@ export default function App({ controller, preferences, alerts, rain, audioStore 
       cancelled = true
     }
   }, [timer, sourceStore])
+
+  // Send what is on the device now, when the connection returns, and on backoff (AC13.3).
+  // Runs only while someone is signed in: AuthGate renders the app only then (#9).
+  useEffect(() => services.sync?.start(), [services])
+
+  // A finished session that couldn't be saved on the device yet (a stalled IndexedDB) stays in
+  // the timer's own store; keep trying, and drop the "not saved yet" note once it is saved.
+  const recordPending = view.name === 'summary' && view.update.recordPending
+  useEffect(() => {
+    if (!recordPending) return
+    let busy = false
+    const id = window.setInterval(() => {
+      if (busy) return
+      busy = true
+      void timer
+        .retryPending()
+        .then((saved) => {
+          if (!saved) return
+          setView((current) =>
+            current.name === 'summary'
+              ? { name: 'summary', update: { ...current.update, recordPending: false } }
+              : current,
+          )
+        })
+        .finally(() => {
+          busy = false
+        })
+    }, pendingRetryMs)
+    return () => window.clearInterval(id)
+  }, [recordPending, timer, pendingRetryMs])
 
   async function start(request: SessionRequest) {
     void player.unlock() // the Start press is the user gesture browsers require before audio
