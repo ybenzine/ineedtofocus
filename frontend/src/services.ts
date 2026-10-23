@@ -18,6 +18,8 @@ import { LocalActiveSessionStore, TimerController } from './timer/index.ts'
 export interface AppServices {
   controller: TimerController
   sync: SyncEngine | null
+  /** The device's finished sessions, shown in History (#20). */
+  sessions?: SessionStore | null
   /** Sign-out hook (#9) for the session store; `main.tsx` registers it before anything renders. */
   hook: LocalDataHook | null
   /** Moves sessions parked by a failed quarantine into the store; run at start-up. */
@@ -83,6 +85,7 @@ export function createAppServices(currentOwner: () => string | null = signedInUs
   return {
     controller,
     sync,
+    sessions,
     hook: sessionDataHook({ sessions, sync, active, currentOwner }),
     // Start-up: sessions parked during an earlier sign-in go into the store under their owners.
     drainParked: async () => {

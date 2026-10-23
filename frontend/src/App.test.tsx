@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AlertPlayer, MemoryAlertVolumeStore } from './sounds/alerts.ts'
 import App from './App.tsx'
 import { AccountContext } from './auth/AccountContext.tsx'
@@ -183,5 +183,36 @@ describe('App', () => {
     expect(sync.start).toHaveBeenCalled()
     unmount()
     expect(stop).toHaveBeenCalled()
+  })
+})
+
+describe('App history navigation', () => {
+  afterEach(() => window.history.replaceState(null, '', '/'))
+
+  it('opens the History screen on a deep link to /history', async () => {
+    window.history.replaceState(null, '', '/history')
+    setup()
+    expect(await screen.findByRole('heading', { name: 'History' })).toBeInTheDocument()
+  })
+
+  it('moves between setup and History with the navigation, updating the URL', async () => {
+    setup()
+    await screen.findByRole('heading', { name: 'I Need To Focus' })
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    expect(await screen.findByRole('heading', { name: 'History' })).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/history')
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }))
+    expect(await screen.findByRole('heading', { name: 'I Need To Focus' })).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/')
+  })
+
+  it('opens History from the summary link without reloading', async () => {
+    setup()
+    fireEvent.click(await screen.findByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    fireEvent.click(await screen.findByRole('link', { name: 'View history' }))
+    expect(await screen.findByRole('heading', { name: 'History' })).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/history')
   })
 })

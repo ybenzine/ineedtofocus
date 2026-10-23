@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertPlayer, LocalAlertVolumeStore } from './sounds/alerts.ts'
 import AccountBar from './auth/AccountBar.tsx'
+import HistoryScreen from './history/HistoryScreen.tsx'
+import ScreenNav from './nav/ScreenNav.tsx'
+import { pathForScreen, screenFromPath, type ScreenId } from './nav/screens.ts'
 import { LocalPreferencesStore, type PreferencesStore } from './setup/preferences.ts'
 import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
 import type { AudioSource } from './setup/options.ts'
@@ -30,6 +33,7 @@ export const PENDING_RETRY_MS = 10_000
 type View =
   | { name: 'loading' }
   | { name: 'setup' }
+  | { name: 'history' }
   | { name: 'timer' }
   | { name: 'summary'; update: TimerUpdate }
 
@@ -71,12 +75,40 @@ export default function App({
       if (cancelled) return
       if (update.snapshot) setView({ name: 'timer' })
       else if (update.outcome) setView({ name: 'summary', update })
-      else setView({ name: 'setup' })
+      else
+        setView(
+          screenFromPath(window.location.pathname) === 'history'
+            ? { name: 'history' }
+            : { name: 'setup' },
+        )
     })
     return () => {
       cancelled = true
     }
   }, [timer])
+
+  // The back and forward buttons move between the screens that have URLs (`/history`). They
+  // never take over a running timer or a summary.
+  useEffect(() => {
+    function onPopState() {
+      const screen = screenFromPath(window.location.pathname)
+      setView((current) =>
+        current.name === 'setup' || current.name === 'history'
+          ? screen === 'history'
+            ? { name: 'history' }
+            : { name: 'setup' }
+          : current,
+      )
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  function goTo(screen: ScreenId) {
+    const path = pathForScreen(screen)
+    if (window.location.pathname !== path) window.history.pushState(null, '', path)
+    setView(screen === 'history' ? { name: 'history' } : { name: 'setup' })
+  }
 
   // Send what is on the device now, when the connection returns, and on backoff (AC13.3).
   // Runs only while someone is signed in: AuthGate renders the app only then (#9).
@@ -147,8 +179,19 @@ export default function App({
         <SessionSummary
           outcome={view.update.outcome}
           recordPending={view.update.recordPending}
-          onNewSession={() => setView({ name: 'setup' })}
+          onNewSession={() => goTo('setup')}
+          onViewHistory={() => goTo('history')}
         />
+      </main>
+    )
+  }
+
+  if (view.name === 'history') {
+    return (
+      <main className="dark-screen history-screen">
+        <AccountBar controller={timer} />
+        <ScreenNav current="history" onNavigate={goTo} />
+        <HistoryScreen sessions={services.sessions} onNewSession={() => goTo('setup')} />
       </main>
     )
   }
@@ -156,6 +199,7 @@ export default function App({
   return (
     <main>
       <AccountBar controller={timer} />
+      <ScreenNav current="setup" onNavigate={goTo} />
       {notice && <p role="status">{notice}</p>}
       <SessionSetup preferences={prefs} onStart={start} />
     </main>

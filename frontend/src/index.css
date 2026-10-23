@@ -240,3 +240,234 @@ main.dark-screen {
   margin: 0;
   overflow-wrap: anywhere;
 }
+
+/* Screen navigation (also used by Settings, #22). */
+.screen-nav {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 1rem;
+}
+
+.screen-nav button {
+  font: inherit;
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  border-radius: 0.5rem;
+  cursor: pointer;
+}
+
+.screen-nav button[aria-current='page'] {
+  font-weight: 700;
+}
+
+/* History (F10): dark, from 360 px up. */
+main.history-screen {
+  display: block;
+  max-width: 40rem;
+  margin: 0 auto;
+}
+
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.history h1,
+.history h2,
+.history p {
+  margin: 0;
+}
+
+.history h2 {
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+}
+
+.history-views,
+.history-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.history button,
+.history input {
+  font: inherit;
+  min-height: 2.75rem;
+  box-sizing: border-box;
+  padding: 0 0.9rem;
+  border-radius: 0.5rem;
+  border: 1px solid #5f6368;
+  background: #1b1f27;
+  color: inherit;
+  cursor: pointer;
+}
+
+.history button[aria-pressed='true'] {
+  background: #8ab4f8;
+  border-color: #8ab4f8;
+  color: #0e1116;
+}
+
+.history button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.history-tags button {
+  text-transform: capitalize;
+}
+
+.history-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: flex-end;
+}
+
+.history-range label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.history-stepper {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.history-stepper p {
+  text-align: center;
+  flex: 1;
+}
+
+.history-offline,
+.history-empty {
+  padding: 0.75rem;
+  border: 1px solid #3a3f4b;
+  border-radius: 0.5rem;
+}
+
+.history-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.history-totals {
+  display: flex;
+  gap: 2rem;
+  margin: 0;
+}
+
+.history-totals dt {
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+
+.history-totals dd {
+  margin: 0;
+  font-size: 1.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.history ul,
+.history ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.history-tag-list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #2a2f3a;
+}
+
+.history-chart {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 9rem;
+}
+
+.history-chart li {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.bar-track {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+}
+
+.bar {
+  display: block;
+  width: 100%;
+  min-height: 2px;
+  background: #8ab4f8;
+  border-radius: 2px 2px 0 0;
+}
+
+.bar-label {
+  height: 1.25rem;
+  font-size: 0.7rem;
+  white-space: nowrap;
+  overflow: visible;
+  opacity: 0.8;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.history-row {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #2a2f3a;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.history-row-when {
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+
+.history-row-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+}
+
+.history-row-goal {
+  overflow-wrap: anywhere;
+  opacity: 0.85;
+}
+
+.history-badge {
+  align-self: flex-start;
+  font-size: 0.8rem;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid #8ab4f8;
+  border-radius: 1rem;
+}
+
+.history-badge-error {
+  border-color: #ff8a80;
+  color: #ff8a80;
+}
