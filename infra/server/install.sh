@@ -231,8 +231,9 @@ main() {
   log "done:"
   printf '    %-16s %s\n' "infra revision:" "$sha"
   printf '    %-16s %s\n' "focus-ci sha256:" "$(sha256sum "$FOCUS_ROOT/bin/focus-ci" | cut -d' ' -f1)"
-  echo "    CI keys go in /etc/ssh/authorized_keys/deploy, one per line, e.g. for dev:"
+  echo "    CI keys go in /etc/ssh/authorized_keys/deploy, one per line, each pinned to its profile:"
   echo "    restrict,command=\"$FOCUS_ROOT/bin/focus-ci dev\" ssh-ed25519 AAAA... focus-ci-dev"
+  echo "    restrict,command=\"$FOCUS_ROOT/bin/focus-ci prod\" ssh-ed25519 AAAA... focus-ci-prod"
 }
 
 main "$@"

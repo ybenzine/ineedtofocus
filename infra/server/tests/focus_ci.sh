@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Runs in the `make test-server` container right after in_container.sh, on the server
 # bootstrap.sh has just set up. Tests infra/server/install.sh and the forced command
-# focus-ci (#28) behind the real, hardened sshd. A fake docker CLI (fake_docker.sh)
+# focus-ci (#28, #29) behind the real, hardened sshd. A fake docker CLI (fake_docker.sh)
 # stands in for Docker: it records every call and the environment variables it got.
 #
 #   installer   refuses non-root, malformed shas, commits not on main and trees with
@@ -16,6 +16,10 @@
 #   rollback    no migration; walks back through previous releases
 #   failures    each failing step stops the deploy, keeps the record and logs it
 #   lock        a deploy waits for /opt/focus/deploy.lock
+#   prod        (#29) the prod key: hostile inputs; it can't roll back or touch dev, and
+#               the dev key can't touch prod; `candidate` reads dev's records only; a
+#               deploy needs dev to have run that exact sha and digest; it re-points the
+#               host-wide :<sha> at prod's digest under the lock; record, log, lock
 set -euo pipefail
 
 SRC=/src
@@ -154,13 +158,14 @@ done
 echo "--- CI keys behind the real sshd"
 keys=/tmp/ci-keys
 mkdir -p "$keys"
-for who in dev unknown env; do
+for who in dev prod unknown env; do
   ssh-keygen -q -t ed25519 -N '' -C "focus-ci-$who" -f "$keys/$who"
 done
 {
   echo "# test keys (focus_ci.sh)"
   printf 'restrict,command="/opt/focus/bin/focus-ci dev" %s\n' "$(cat "$keys/dev.pub")"
-  printf 'restrict,command="/opt/focus/bin/focus-ci prod" %s\n' "$(cat "$keys/unknown.pub")"
+  printf 'restrict,command="/opt/focus/bin/focus-ci prod" %s\n' "$(cat "$keys/prod.pub")"
+  printf 'restrict,command="/opt/focus/bin/focus-ci staging" %s\n' "$(cat "$keys/unknown.pub")"
   printf 'restrict,command="env" %s\n' "$(cat "$keys/env.pub")"
 } >/etc/ssh/authorized_keys/deploy
 /usr/sbin/sshd -p "$SSH_PORT" -o ListenAddress=127.0.0.1
@@ -277,7 +282,7 @@ check "tags the digest :<sha> locally" contains "$calls" ":: tag $REPO@$D1 $REPO
 check "pull before migrate" before "$calls" ":: pull --quiet" "$migrate"
 check "migrates with a one-shot container" contains "$calls" "$migrate"
 check "migrate before up" before "$calls" "$migrate" "$start"
-check "checks the running image after up" before "$calls" "$start" ":: inspect --format {{.Image}} container-app"
+check "checks the running image after up" before "$calls" "$start" ":: inspect --format {{.Image}} container-dev-app"
 check "checks /readyz in the app" contains "$calls" "exec -T app python -c import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz'"
 check "every compose call gets APP_TAG=<sha>" eq "$(grep ':: compose' <<<"$calls" | grep -vc "app_tag=$S1 ")" 0
 check "docker gets PATH, HOME and APP_TAG only (no LC_*, LANG or SSH_*)" clean_env_only "$calls"
@@ -393,6 +398,166 @@ check "the record survives the reinstall" contains "$out" "tag=$S2"
 install_at "$D"
 check "reinstalling the same commit succeeds" eq "$rc" 0
 check "reinstalling the same commit says so" contains "$out" "already installed"
+
+echo "--- Prod key (#29)"
+PROD_RECORD=/opt/focus/prod/release
+PROD_HISTORY=/opt/focus/prod/releases.log
+prod() { ci_as prod -- "$@"; }
+pvalue() { sed -n "s/^$1=//p" "$PROD_RECORD"; }
+prod_compose="compose -f /opt/focus/infra/compose.prod.yml --env-file /opt/focus/prod/.env --env-file /opt/focus/infra/env/prod.env"
+prod_migrate=":: $prod_compose run --rm --pull never app alembic upgrade head"
+prod_start=":: $prod_compose up -d --wait --wait-timeout 180 --pull never"
+S3=$(sha 0xa3) D5=$(digest 0xd5) D6=$(digest 0xd6)
+echo "$S1" >"$FAKE/labels/$D5" # a re-push of :S1 (a full CI re-run): other bytes, same label
+echo "$S3" >"$FAKE/labels/$D6" # a real image of S3 that dev never ran
+
+prod_refused=(
+  "${refused[@]}"
+  "rollback"
+  "candidate "
+  " candidate"
+  "candidate  $S1"
+  "candidate ${S1^^}"
+  "candidate ${S1:1}"
+  "candidate ${S1}0"
+  "candidate $S1 extra"
+  "candidate $S1 $D1"
+  "candidate;id"
+  "candidate \$(id)"
+  "candidate $S1"$'\n'"id"
+  "CANDIDATE"
+  "status dev"
+  "status prod"
+)
+for request in "${prod_refused[@]}"; do
+  mark
+  prod "$request"
+  shown=$(printf '%q' "${request:0:60}")
+  check "prod key refused: $shown" eq "$rc" 2
+  check "prod key refused with a message: $shown" contains "$out" "focus-ci: refused"
+  check "prod key: no docker call for: $shown" no_new_calls
+done
+prod rollback
+check "prod key can't roll back (that's #30's own key)" contains "$out" "rollback isn't allowed for profile prod"
+mark
+ci candidate
+check "dev key can't use candidate (status 2)" eq "$rc" 2
+check "dev key: says candidate isn't its verb" contains "$out" "candidate isn't allowed for profile dev"
+check "dev key: no docker call for candidate" no_new_calls
+prod status
+check "prod status with no release: succeeds" eq "$rc" 0
+check "prod status with no release: says so" contains "$out" "no release recorded for prod yet"
+
+echo "--- The dev key acts on dev only"
+mark
+ci "deploy $S1 $D5"
+check "dev deploys a re-push of S1 (other bytes)" eq "$rc" 0
+calls=$(new_calls)
+check "dev deploy: no prod file in any call" not_contains "$calls" "/opt/focus/prod/"
+check "dev deploy: no prod record" [ ! -e "$PROD_RECORD" ]
+check "dev deploy moved the host-wide :S1 to its digest" eq "$(cat "$FAKE/tags/$S1")" "$D5"
+dev_state=$(cat "$RECORD" "$HISTORY" "$FAKE/running-dev")
+
+echo "--- candidate: read-only, from dev's records"
+mark
+prod candidate
+check "candidate succeeds" eq "$rc" 0
+check "candidate: dev's current tag" contains "$out" "tag=$S1"
+check "candidate: dev's current digest" contains "$out" "digest=$D5"
+check "candidate: says where from" contains "$out" "source=dev"
+check "candidate: no docker call" no_new_calls
+prod "candidate $S2"
+check "candidate <sha>: succeeds" eq "$rc" 0
+check "candidate <sha>: the digest dev ran ok, not a failed attempt's" contains "$out" "digest=$D2"
+check "sanity: dev's log has a failed attempt of S2 with another digest" \
+  contains "$(cat "$HISTORY")" "outcome=failed tag=$S2 digest=$D3"
+prod "candidate $S1"
+check "candidate <sha>: the last ok release of that sha" contains "$out" "digest=$D5"
+prod "candidate $S3"
+check "candidate of a sha dev never ran: fails (status 1)" eq "$rc" 1
+check "candidate of a sha dev never ran: says so" contains "$out" "dev ran no release of $S3 successfully"
+check "candidate changes nothing on dev" eq "$(cat "$RECORD" "$HISTORY" "$FAKE/running-dev")" "$dev_state"
+
+echo "--- A prod deploy needs dev to have run that exact release"
+prod_promote_refused() { # <description> <sha> <digest>
+  mark
+  prod "deploy $2 $3"
+  check "$1: fails (status 1)" eq "$rc" 1
+  check "$1: at the promote step" contains "$out" "failed at 'promote'"
+  check "$1: says dev must run it first" contains "$out" "deploy it to dev first"
+  check "$1: no docker call" no_new_calls
+  check "$1: no prod record" [ ! -e "$PROD_RECORD" ]
+  check "$1: logged as failed" contains "$(tail -n1 "$PROD_HISTORY")" "env=prod action=deploy outcome=failed tag=$2 digest=$3"
+}
+prod_promote_refused "a sha dev never ran" "$S3" "$D6"
+prod_promote_refused "a digest dev only failed with" "$S2" "$D3"
+prod_promote_refused "a digest dev ran for another sha" "$S2" "$D1"
+
+echo "--- Prod deploy"
+mark
+ci_as prod -o 'SetEnv=LC_FOCUS=leak LANG=C.UTF-8' -- "deploy $S1 $D1"
+printf '%s\n' "$out" | sed 's/^/     | /'
+check "prod deploy of an earlier dev release succeeds" eq "$rc" 0
+calls=$(new_calls)
+check "prod: no pull, the digest is on the host" not_contains "$calls" ":: pull"
+check "prod: checks the revision label" contains "$calls" "org.opencontainers.image.revision\" }} $REPO@$D1"
+check "prod: re-points :S1 at prod's digest" contains "$calls" ":: tag $REPO@$D1 $REPO:$S1"
+check "prod: re-tag before migrate" before "$calls" ":: tag $REPO@$D1" "$prod_migrate"
+check "prod: migrates prod" contains "$calls" "$prod_migrate"
+check "prod: migrate before up" before "$calls" "$prod_migrate" "$prod_start"
+check "prod: checks prod's running image after up" before "$calls" "$prod_start" ":: inspect --format {{.Image}} container-prod-app"
+check "prod: checks /readyz" contains "$calls" "readyz"
+check "prod: every compose call is prod's, APP_TAG=S1" eq "$(grep ':: compose' <<<"$calls" | grep -vc "app_tag=$S1 :: $prod_compose ")" 0
+check "prod: no dev file in any call" not_contains "$calls" "/opt/focus/dev/"
+check "prod: docker gets PATH, HOME and APP_TAG only" clean_env_only "$calls"
+check "prod: the host-wide :S1 now points at prod's digest, not dev's re-push" eq "$(cat "$FAKE/tags/$S1")" "$D1"
+check "prod: the app runs D1" eq "$(cat "$FAKE/running-prod")" "$D1"
+check "prod: dev's state untouched (record, log, running image)" eq "$(cat "$RECORD" "$HISTORY" "$FAKE/running-dev")" "$dev_state"
+check "prod record: env" eq "$(pvalue env)" prod
+check "prod record: tag" eq "$(pvalue tag)" "$S1"
+check "prod record: digest" eq "$(pvalue digest)" "$D1"
+check "prod record: image by digest" eq "$(pvalue image)" "$REPO@$D1"
+check "prod record: action" eq "$(pvalue action)" deploy
+check "prod record: no previous release" eq "$(pvalue previous_tag)$(pvalue previous_digest)" ""
+check "prod record: infra revision" eq "$(pvalue infra_revision)" "$D"
+check "prod record is deploy's, 640" eq "$(mode_owner "$PROD_RECORD")" "640 deploy:deploy"
+check "prod history: one ok line" eq "$(grep -c ' outcome=ok ' "$PROD_HISTORY")" 1
+check "prod history names the release" contains "$(tail -n1 "$PROD_HISTORY")" "env=prod action=deploy outcome=ok tag=$S1 digest=$D1"
+prod status
+check "prod status prints prod's record" eq "$out" "$(cat "$PROD_RECORD")"
+ci status
+check "dev status still prints dev's record" eq "$out" "$(cat "$RECORD")"
+
+prod "deploy $S2 $D2"
+check "second prod deploy succeeds" eq "$rc" 0
+check "prod record: previous release is the first (#30's rollback target)" eq "$(pvalue previous_tag) $(pvalue previous_digest)" "$S1 $D1"
+
+echo "--- Prod: a failing step stops the deploy and keeps the record"
+before_record=$(cat "$PROD_RECORD")
+touch "$FAKE/fail/verify"
+mark
+prod "deploy $S1 $D1"
+rm "$FAKE/fail/verify"
+check "prod runs another image: fails (status 1)" eq "$rc" 1
+check "prod runs another image: at start" contains "$out" "failed at 'start'"
+check "prod runs another image: says so" contains "$out" "the app runs image"
+check "prod runs another image: record unchanged" eq "$(cat "$PROD_RECORD")" "$before_record"
+check "prod runs another image: logged" contains "$(tail -n1 "$PROD_HISTORY")" "outcome=failed tag=$S1 digest=$D1 previous_tag=$S2"
+
+echo "--- Prod: waits for the host-wide lock (a dev deploy, a rollback, install.sh)"
+rm -f /tmp/released
+flock /opt/focus/deploy.lock bash -c 'sleep 3; date +%s.%N > /tmp/released' &
+holder=$!
+sleep 0.5
+mark
+prod "deploy $S1 $D1"
+wait "$holder"
+check "prod deploy succeeds once the lock is free" eq "$rc" 0
+check "prod deploy said it was waiting" contains "$out" "waiting up to 900s"
+first=$(new_calls | head -n1 | cut -d' ' -f1)
+check "prod: no docker call while another holder had the lock" \
+  awk -v a="$first" -v b="$(cat /tmp/released)" 'BEGIN { exit !(a >= b) }'
+check "dev's state still untouched by every prod request" eq "$(cat "$RECORD" "$HISTORY" "$FAKE/running-dev")" "$dev_state"
 
 pkill -f "sshd -p $SSH_PORT" || true
 finish
