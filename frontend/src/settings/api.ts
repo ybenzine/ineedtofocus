@@ -117,12 +117,12 @@ export function parseSettings(value: unknown): Settings {
   }
 }
 
-/** Names of the settings a 422 body points at (`error.details[].field`, last path segment). */
+/** Names of the settings a 422 body points at (`error.details[].field`, first path segment). */
 async function rejectedFields(response: Response): Promise<string[]> {
   try {
     const body = (await response.json()) as { error?: { details?: { field?: unknown }[] | null } }
     const fields = (body.error?.details ?? []).flatMap((detail) =>
-      typeof detail.field === 'string' ? [detail.field.split('.').pop() ?? ''] : [],
+      typeof detail.field === 'string' ? [detail.field.split('.')[0] ?? ''] : [],
     )
     return fields.filter((field) => (SETTINGS_KEYS as readonly string[]).includes(field))
   } catch {

@@ -69,7 +69,7 @@ export class SettingsStore {
   readonly #currentOwner: (() => string | null) | undefined
   readonly #onUnauthorized: (() => void) | undefined
   readonly #retryBaseMs: number
-  readonly #abort = new AbortController()
+  #abort = new AbortController()
   #state: SettingsState
   #disposed = false
   /** Bumped by every edit and accepted send, so a slower, older GET cannot undo them. */
@@ -135,6 +135,18 @@ export class SettingsStore {
       // A full or blocked storage must not stop the app; the edit still reaches the server.
     }
     for (const listener of this.#listeners) listener()
+  }
+
+  /**
+   * Starts (or restarts) a disposed store. React StrictMode runs an effect's setup, cleanup and
+   * setup again on the same instance, so `dispose()` in a cleanup must not be final. Does
+   * nothing for a store that stopped because its user is gone.
+   */
+  arm(): void {
+    if (!this.#disposed) return
+    if (this.#currentOwner && this.#currentOwner() !== this.#owner) return
+    this.#disposed = false
+    this.#abort = new AbortController()
   }
 
   /** Stops everything: requests are aborted, timers cleared, nothing is written or sent again. */

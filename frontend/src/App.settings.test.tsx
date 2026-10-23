@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import App, { SETTINGS_WAIT_MS } from './App.tsx'
@@ -75,5 +76,42 @@ describe('App with settings (#22)', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('keeps saving settings under StrictMode (effects run twice)', async () => {
+    const api = {
+      get: vi.fn().mockResolvedValue(DEFAULT_SETTINGS),
+      patch: vi.fn(async (patch: object) => ({ ...DEFAULT_SETTINGS, ...patch })),
+    }
+    const controller = new TimerController({
+      store: new MemoryActiveSessionStore(),
+      saveRecord: () => undefined,
+    })
+    render(
+      <StrictMode>
+        <App controller={controller} settings={new SettingsStore({ api })} />
+      </StrictMode>,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    fireEvent.change(screen.getByLabelText('Week starts on'), { target: { value: '2' } })
+    expect(screen.getByLabelText('Week starts on')).toHaveValue('2')
+    await vi.waitFor(() =>
+      expect(api.patch).toHaveBeenCalledWith({ week_start_day: 2 }, expect.anything()),
+    )
+  })
+
+  it('refreshes settings at launch when a running timer is restored', async () => {
+    const store = new MemoryActiveSessionStore()
+    const first = new TimerController({ store, saveRecord: () => undefined })
+    await first.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
+    const api = { get: vi.fn().mockResolvedValue(DEFAULT_SETTINGS), patch: vi.fn() }
+    render(
+      <App
+        controller={new TimerController({ store, saveRecord: () => undefined })}
+        settings={new SettingsStore({ api })}
+      />,
+    )
+    await screen.findByRole('timer')
+    await vi.waitFor(() => expect(api.get).toHaveBeenCalled())
   })
 })

@@ -182,4 +182,54 @@ describe('sync details', () => {
     expect(store.hasPending()).toBe(false)
     expect(store.values.week_start_day).toBe(2)
   })
+
+  it('on a nested 422 drops only the top-level setting', async () => {
+    const patches: SettingsPatch[] = []
+    const api: SettingsApi = {
+      get: vi.fn(),
+      patch: vi.fn(async (patch: SettingsPatch) => {
+        patches.push(patch)
+        if ('pomodoro_config' in patch) {
+          throw new SettingsError('invalid', 'bad', ['pomodoro_config'])
+        }
+        return { ...DEFAULT_SETTINGS, ...patch }
+      }),
+    }
+    const store = new SettingsStore({ api })
+    store.update({
+      pomodoro_config: {
+        focus_minutes: 40,
+        break_minutes: 8,
+        blocks: 3,
+        long_break_enabled: false,
+        long_break_minutes: 20,
+      },
+      last_tag: 'study',
+    })
+    await store.flush()
+    expect(patches.at(-1)).toEqual({ last_tag: 'study' })
+    expect(store.hasPending()).toBe(false)
+  })
+
+  it('can be re-armed after dispose (StrictMode), but not once the user is gone', async () => {
+    const api: SettingsApi = {
+      get: vi.fn(),
+      patch: vi.fn(async (p: SettingsPatch) => ({ ...DEFAULT_SETTINGS, ...p })),
+    }
+    const store = new SettingsStore({ api })
+    store.dispose()
+    store.arm()
+    store.update({ alert_volume: 1 })
+    await store.flush()
+    expect(api.patch).toHaveBeenCalledOnce()
+
+    let user: string | null = 'a'
+    const bound = new SettingsStore({ api, owner: 'a', currentOwner: () => user })
+    bound.dispose()
+    user = null
+    bound.arm()
+    bound.update({ alert_volume: 2 })
+    await bound.flush()
+    expect(api.patch).toHaveBeenCalledOnce()
+  })
 })

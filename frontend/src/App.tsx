@@ -66,7 +66,11 @@ export default function App(props: AppProps) {
       }),
     [given],
   )
-  useEffect(() => () => settings.dispose(), [settings])
+  // Re-armed on every setup: StrictMode runs setup, cleanup, setup on the same instance.
+  useEffect(() => {
+    settings.arm()
+    return () => settings.dispose()
+  }, [settings])
   return (
     <SettingsContext.Provider value={settings}>
       <AppBody {...props} settings={settings} />
@@ -115,8 +119,10 @@ function AppBody({
     let cancelled = false
     void timer.restore().then(async (update) => {
       if (update.snapshot) {
+        void settings.refresh() // no wait: sends pending edits, fetches the server copy
         if (!cancelled) setView({ name: 'timer' })
       } else if (update.outcome) {
+        void settings.refresh()
         if (!cancelled) setView({ name: 'summary', update })
       } else {
         // Only the setup screen needs the server's last-used config and tag, which it reads
@@ -138,7 +144,8 @@ function AppBody({
     }
   }, [timer, settings])
 
-  // Sync settings at launch (when not waited for above) and whenever the connection returns.
+  // Sync settings whenever the connection returns; at launch `refresh()` runs in the restore
+  // effect above (waited for only when the setup screen opens).
   useEffect(() => settings.start(), [settings])
 
   // Send what is on the device now, when the connection returns, and on backoff (AC13.3).
