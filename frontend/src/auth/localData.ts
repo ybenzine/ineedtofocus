@@ -1,3 +1,4 @@
+import { ALERT_VOLUME_KEY } from '../sounds/alerts.ts'
 import { PREFERENCES_KEY } from '../setup/preferences.ts'
 import { KEEP_AWAKE_KEY } from '../timerscreen/wakeLock.ts'
 import { ACTIVE_SESSION_KEY, parseStoredTimer } from '../timer/store.ts'
@@ -8,7 +9,7 @@ export const USER_KEY = 'ineedtofocus.user'
 export const OWNER_KEY = 'ineedtofocus.owner'
 
 /** Data that belongs to one user. Cleared on sign-out and when a different user signs in. */
-const USER_DATA_KEYS = [PREFERENCES_KEY, KEEP_AWAKE_KEY, ACTIVE_SESSION_KEY]
+const USER_DATA_KEYS = [PREFERENCES_KEY, KEEP_AWAKE_KEY, ACTIVE_SESSION_KEY, ALERT_VOLUME_KEY]
 
 /**
  * What other modules (the session store, #19) register so sign-out can handle the data they

@@ -19,6 +19,7 @@ Entry point for every coding agent (and human) working in this repo. Keep this f
 | [_docs/agents.md](_docs/agents.md) | The agent team, ownership, hand-offs | Always |
 | [_docs/architecture.md](_docs/architecture.md) | Components, data model, API contract | Writing code |
 | [_docs/testing.md](_docs/testing.md) | Test layers, commands, what to test | Writing code or tests |
+| [_docs/assets.md](_docs/assets.md) | Shipped assets (sounds) with source and license | Adding or changing an asset |
 | [_docs/deployment.md](_docs/deployment.md) | Environments, deploy, rollback | Touching CI/CD or infra |
 | [_docs/observability.md](_docs/observability.md) | Metrics, traces, logs, alerts, telemetry privacy | Touching instrumentation |
 | [_docs/runbooks/](_docs/runbooks/) | Incident runbooks | On call |
