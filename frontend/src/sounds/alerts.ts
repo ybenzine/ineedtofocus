@@ -143,6 +143,11 @@ export class AlertPlayer {
     return resumed
   }
 
+  /** The shared Web Audio context (created on first use), or null without Web Audio. */
+  audioContext(): AudioContext | null {
+    return this.#ensureContext()
+  }
+
   /** True once audio is unlocked and sounds can play. */
   get running(): boolean {
     return this.#context?.state === 'running'
