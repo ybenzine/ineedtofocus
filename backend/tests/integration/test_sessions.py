@@ -5,6 +5,7 @@ import logging
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -560,8 +561,10 @@ CRASHERS: dict[str, dict[str, Any]] = {
     "huge_paused": {"paused_seconds": 10**15},
     "int4_overflow_paused": {
         "paused_seconds": 3_000_000_000,
-        "started_at": "1900-01-01T00:00:00Z",
+        "started_at": "2020-01-01T00:00:00Z",
     },
+    "before_window": {"started_at": "2019-12-31T23:59:59Z", "ended_at": "2020-01-01T00:30:00Z"},
+    "after_window": {"started_at": "2099-01-01T00:00:00Z", "ended_at": "2099-01-01T00:30:00Z"},
     "year_1_offset": {
         "started_at": "0001-01-01T00:30:00+01:00",
         "ended_at": "0001-01-02T00:00:00+01:00",
@@ -669,3 +672,65 @@ def test_repeated_id_in_one_batch_keeps_the_first(ada: TestClient, app_url: str)
     assert count(app_url) == 1
     rows = run(_query(app_url, "SELECT tag FROM focus_sessions"))
     assert rows == [("work",)]
+
+
+# --- accepted time window (#98): 2020-01-01T00:00:00Z .. now + 24 h, both ends inclusive ---
+
+NOW = datetime(2026, 10, 23, 12, 0, 0, tzinfo=UTC)
+LATEST = NOW + timedelta(hours=24)
+EARLIEST = datetime(2020, 1, 1, tzinfo=UTC)
+ONE_S = timedelta(seconds=1)
+ONE_H = timedelta(hours=1)
+
+
+@pytest.fixture
+def frozen_now(monkeypatch: pytest.MonkeyPatch) -> datetime:
+    monkeypatch.setattr("app.sessions._now", lambda: NOW)
+    return NOW
+
+
+def _span(start: datetime, end: datetime) -> dict[str, Any]:
+    return make_session(
+        started_at=start.isoformat(),
+        ended_at=end.isoformat(),
+        focus_seconds=60,
+        paused_seconds=0,
+    )
+
+
+WINDOW_CASES: dict[str, tuple[dict[str, Any], bool]] = {
+    "earliest_start_ok": (_span(EARLIEST, EARLIEST + ONE_H), True),
+    "start_one_second_early": (_span(EARLIEST - ONE_S, EARLIEST + ONE_H), False),
+    "latest_end_ok": (_span(LATEST - ONE_H, LATEST), True),
+    "end_one_second_late": (_span(LATEST - ONE_H, LATEST + ONE_S), False),
+    "start_late_end_later": (_span(LATEST + ONE_S, LATEST + 2 * ONE_H), False),
+    "offset_form_at_bound": (
+        make_session(
+            started_at="2020-01-01T01:00:00+01:00",
+            ended_at="2020-01-01T03:00:00+01:00",
+            focus_seconds=60,
+            paused_seconds=0,
+        ),
+        True,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(WINDOW_CASES))
+def test_time_window_on_single_save(ada: TestClient, frozen_now: datetime, case: str) -> None:
+    body, ok = WINDOW_CASES[case]
+    r = ada.post("/api/sessions", json=body)
+    assert r.status_code == (201 if ok else 422), r.text
+
+
+def test_time_window_on_sync_rejects_only_the_outside_items(
+    ada: TestClient, app_url: str, frozen_now: datetime
+) -> None:
+    items = [body for body, _ in WINDOW_CASES.values()]
+    r = ada.post("/api/sessions/sync", json={"sessions": items})
+    assert r.status_code == 200, r.text
+    for (_, ok), result in zip(WINDOW_CASES.values(), r.json()["results"], strict=True):
+        assert result["status"] == ("created" if ok else "rejected")
+        if not ok:
+            assert result["error"]["code"] == "validation_error"
+    assert count(app_url) == sum(ok for _, ok in WINDOW_CASES.values())
