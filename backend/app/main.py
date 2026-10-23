@@ -57,6 +57,11 @@ def create_app(
         settings.signin_max_failures_per_client,
         settings.signin_window_seconds,
     )
+    app.state.signup_limiter = FailureLimiter(
+        settings.signup_max_per_client,
+        settings.signup_max_per_client,
+        settings.signup_window_seconds,
+    )
     register_error_handlers(app)
     fix_openapi(app)
     app.include_router(health_router)

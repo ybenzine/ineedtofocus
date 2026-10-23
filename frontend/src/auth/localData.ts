@@ -1,3 +1,4 @@
+import { ALERT_VOLUME_KEY } from '../sounds/alerts.ts'
 import { PREFERENCES_KEY } from '../setup/preferences.ts'
 import { ACTIVE_OWNER_KEY } from '../sync/owner.ts'
 import { finishedRecordOf, parkSession } from '../sync/parked.ts'
@@ -14,7 +15,13 @@ export const OWNER_KEY = 'ineedtofocus.owner'
 export const QUARANTINE_TIMEOUT_MS = SAVE_TIMEOUT_MS + 1_000
 
 /** Data that belongs to one user. Cleared on sign-out and when a different user signs in. */
-const USER_DATA_KEYS = [PREFERENCES_KEY, KEEP_AWAKE_KEY, ACTIVE_SESSION_KEY, ACTIVE_OWNER_KEY]
+const USER_DATA_KEYS = [
+  PREFERENCES_KEY,
+  KEEP_AWAKE_KEY,
+  ACTIVE_SESSION_KEY,
+  ACTIVE_OWNER_KEY,
+  ALERT_VOLUME_KEY,
+]
 
 /** What would be lost if this user's data were deleted from the device now. */
 export interface UnsyncedCount {
