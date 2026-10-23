@@ -1,0 +1,32 @@
+# Shared reverse proxy for both environments on the Droplet (#27).
+#
+#   ineedtofoc.us      -> focus-prod app (network alias focus-prod-app on focus-edge_prod)
+#   dev.ineedtofoc.us  -> focus-dev app  (network alias focus-dev-app on focus-edge_dev)
+#
+# Automatic HTTPS: Caddy gets and renews Let's Encrypt certificates for both names
+# (ports 80 and 443 must reach it; certificates persist in the caddy-data volume) and
+# redirects http:// to https://. No ACME email is set: Let's Encrypt doesn't need one.
+#
+# reverse_proxy sets X-Forwarded-For to the client address it sees and ignores any
+# X-Forwarded-* the client sent (no trusted_proxies), so a client can't spoof its
+# address. The app trusts these headers only from Caddy's fixed address
+# (FORWARDED_ALLOW_IPS, infra/compose.prod.yml).
+#
+# Apply a change on the server without dropping connections:
+#   docker compose -f infra/compose.edge.yml exec caddy caddy reload --config /etc/caddy/Caddyfile
+{
+	# HTTP/1.1 and HTTP/2 only: the firewall opens 443/tcp, not 443/udp (HTTP/3).
+	servers {
+		protocols h1 h2
+	}
+}
+
+ineedtofoc.us {
+	encode zstd gzip
+	reverse_proxy focus-prod-app:8000
+}
+
+dev.ineedtofoc.us {
+	encode zstd gzip
+	reverse_proxy focus-dev-app:8000
+}
