@@ -13,7 +13,7 @@ from opentelemetry.instrumentation.logging.handler import LoggingHandler
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter, SimpleLogRecordProcessor
 
-from app.logging_config import configure_logging
+from app.logging_config import configure_logging, scrub
 
 EMAIL = "leak-4f2a@example.com"
 DETAIL = f"DETAIL:  Key (lower(email))=({EMAIL}) already exists."
@@ -104,3 +104,17 @@ def test_configure_logging_adds_the_filter_once(exporter: InMemoryLogRecordExpor
     otlp = [h for h in logging.getLogger().handlers if isinstance(h, LoggingHandler)]
     assert len(otlp) == 1
     assert len(otlp[0].filters) == 1
+
+
+def test_scrub_removes_sql_parameters_from_database_errors() -> None:
+    """SQLAlchemy errors end with the bound values, e.g. a YouTube link or a goal."""
+    message = (
+        "(asyncpg.exceptions.UniqueViolationError) duplicate key\n"
+        "[SQL: INSERT INTO youtube_recent_links (user_id, url) VALUES ($1, $2)]\n"
+        "[parameters: (UUID('1b2c'), 'https://www.youtube.com/watch?v=leak-9z')]\n"
+        "(Background on this error at: https://sqlalche.me/e/20/gkpj)"
+    )
+    out = scrub(message)
+    assert "leak-9z" not in out and "youtube.com" not in out
+    assert "[SQL: INSERT INTO youtube_recent_links" in out  # the statement text is kept
+    assert "Background on this error" in out
