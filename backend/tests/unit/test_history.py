@@ -1,11 +1,14 @@
 """History grouping (F10, #11): ranges, time zones, week starts and buckets."""
 
 import datetime as dt
+import zoneinfo
+from collections.abc import Iterator
 from dataclasses import dataclass
 from zoneinfo import ZoneInfo
 
 import pytest
 
+from app import history
 from app.history import (
     DateRange,
     View,
@@ -47,6 +50,30 @@ def d(text: str) -> dt.date:
 def test_time_zone_accepts_iana_names() -> None:
     assert time_zone("Europe/Paris") == PARIS
     assert time_zone("UTC") == ZoneInfo("UTC")
+
+
+@pytest.fixture
+def no_system_zones() -> Iterator[None]:
+    """Hide the host's zone files so only the bundled `tzdata` package is left."""
+    zoneinfo.reset_tzpath(to=())
+    zoneinfo.ZoneInfo.clear_cache()
+    history._zone_names.cache_clear()
+    try:
+        yield
+    finally:
+        zoneinfo.reset_tzpath()
+        zoneinfo.ZoneInfo.clear_cache()
+        history._zone_names.cache_clear()
+
+
+@pytest.mark.usefixtures("no_system_zones")
+@pytest.mark.parametrize(
+    "name", ["UTC", "Europe/Paris", "Asia/Calcutta", "Asia/Katmandu", "US/Eastern", "Europe/Kiev"]
+)
+def test_time_zone_names_come_with_the_app_not_the_host(name: str) -> None:
+    # Link names are what Chromium reports; Debian 13 slim images don't ship them.
+    assert zoneinfo.TZPATH == ()
+    assert time_zone(name).key == name
 
 
 @pytest.mark.parametrize(
@@ -291,3 +318,45 @@ def test_custom_range_must_end_less_than_100_years_after_it_starts(
     start: str, end: str, ok: bool
 ) -> None:
     assert within_custom_limit(d(start), d(end)) is ok
+
+
+def test_non_whole_hour_offset_kathmandu() -> None:
+    # Asia/Kathmandu is UTC+05:45, so local midnight on the 23rd is 18:15Z on the 22nd.
+    kathmandu = ZoneInfo("Asia/Kathmandu")
+    sessions = [
+        S(utc("2026-10-22T18:14:00"), 60),  # 23:59 on the 22nd
+        S(utc("2026-10-22T18:15:00"), 120),  # 00:00 on the 23rd
+        S(utc("2026-10-23T18:14:00"), 180),  # 23:59 on the 23rd
+        S(utc("2026-10-23T18:15:00"), 240),  # 00:00 on the 24th
+    ]
+    summary = summarize(
+        sessions, kathmandu, View.CUSTOM, DateRange(d("2026-10-22"), d("2026-10-24"))
+    )
+    assert [(day.isoformat(), t.focus_seconds) for day, t in summary.buckets] == [
+        ("2026-10-22", 60),
+        ("2026-10-23", 300),
+        ("2026-10-24", 240),
+    ]
+
+
+def test_dst_change_at_midnight_santiago() -> None:
+    # America/Santiago skips 00:00-01:00 on 6 Sep 2026 (UTC-4 -> UTC-3): the 6th starts at
+    # 01:00 local, which is 04:00Z.
+    santiago = ZoneInfo("America/Santiago")
+    sessions = [
+        S(utc("2026-09-06T03:59:00"), 60),  # 23:59 on the 5th (UTC-4)
+        S(utc("2026-09-06T04:00:00"), 120),  # 01:00 on the 6th (UTC-3)
+        S(utc("2026-09-07T02:59:00"), 180),  # 23:59 on the 6th
+        S(utc("2026-09-07T03:00:00"), 240),  # 00:00 on the 7th
+    ]
+    summary = summarize(
+        sessions, santiago, View.CUSTOM, DateRange(d("2026-09-05"), d("2026-09-07"))
+    )
+    assert [(day.isoformat(), t.focus_seconds) for day, t in summary.buckets] == [
+        ("2026-09-05", 60),
+        ("2026-09-06", 300),
+        ("2026-09-07", 240),
+    ]
+    week = summarize(sessions, santiago, View.WEEK, week_of(d("2026-09-06"), MONDAY))
+    assert week.date_range == DateRange(d("2026-08-31"), d("2026-09-06"))
+    assert week.total.focus_seconds == 360

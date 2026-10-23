@@ -281,6 +281,28 @@ def test_ac1_2_history_needs_sign_in(ada: TestClient) -> None:
 # --- errors -------------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("tz", ["UTC", "Asia/Calcutta", "US/Eastern", "Asia/Kathmandu"])
+def test_tz_database_names_including_links_are_accepted(ada: TestClient, tz: str) -> None:
+    save(ada, "2026-10-23T08:00:00", 20)
+    out = history(ada, view="all", tz=tz)
+    assert (out["time_zone"], out["session_count"]) == (tz, 1)
+
+
+def test_custom_range_edge_month_bars_cover_only_days_in_the_range(ada: TestClient) -> None:
+    save(ada, "2026-09-10T08:00:00", 20)  # before the range, same month as the first bar
+    save(ada, "2026-09-20T08:00:00", 30)
+    save(ada, "2026-12-05T08:00:00", 40)
+    save(ada, "2026-12-20T08:00:00", 50)  # after the range, same month as the last bar
+    out = history(ada, view="custom", start="2026-09-15", end="2026-12-10", tag=["work"])
+    assert out["bucket"] == "month"
+    assert bars(out) == {
+        "2026-09-01": 30 * 60,
+        "2026-10-01": 0,
+        "2026-11-01": 0,
+        "2026-12-01": 40 * 60,
+    }
+
+
 @pytest.mark.parametrize("tz", ["Mars/Olympus", "europe/paris", "../../etc/passwd", "", "x" * 65])
 def test_unknown_time_zone_is_422(ada: TestClient, tz: str) -> None:
     assert errors(ada, view="all", tz=tz) == ["tz"]
