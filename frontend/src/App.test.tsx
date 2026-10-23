@@ -1,7 +1,8 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import App from './App.tsx'
 import { MemoryPreferencesStore } from './setup/preferences.ts'
+import { registeredLocalDataHooks } from './sync/index.ts'
 import { ACTIVE_SESSION_KEY, MemoryActiveSessionStore, TimerController } from './timer/index.ts'
 
 function setup(store = new MemoryActiveSessionStore()) {
@@ -64,5 +65,51 @@ describe('App', () => {
     window.dispatchEvent(new StorageEvent('storage', { key: ACTIVE_SESSION_KEY }))
     expect(await screen.findByRole('status')).toHaveTextContent('ended in another tab')
     expect(screen.getByRole('heading', { name: 'I Need To Focus' })).toBeInTheDocument()
+  })
+
+  it('keeps retrying a session that couldn’t be saved yet and drops the note once it is', async () => {
+    const store = new MemoryActiveSessionStore()
+    let now = Date.UTC(2026, 9, 23, 9, 0)
+    const first = new TimerController({
+      store,
+      saveRecord: () => Promise.reject(new Error('IndexedDB stalled')),
+      now: () => now,
+    })
+    await first.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
+    now += 10 * 60_000
+    expect((await first.stop()).recordPending).toBe(true)
+
+    let attempts = 0
+    const saved: string[] = []
+    const controller = new TimerController({
+      store,
+      saveRecord: async (record) => {
+        attempts += 1
+        if (attempts < 3) throw new Error('IndexedDB stalled')
+        saved.push(record.id)
+      },
+      now: () => now,
+    })
+    render(
+      <App
+        controller={controller}
+        preferences={new MemoryPreferencesStore()}
+        pendingRetryMs={10}
+      />,
+    )
+    expect(await screen.findByText(/Not saved yet/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText(/Not saved yet/)).not.toBeInTheDocument())
+    expect(screen.getByRole('heading', { name: 'Session ended early' })).toBeInTheDocument()
+    expect(saved).toHaveLength(1)
+    expect(store.load()).toBeNull()
+  })
+
+  it('registers the session store’s sign-out hooks while it runs (#9)', async () => {
+    const before = registeredLocalDataHooks().length
+    const { unmount } = render(<App preferences={new MemoryPreferencesStore()} />)
+    await screen.findByRole('heading', { name: 'I Need To Focus' })
+    expect(registeredLocalDataHooks()).toHaveLength(before + 1)
+    unmount()
+    expect(registeredLocalDataHooks()).toHaveLength(before)
   })
 })
