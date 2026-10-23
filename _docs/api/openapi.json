@@ -1,6 +1,31 @@
 {
   "components": {
     "schemas": {
+      "Bucket": {
+        "properties": {
+          "date": {
+            "description": "First day of the bar: the day, or the 1st of the month",
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "focus_seconds": {
+            "title": "Focus Seconds",
+            "type": "integer"
+          },
+          "sessions": {
+            "title": "Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "date",
+          "focus_seconds",
+          "sessions"
+        ],
+        "title": "Bucket",
+        "type": "object"
+      },
       "CountdownConfig": {
         "additionalProperties": false,
         "properties": {
@@ -102,6 +127,104 @@
           "error"
         ],
         "title": "ErrorResponse",
+        "type": "object"
+      },
+      "HistoryOut": {
+        "properties": {
+          "bucket": {
+            "description": "What one chart bar covers",
+            "enum": [
+              "day",
+              "month"
+            ],
+            "title": "Bucket",
+            "type": "string"
+          },
+          "buckets": {
+            "description": "One per day or month of the range, zero-filled",
+            "items": {
+              "$ref": "#/components/schemas/Bucket"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Last local date covered (inclusive)",
+            "title": "End"
+          },
+          "session_count": {
+            "title": "Session Count",
+            "type": "integer"
+          },
+          "sessions": {
+            "description": "Newest first",
+            "items": {
+              "$ref": "#/components/schemas/SessionOut"
+            },
+            "title": "Sessions",
+            "type": "array"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "First local date covered (inclusive); null for All time with no sessions",
+            "title": "Start"
+          },
+          "tags": {
+            "description": "Tags with sessions in the view, most focus first",
+            "items": {
+              "$ref": "#/components/schemas/TagTotal"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "time_zone": {
+            "title": "Time Zone",
+            "type": "string"
+          },
+          "total_focus_seconds": {
+            "title": "Total Focus Seconds",
+            "type": "integer"
+          },
+          "view": {
+            "$ref": "#/components/schemas/View"
+          },
+          "week_start_day": {
+            "description": "0 = Sunday ... 6 = Saturday, from settings",
+            "title": "Week Start Day",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "view",
+          "time_zone",
+          "week_start_day",
+          "start",
+          "end",
+          "bucket",
+          "total_focus_seconds",
+          "session_count",
+          "tags",
+          "buckets",
+          "sessions"
+        ],
+        "title": "HistoryOut",
         "type": "object"
       },
       "Mode": {
@@ -690,6 +813,28 @@
         "title": "Tag",
         "type": "string"
       },
+      "TagTotal": {
+        "properties": {
+          "focus_seconds": {
+            "title": "Focus Seconds",
+            "type": "integer"
+          },
+          "sessions": {
+            "title": "Sessions",
+            "type": "integer"
+          },
+          "tag": {
+            "$ref": "#/components/schemas/Tag"
+          }
+        },
+        "required": [
+          "tag",
+          "focus_seconds",
+          "sessions"
+        ],
+        "title": "TagTotal",
+        "type": "object"
+      },
       "UnlimitedConfig": {
         "additionalProperties": false,
         "properties": {
@@ -749,6 +894,17 @@
         ],
         "title": "UserOut",
         "type": "object"
+      },
+      "View": {
+        "enum": [
+          "day",
+          "week",
+          "month",
+          "all",
+          "custom"
+        ],
+        "title": "View",
+        "type": "string"
       },
       "YoutubeLinkIn": {
         "additionalProperties": false,
@@ -1089,6 +1245,148 @@
         "summary": "Sign Up",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/history": {
+      "get": {
+        "description": "One history view (AC10.1-AC10.7).\n\n`view=day|week|month` takes `date`; `view=custom` takes `start` and `end` (inclusive, at\nmost 100 years); `view=all` takes neither. Days follow `tz`, and a session counts on the\nlocal day it started (AC10.5). Weeks start on the user's week-start setting (AC10.6).\nBars are per day, except per month for All time and custom ranges over 62 days (AC10.3).\nArchived sessions are excluded (AC10.7).",
+        "operationId": "get_history_api_history_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "view",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/View"
+            }
+          },
+          {
+            "description": "IANA time zone, e.g. Europe/Paris (AC10.5)",
+            "in": "query",
+            "name": "tz",
+            "required": true,
+            "schema": {
+              "description": "IANA time zone, e.g. Europe/Paris (AC10.5)",
+              "maxLength": 64,
+              "title": "Tz",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Any local date in the day, week or month to show",
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Any local date in the day, week or month to show",
+              "title": "Date"
+            }
+          },
+          {
+            "description": "Custom range start (inclusive)",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Custom range start (inclusive)",
+              "title": "Start"
+            }
+          },
+          {
+            "description": "Custom range end (inclusive)",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Custom range end (inclusive)",
+              "title": "End"
+            }
+          },
+          {
+            "description": "Repeat to filter by any of several tags (AC10.2); none = all",
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/Tag"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Repeat to filter by any of several tags (AC10.2); none = all",
+              "title": "Tag"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Get History",
+        "tags": [
+          "history"
         ]
       }
     },
