@@ -13,8 +13,8 @@ export default function SoundPreview({ player, volume }: SoundPreviewProps) {
   const [level, setLevel] = useState(() => volume.load())
 
   function preview(name: 'chime' | 'bell') {
-    player.unlock() // a button press is a user gesture
-    void player.play(name)
+    // A button press is a user gesture: unlock first, then play once the context is running.
+    void player.unlock().then(() => player.play(name))
   }
 
   return (

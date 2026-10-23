@@ -132,12 +132,30 @@ export class AlertPlayer {
    * Browsers keep audio locked until a user gesture. Call this synchronously from the Start
    * press: it creates the audio context, resumes it and begins loading the sounds.
    */
-  unlock(): void {
+  unlock(): Promise<void> {
     const context = this.#ensureContext()
-    if (context === null) return
-    if (context.state !== 'running') void context.resume().catch(() => undefined)
-    for (const name of Object.keys(SOUND_URLS) as SoundName[])
+    if (context === null) return Promise.resolve()
+    const resumed =
+      context.state === 'running' ? Promise.resolve() : context.resume().catch(() => undefined)
+    for (const name of Object.keys(SOUND_URLS) as SoundName[]) {
       void this.#buffer(name).catch(() => undefined)
+    }
+    return resumed
+  }
+
+  /**
+   * For a session restored after a reload, where no Start press unlocked audio: unlocks on the
+   * next press or key, then stops listening. Returns the cleanup.
+   */
+  unlockOnGesture(target: EventTarget = window): () => void {
+    const events = ['pointerdown', 'keydown']
+    const stop = () => events.forEach((name) => target.removeEventListener(name, handler))
+    const handler = () => {
+      void this.unlock()
+      stop()
+    }
+    events.forEach((name) => target.addEventListener(name, handler))
+    return stop
   }
 
   #buffer(name: SoundName): Promise<AudioBuffer> {
@@ -160,7 +178,12 @@ export class AlertPlayer {
       if (context === null) return
       const volume = this.#volume.load() / 100
       if (volume <= 0) return
-      if (context.state !== 'running') await context.resume()
+      if (context.state !== 'running') {
+        // Not unlocked (no gesture yet): try to resume without waiting, and drop this sound.
+        // Waiting would park it until some later gesture, then ring it at the wrong moment.
+        void context.resume().catch(() => undefined)
+        return
+      }
       const buffer = await this.#buffer(name)
       const source = context.createBufferSource()
       const gain = context.createGain()

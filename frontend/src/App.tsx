@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertPlayer, LocalAlertVolumeStore } from './sounds/alerts.ts'
+import AccountBar from './auth/AccountBar.tsx'
 import { LocalPreferencesStore, type PreferencesStore } from './setup/preferences.ts'
 import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
 import type { AudioSource } from './setup/options.ts'
@@ -52,6 +53,13 @@ export default function App({ controller, preferences, alerts }: AppProps) {
   const [notice, setNotice] = useState<string | null>(null)
   const [audio, setAudio] = useState<AudioSource>('none')
 
+  // A session restored after a reload has had no user gesture yet: unlock audio on the first
+  // one, or iOS keeps every later chime and bell silent.
+  useEffect(() => {
+    if (view.name !== 'timer') return
+    return player.unlockOnGesture()
+  }, [view.name, player])
+
   // Pick up a session that was running when the app closed (AC6.4), or show how one that ended
   // while the app was closed finished (AC6.5).
   useEffect(() => {
@@ -68,7 +76,7 @@ export default function App({ controller, preferences, alerts }: AppProps) {
   }, [timer])
 
   async function start(request: SessionRequest) {
-    player.unlock() // the Start press is the user gesture browsers require before audio
+    void player.unlock() // the Start press is the user gesture browsers require before audio
     setNotice(null)
     await timer.start({ config: request.config, tag: request.tag, goal: request.goal })
     setAudio(request.audio)
@@ -114,6 +122,7 @@ export default function App({ controller, preferences, alerts }: AppProps) {
 
   return (
     <main>
+      <AccountBar controller={timer} />
       {notice && <p role="status">{notice}</p>}
       <SessionSetup preferences={prefs} onStart={start} />
     </main>

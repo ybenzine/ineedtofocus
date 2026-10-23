@@ -77,7 +77,7 @@ function fakeAudio(state: AudioContextState = 'suspended') {
   return { context, gain, sources, fetchSound }
 }
 
-function player(volume = 80, audio = fakeAudio()) {
+function player(volume = 80, audio = fakeAudio('running')) {
   const alerts = new AlertPlayer({
     volume: new MemoryAlertVolumeStore(volume),
     createContext: () => audio.context as unknown as AudioContext,
@@ -88,8 +88,8 @@ function player(volume = 80, audio = fakeAudio()) {
 
 describe('AlertPlayer', () => {
   it('unlock resumes the audio context and preloads both sounds', async () => {
-    const { alerts, context, fetchSound } = player()
-    alerts.unlock()
+    const { alerts, context, fetchSound } = player(80, fakeAudio('suspended'))
+    await alerts.unlock()
     expect(context.resume).toHaveBeenCalled()
     expect(fetchSound).toHaveBeenCalledTimes(2)
   })
@@ -111,13 +111,48 @@ describe('AlertPlayer', () => {
   it('handleEvents rings the bell for an automatic change but not for a skip', async () => {
     const { alerts, sources } = player()
     alerts.handleEvents([phaseChange(true)])
-    await vi.waitFor(() => expect(sources).toHaveLength(0))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(sources).toHaveLength(0)
     alerts.handleEvents([phaseChange(false)])
     await vi.waitFor(() => expect(sources).toHaveLength(1))
   })
 
+  it('drops a sound while audio is locked instead of parking it (no pile-up later)', async () => {
+    const audio = fakeAudio('suspended')
+    // A blocked context: resume() stays pending until a gesture lets it start.
+    let release: () => void = () => undefined
+    audio.context.resume.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = () => {
+            audio.context.state = 'running'
+            resolve()
+          }
+        }),
+    )
+    const { alerts, sources } = player(80, audio)
+    await alerts.play('bell')
+    await alerts.play('chime')
+    release()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(sources).toHaveLength(0)
+    await alerts.play('bell') // unlocked now: plays
+    expect(sources).toHaveLength(1)
+  })
+
+  it('unlockOnGesture unlocks on the first press, then stops listening', async () => {
+    const { alerts, context } = player(80, fakeAudio('suspended'))
+    const target = new EventTarget()
+    alerts.unlockOnGesture(target)
+    expect(context.resume).not.toHaveBeenCalled()
+    target.dispatchEvent(new Event('pointerdown'))
+    expect(context.resume).toHaveBeenCalledTimes(1)
+    target.dispatchEvent(new Event('keydown'))
+    expect(context.resume).toHaveBeenCalledTimes(1)
+  })
+
   it('never throws when audio fails', async () => {
-    const audio = fakeAudio()
+    const audio = fakeAudio('running')
     audio.fetchSound.mockRejectedValue(new Error('offline'))
     const { alerts } = player(80, audio)
     await expect(alerts.play('bell')).resolves.toBeUndefined()

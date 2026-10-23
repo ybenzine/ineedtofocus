@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { AlertPlayer, MemoryAlertVolumeStore } from './sounds/alerts.ts'
 import App from './App.tsx'
+import { AccountContext } from './auth/AccountContext.tsx'
 import { MemoryPreferencesStore } from './setup/preferences.ts'
 import { ACTIVE_SESSION_KEY, MemoryActiveSessionStore, TimerController } from './timer/index.ts'
 
@@ -18,6 +19,35 @@ async function runningStore() {
   return store
 }
 
+describe('App account bar', () => {
+  const account = {
+    user: { id: 'u', email: 'a@b.co', created_at: '' },
+    signOut: () => Promise.resolve(null),
+  }
+  function renderSignedIn(store = new MemoryActiveSessionStore()) {
+    const controller = new TimerController({ store, saveRecord: () => undefined })
+    render(
+      <AccountContext.Provider value={account}>
+        <App controller={controller} preferences={new MemoryPreferencesStore()} />
+      </AccountContext.Provider>,
+    )
+  }
+
+  it('offers Sign out on the setup screen only, not over the timer', async () => {
+    renderSignedIn()
+    expect(await screen.findByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+  })
+
+  it('does not offer Sign out over a session restored at reload', async () => {
+    renderSignedIn(await runningStore())
+    await screen.findByRole('timer')
+    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+  })
+})
+
 describe('App', () => {
   it('shows the setup screen', async () => {
     setup()
@@ -33,7 +63,7 @@ describe('App', () => {
 
   it('unlocks audio on the Start press (browsers block it before a gesture)', async () => {
     const alerts = new AlertPlayer({ volume: new MemoryAlertVolumeStore() })
-    const unlock = vi.spyOn(alerts, 'unlock').mockImplementation(() => undefined)
+    const unlock = vi.spyOn(alerts, 'unlock').mockResolvedValue(undefined)
     const controller = new TimerController({
       store: new MemoryActiveSessionStore(),
       saveRecord: () => undefined,
@@ -44,6 +74,20 @@ describe('App', () => {
     expect(unlock).not.toHaveBeenCalled()
     fireEvent.click(await screen.findByRole('button', { name: 'Start' }))
     await screen.findByRole('timer')
+    expect(unlock).toHaveBeenCalledTimes(1)
+  })
+
+  it('unlocks audio on the first gesture of a restored session', async () => {
+    const alerts = new AlertPlayer({ volume: new MemoryAlertVolumeStore() })
+    const unlock = vi.spyOn(alerts, 'unlock').mockResolvedValue(undefined)
+    const store = await runningStore()
+    const controller = new TimerController({ store, saveRecord: () => undefined })
+    render(
+      <App controller={controller} preferences={new MemoryPreferencesStore()} alerts={alerts} />,
+    )
+    await screen.findByRole('timer')
+    expect(unlock).not.toHaveBeenCalled()
+    fireEvent.pointerDown(screen.getByRole('timer'))
     expect(unlock).toHaveBeenCalledTimes(1)
   })
 
