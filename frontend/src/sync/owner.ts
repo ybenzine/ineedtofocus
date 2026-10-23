@@ -5,8 +5,8 @@
 import type { ActiveSessionStore, StoredTimer } from '../timer/store.ts'
 import type { SessionStore } from './sessionStore.ts'
 
-/** The signed-in user, cached on the device by the accounts UI (#9). */
-export const USER_KEY = 'ineedtofocus.user'
+// The signed-in user comes from the accounts UI (#9): `signedInUserId()` in `auth/localData.ts`.
+
 /** `{ sessionId, ownerId }` of the session in the active-session store. */
 export const ACTIVE_OWNER_KEY = 'ineedtofocus.activeSessionOwner'
 
@@ -17,14 +17,6 @@ function readJson(storage: Storage, key: string): unknown {
   } catch {
     return null
   }
-}
-
-/** The cached signed-in user's id, or `null` if nobody is signed in on this device. */
-export function cachedUserId(storage: Storage = window.localStorage): string | null {
-  const user = readJson(storage, USER_KEY)
-  if (typeof user !== 'object' || user === null) return null
-  const id = (user as Record<string, unknown>).id
-  return typeof id === 'string' && id !== '' ? id : null
 }
 
 /**

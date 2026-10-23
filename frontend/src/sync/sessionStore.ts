@@ -69,12 +69,9 @@ export function toDeviceSession(entry: StoredSession): DeviceSession {
 }
 
 /** What would be lost if one user's data were deleted from the device now. */
-export interface UnsyncedCount {
-  /** Sessions "not synced yet" or "Couldn't sync". */
-  sessions: number
-  /** Synced sessions with an edit the server hasn't applied. */
-  edits: number
-}
+// Sign-out (#9) owns the shape: sessions "not synced yet" or "Couldn't sync", and edits.
+export type { UnsyncedCount } from '../auth/localData.ts'
+import type { UnsyncedCount } from '../auth/localData.ts'
 
 /** The store as the timer and the sync engine use it; the app's is IndexedDB. */
 export interface SessionStore {

@@ -1,16 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { sessionDataHooks } from '../services.ts'
-import { FakeSessionsServer, freshDbName, makeRecord } from '../test/fakeSessionsServer.ts'
-import { MemoryActiveSessionStore, TimerController } from '../timer/index.ts'
-import { HttpSessionsApi } from './api.ts'
-import { registerLocalDataHooks, registeredLocalDataHooks } from './localDataHooks.ts'
 import {
-  ACTIVE_OWNER_KEY,
-  OwnedActiveSessionStore,
+  OWNER_KEY,
   USER_KEY,
-  cachedUserId,
-  quarantinePendingRecord,
-} from './owner.ts'
+  claimLocalData,
+  clearLocalUserData,
+  countUnsynced,
+  registerLocalDataHook,
+  signedInUserId,
+} from '../auth/localData.ts'
+import { sessionDataHook } from '../services.ts'
+import { FakeSessionsServer, freshDbName, makeRecord } from '../test/fakeSessionsServer.ts'
+import {
+  LocalActiveSessionStore,
+  MemoryActiveSessionStore,
+  TimerController,
+} from '../timer/index.ts'
+import { HttpSessionsApi } from './api.ts'
+import { ACTIVE_OWNER_KEY, OwnedActiveSessionStore, quarantinePendingRecord } from './owner.ts'
 import { deviceSaver } from './saveRecord.ts'
 import { IndexedDbSessionStore } from './sessionStore.ts'
 import { SyncEngine } from './syncEngine.ts'
@@ -30,12 +36,12 @@ afterEach(() => {
 })
 
 /** The app's wiring (services.ts), with a fake clock and a fake server. */
-function setup() {
+function setup(currentOwnerOverride?: () => string | null) {
   const server = new FakeSessionsServer()
   const sessions = new IndexedDbSessionStore({ name: freshDbName() })
   stores.push(sessions)
   const who = { owner: ALICE as string | null }
-  const currentOwner = () => who.owner
+  const currentOwner = currentOwnerOverride ?? (() => who.owner)
   const sync = new SyncEngine({
     store: sessions,
     api: new HttpSessionsApi({ fetch: server.fetch }),
@@ -43,7 +49,10 @@ function setup() {
     isOnline: () => true,
     exclusive: (run) => run(),
   })
-  const active = new OwnedActiveSessionStore(new MemoryActiveSessionStore(), currentOwner)
+  const active = new OwnedActiveSessionStore(
+    currentOwnerOverride ? new LocalActiveSessionStore() : new MemoryActiveSessionStore(),
+    currentOwner,
+  )
   let now = Date.UTC(2026, 9, 23, 9, 0)
   const saveState = { failing: false }
   const save = deviceSaver({
@@ -58,7 +67,7 @@ function setup() {
     },
     now: () => now,
   })
-  const hooks = sessionDataHooks({ sessions, sync, active, currentOwner })
+  const hooks = sessionDataHook({ sessions, sync, active, currentOwner })
   const finish = async () => {
     await controller.start({
       config: { mode: 'unlimited', reminderMinutes: null },
@@ -71,13 +80,17 @@ function setup() {
   return { server, sessions, sync, active, controller, hooks, who, saveState, finish }
 }
 
-describe('cachedUserId', () => {
-  it('reads the signed-in user cached by the accounts UI', () => {
-    expect(cachedUserId()).toBeNull()
+describe('signedInUserId', () => {
+  it('is the cached user, if the device’s data is bound to them', () => {
+    expect(signedInUserId()).toBeNull()
     localStorage.setItem(USER_KEY, JSON.stringify({ id: ALICE, email: 'a@example.com' }))
-    expect(cachedUserId()).toBe(ALICE)
+    expect(signedInUserId()).toBe(ALICE)
+    localStorage.setItem(OWNER_KEY, ALICE)
+    expect(signedInUserId()).toBe(ALICE)
+    localStorage.setItem(OWNER_KEY, BOB)
+    expect(signedInUserId()).toBeNull()
     localStorage.setItem(USER_KEY, '{not json')
-    expect(cachedUserId()).toBeNull()
+    expect(signedInUserId()).toBeNull()
   })
 })
 
@@ -116,7 +129,7 @@ describe('session owners', () => {
     const { sessions, active, saveState, finish, hooks } = setup()
     saveState.failing = true
     await finish()
-    await hooks.quarantine(ALICE)
+    await hooks.quarantine?.(ALICE)
     expect(active.load()).toBeNull()
     expect((await sessions.list(ALICE)).map((s) => s.indicator)).toEqual(['not-synced-yet'])
     // Nothing pending: a no-op.
@@ -149,12 +162,79 @@ describe('sign-out hooks', () => {
     who.owner = BOB
     expect((await sessions.list(BOB)).map((s) => s.record.id)).toEqual([bobs.id])
   })
+})
 
-  it('registers and unregisters', () => {
-    const { hooks } = setup()
-    const unregister = registerLocalDataHooks(hooks)
-    expect(registeredLocalDataHooks()).toContain(hooks)
-    unregister()
-    expect(registeredLocalDataHooks()).not.toContain(hooks)
+describe('with the accounts UI’s registry (#9)', () => {
+  const alice = { id: ALICE, email: 'a@example.com', created_at: '2026-10-23T00:00:00Z' }
+  const bob = { id: BOB, email: 'b@example.com', created_at: '2026-10-23T00:00:00Z' }
+  const unregisters: (() => void)[] = []
+
+  afterEach(() => {
+    for (const unregister of unregisters.splice(0)) unregister()
+  })
+
+  function signIn(user: typeof alice) {
+    localStorage.setItem(USER_KEY, JSON.stringify(user))
+    localStorage.setItem(OWNER_KEY, user.id)
+  }
+
+  function registered() {
+    const app = setup(signedInUserId)
+    unregisters.push(registerLocalDataHook(app.hooks))
+    return app
+  }
+
+  it('a different user’s sign-in quarantines the previous owner’s unsaved session', async () => {
+    signIn(alice)
+    const { sessions, saveState, finish, sync, server } = registered()
+    saveState.failing = true
+    expect((await finish()).recordPending).toBe(true)
+    expect(await countUnsynced()).toEqual({ sessions: 1, edits: 0 })
+
+    await claimLocalData(bob)
+    localStorage.setItem(USER_KEY, JSON.stringify(bob))
+    expect(localStorage.getItem(ACTIVE_OWNER_KEY)).toBeNull()
+    expect(await sessions.list(BOB)).toEqual([])
+    expect(await countUnsynced()).toEqual({ sessions: 0, edits: 0 })
+    await sync.syncNow()
+    expect(server.sessions.size).toBe(0)
+
+    // Alice signs in again on this device: her session syncs to her account.
+    await claimLocalData(alice)
+    signIn(alice)
+    expect((await sessions.list(ALICE)).map((s) => s.indicator)).toEqual(['not-synced-yet'])
+    await sync.syncNow()
+    expect(server.sessions.size).toBe(1)
+  })
+
+  it('sign-out clears only the signed-in user’s sessions, through the hook', async () => {
+    signIn(alice)
+    const { sessions } = registered()
+    await sessions.save(makeRecord(), ALICE)
+    const bobs = makeRecord()
+    await sessions.save(bobs, BOB)
+    await clearLocalUserData()
+    expect(localStorage.getItem(USER_KEY)).toBeNull()
+    expect(await sessions.list(ALICE)).toEqual([])
+    expect((await sessions.list(BOB)).map((s) => s.record.id)).toEqual([bobs.id])
+  })
+
+  it('a hook whose clear fails doesn’t stop the rest of sign-out', async () => {
+    signIn(alice)
+    const { sessions } = registered()
+    await sessions.save(makeRecord(), ALICE)
+    unregisters.push(
+      registerLocalDataHook({
+        countUnsynced: async () => ({ sessions: 0, edits: 0 }),
+        trySync: async () => undefined,
+        clear: async () => {
+          throw new Error('IndexedDB unavailable')
+        },
+      }),
+    )
+    await clearLocalUserData()
+    expect(localStorage.getItem(USER_KEY)).toBeNull()
+    expect(localStorage.getItem(OWNER_KEY)).toBeNull()
+    expect(await sessions.list(ALICE)).toEqual([])
   })
 })

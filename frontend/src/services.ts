@@ -1,14 +1,13 @@
 // Wires the app's device stores, the sessions API and the timer together.
 
+import { signedInUserId, type LocalDataHook } from './auth/localData.ts'
 import {
   HttpSessionsApi,
   IndexedDbSessionStore,
   OwnedActiveSessionStore,
   SyncEngine,
-  cachedUserId,
   deviceSaver,
   quarantinePendingRecord,
-  type LocalDataHooks,
   type SessionStore,
 } from './sync/index.ts'
 import { LocalActiveSessionStore, TimerController } from './timer/index.ts'
@@ -16,24 +15,24 @@ import { LocalActiveSessionStore, TimerController } from './timer/index.ts'
 export interface AppServices {
   controller: TimerController
   sync: SyncEngine | null
-  /** Sign-out hooks (#9) for the session store; the app registers them while it runs. */
-  hooks: LocalDataHooks | null
+  /** Sign-out hook (#9) for the session store; `main.tsx` registers it before anything renders. */
+  hook: LocalDataHook | null
 }
 
-export interface SessionServicesOptions {
+export interface SessionHookOptions {
   sessions: SessionStore
   sync: SyncEngine
   active: OwnedActiveSessionStore
   currentOwner: () => string | null
 }
 
-/** The sign-out hooks for the session store, scoped to whoever is signed in when called. */
-export function sessionDataHooks({
+/** The sign-out hook for the session store, scoped to whoever is signed in when it is called. */
+export function sessionDataHook({
   sessions,
   sync,
   active,
   currentOwner,
-}: SessionServicesOptions): LocalDataHooks {
+}: SessionHookOptions): LocalDataHook {
   return {
     countUnsynced: () => sessions.countUnsynced(currentOwner()),
     trySync: () => sync.trySync(),
@@ -42,8 +41,7 @@ export function sessionDataHooks({
   }
 }
 
-export function createAppServices(): AppServices {
-  const currentOwner = () => cachedUserId()
+export function createAppServices(currentOwner: () => string | null = signedInUserId): AppServices {
   const sessions = new IndexedDbSessionStore()
   const sync = new SyncEngine({ store: sessions, api: new HttpSessionsApi(), currentOwner })
   const active = new OwnedActiveSessionStore(new LocalActiveSessionStore(), currentOwner)
@@ -60,9 +58,5 @@ export function createAppServices(): AppServices {
       afterSave: () => void sync.syncNow(),
     }),
   })
-  return {
-    controller,
-    sync,
-    hooks: sessionDataHooks({ sessions, sync, active, currentOwner }),
-  }
+  return { controller, sync, hook: sessionDataHook({ sessions, sync, active, currentOwner }) }
 }

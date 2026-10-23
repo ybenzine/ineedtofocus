@@ -1,21 +1,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import AccountBar from './auth/AccountBar.tsx'
 import { LocalPreferencesStore, type PreferencesStore } from './setup/preferences.ts'
 import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
 import type { AudioSource } from './setup/options.ts'
 import SessionSummary from './timerscreen/SessionSummary.tsx'
 import TimerScreen from './timerscreen/TimerScreen.tsx'
-import { createAppServices } from './services.ts'
-import { registerLocalDataHooks, type SyncEngine } from './sync/index.ts'
+import { createAppServices, type AppServices } from './services.ts'
 import type { TimerController, TimerUpdate } from './timer/index.ts'
 
 export interface AppProps {
   /**
-   * Injectable for tests. By default the app keeps the active session in localStorage, finished
-   * sessions in IndexedDB, and syncs them to the server (F13).
+   * The timer, session store and sync (`main.tsx` creates them once). Without them the app
+   * makes its own: the active session in localStorage, finished sessions in IndexedDB, synced
+   * to the server (F13).
    */
+  services?: AppServices
+  /** For tests: just a timer, with nothing stored or synced beyond what it is given. */
   controller?: TimerController
-  /** Only used with an injected `controller`; without one, nothing is synced. */
-  sync?: SyncEngine
   preferences?: PreferencesStore
   /** How often a finished session that couldn't be saved on the device is tried again. */
   pendingRetryMs?: number
@@ -30,14 +31,14 @@ type View =
   | { name: 'summary'; update: TimerUpdate }
 
 export default function App({
+  services: given,
   controller,
-  sync,
   preferences,
   pendingRetryMs = PENDING_RETRY_MS,
 }: AppProps) {
-  const services = useMemo(
-    () => (controller ? { controller, sync: sync ?? null, hooks: null } : createAppServices()),
-    [controller, sync],
+  const services = useMemo<AppServices>(
+    () => given ?? (controller ? { controller, sync: null, hook: null } : createAppServices()),
+    [given, controller],
   )
   const timer = services.controller
   const prefs = useMemo(() => preferences ?? new LocalPreferencesStore(), [preferences])
@@ -63,10 +64,8 @@ export default function App({
   }, [timer])
 
   // Send what is on the device now, when the connection returns, and on backoff (AC13.3).
+  // Runs only while someone is signed in: AuthGate renders the app only then (#9).
   useEffect(() => services.sync?.start(), [services])
-
-  // Sign-out (#9) asks these what would be lost, syncs one last time, and clears.
-  useEffect(() => (services.hooks ? registerLocalDataHooks(services.hooks) : undefined), [services])
 
   // A finished session that couldn't be saved on the device yet (a stalled IndexedDB) stays in
   // the timer's own store; keep trying, and drop the "not saved yet" note once it is saved.
@@ -135,6 +134,7 @@ export default function App({
 
   return (
     <main>
+      <AccountBar controller={timer} />
       {notice && <p role="status">{notice}</p>}
       <SessionSetup preferences={prefs} onStart={start} />
     </main>

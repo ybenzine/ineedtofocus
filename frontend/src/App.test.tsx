@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import App from './App.tsx'
+import { AccountContext } from './auth/AccountContext.tsx'
 import { MemoryPreferencesStore } from './setup/preferences.ts'
-import { registeredLocalDataHooks } from './sync/index.ts'
+import type { SyncEngine } from './sync/index.ts'
 import { ACTIVE_SESSION_KEY, MemoryActiveSessionStore, TimerController } from './timer/index.ts'
 
 function setup(store = new MemoryActiveSessionStore()) {
@@ -17,6 +18,35 @@ async function runningStore() {
   await first.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
   return store
 }
+
+describe('App account bar', () => {
+  const account = {
+    user: { id: 'u', email: 'a@b.co', created_at: '' },
+    signOut: () => Promise.resolve(null),
+  }
+  function renderSignedIn(store = new MemoryActiveSessionStore()) {
+    const controller = new TimerController({ store, saveRecord: () => undefined })
+    render(
+      <AccountContext.Provider value={account}>
+        <App controller={controller} preferences={new MemoryPreferencesStore()} />
+      </AccountContext.Provider>,
+    )
+  }
+
+  it('offers Sign out on the setup screen only, not over the timer', async () => {
+    renderSignedIn()
+    expect(await screen.findByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+  })
+
+  it('does not offer Sign out over a session restored at reload', async () => {
+    renderSignedIn(await runningStore())
+    await screen.findByRole('timer')
+    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+  })
+})
 
 describe('App', () => {
   it('shows the setup screen', async () => {
@@ -104,12 +134,22 @@ describe('App', () => {
     expect(store.load()).toBeNull()
   })
 
-  it('registers the session store’s sign-out hooks while it runs (#9)', async () => {
-    const before = registeredLocalDataHooks().length
-    const { unmount } = render(<App preferences={new MemoryPreferencesStore()} />)
+  it('ac13_3 syncs while the app runs and stops when it closes', async () => {
+    const stop = vi.fn()
+    const sync = { start: vi.fn(() => stop) } as unknown as SyncEngine
+    const controller = new TimerController({
+      store: new MemoryActiveSessionStore(),
+      saveRecord: () => undefined,
+    })
+    const { unmount } = render(
+      <App
+        services={{ controller, sync, hook: null }}
+        preferences={new MemoryPreferencesStore()}
+      />,
+    )
     await screen.findByRole('heading', { name: 'I Need To Focus' })
-    expect(registeredLocalDataHooks()).toHaveLength(before + 1)
+    expect(sync.start).toHaveBeenCalled()
     unmount()
-    expect(registeredLocalDataHooks()).toHaveLength(before)
+    expect(stop).toHaveBeenCalled()
   })
 })
