@@ -561,7 +561,7 @@ describe('clock moved backwards (#93)', () => {
     expectApiInvariant(record)
   })
 
-  it('a backwards jump during focus counts as zero focus time', () => {
+  it('a backwards jump during focus never yields negative or oversized durations', () => {
     let session = start({ mode: 'unlimited', reminderMinutes: null })
     wait(10 * MINUTE_MS)
     setClock(T0 + 4 * MINUTE_MS) // back while focusing
@@ -583,6 +583,20 @@ describe('clock moved backwards (#93)', () => {
     expectApiInvariant(saved(stopSession(session, now())))
   })
 
+  it('a pause or resume read on a fast clock is capped once the clock is corrected', () => {
+    let session = start({ mode: 'unlimited', reminderMinutes: null })
+    wait(10 * MINUTE_MS)
+    session = pauseSession(session, now())
+    setClock(T0 + 48 * HOUR) // clock wrong by two days
+    session = resumeSession(session, now())
+    setClock(T0 + 20 * MINUTE_MS) // corrected before Stop
+    const record = saved(stopSession(session, now()))
+    expect(Date.parse(record.endedAt)).toBeLessThanOrEqual(now())
+    expect(Date.parse(record.endedAt)).toBeLessThanOrEqual(now() + 24 * HOUR)
+    expect(record.pausedSeconds).toBe(10 * 60)
+    expectApiInvariant(record)
+  })
+
   it('never reports negative paused or focus time in a snapshot', () => {
     let session = start({ mode: 'countdown', minutes: 25 })
     wait(10 * MINUTE_MS)
@@ -590,7 +604,8 @@ describe('clock moved backwards (#93)', () => {
     setClock(T0 + 5 * MINUTE_MS)
     const snap = snapshot(session, now())
     expect(snap.pausedMs).toBe(0)
-    expect(snap.focusMs).toBe(10 * MINUTE_MS)
+    // Readings later than the corrected clock are capped at it: never more than elapsed.
+    expect(snap.focusMs).toBe(5 * MINUTE_MS)
   })
 
   it('ac6_5 a forward jump while closed still completes at the scheduled end', () => {
