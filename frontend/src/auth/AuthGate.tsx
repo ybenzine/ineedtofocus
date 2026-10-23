@@ -10,6 +10,7 @@ import {
   forgetCachedUser,
   hasPendingLogout,
   loadCachedUser,
+  SESSION_EXPIRED_EVENT,
   setPendingLogout,
   USER_KEY,
 } from './localData.ts'
@@ -41,11 +42,11 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
   const flushLogout = useCallback(async (): Promise<boolean> => {
     if (!hasPendingLogout()) return true
     try {
+      // Resolves on 2xx or 401 (the server session is already gone); anything else throws.
       await api.signOut()
-    } catch (error) {
-      if (error instanceof AuthError && (error.kind === 'network' || error.kind === 'server')) {
-        return false
-      }
+    } catch {
+      // Network, timeout, 5xx or anything unexpected: keep the marker and try again later.
+      return false
     }
     clearPendingLogout()
     setLogoutPending(false)
@@ -60,10 +61,10 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
     }
     api
       .me()
-      .then((current) => {
+      .then(async (current) => {
         if (cancelled) return
         if (current) {
-          claimLocalData(current)
+          await claimLocalData(current)
           cacheUser(current)
         } else {
           // Expired or revoked elsewhere: keep the data for its owner (AC1.3).
@@ -93,13 +94,27 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
     function onOnline() {
       void flushLogout()
     }
+    // Sync got a 401: check the sign-in again, handled like an expiry found at start-up (the
+    // data stays for its owner). An unreachable server leaves things as they are.
+    function onExpired() {
+      api.me().then(
+        (current) => {
+          if (current) return
+          forgetCachedUser()
+          setUser(null)
+        },
+        () => undefined,
+      )
+    }
     window.addEventListener('storage', onStorage)
     window.addEventListener('online', onOnline)
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired)
     return () => {
       window.removeEventListener('storage', onStorage)
       window.removeEventListener('online', onOnline)
+      window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired)
     }
-  }, [flushLogout])
+  }, [flushLogout, api])
 
   const account = useMemo<Account | null>(() => {
     if (!user) return null
@@ -140,8 +155,8 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
             ? null
             : "Can't finish signing out yet. Connect to the internet, then try again."
         }
-        onSignedIn={(next) => {
-          claimLocalData(next)
+        onSignedIn={async (next) => {
+          await claimLocalData(next)
           cacheUser(next)
           setUser(next)
         }}
