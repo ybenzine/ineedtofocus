@@ -19,6 +19,9 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 tag=0123456789abcdef0123456789abcdef01234567
+# Render with this tag only: an APP_TAG from the caller (CI sets one for the job) would
+# defeat the "refuses to render without APP_TAG" check.
+unset APP_TAG
 fail() {
   echo "FAIL  $*" >&2
   exit 1
