@@ -1,6 +1,6 @@
 # Deployment
 
-> **Status: in progress.** Server setup is scripted (#25) and the images and production Compose are defined (#27); the rest is filled in by the DevOps agent with #26, #28–#30. The plan is in [tech_stack.md §2–3](tech_stack.md).
+> **Status: in progress.** Server setup is scripted (#25), the images and production Compose are defined (#27), and merges to `main` deploy to dev (#28). Prod deploys and rollback are filled in by the DevOps agent with #29 and #30. The plan is in [tech_stack.md §2–3](tech_stack.md).
 
 ## Environments
 
@@ -75,13 +75,13 @@ ssh root@159.223.188.176                              # from your machine: Permi
 
 ### CI keys (#28–#30)
 
-Each GitHub environment gets its own key pair. The private key goes into that environment's secrets; the public key goes on one line of `/etc/ssh/authorized_keys/deploy` (edit with `sudo`), always restricted to a forced command in `/opt/focus/bin`:
+Each GitHub environment gets its own key pair. The private key goes into that environment's secrets; the public key goes on one line of `/etc/ssh/authorized_keys/deploy` (edit with `sudo`), always restricted to the forced command `/opt/focus/bin/focus-ci` with a profile:
 
 ```
-restrict,command="/opt/focus/bin/<command>" ssh-ed25519 AAAA... focus-ci-<environment>
+restrict,command="/opt/focus/bin/focus-ci <profile>" ssh-ed25519 AAAA... focus-ci-<environment>
 ```
 
-`restrict` turns off PTYs and forwarding for that key; `command=` makes sshd run that script whatever the client asks for (the client's request is in `$SSH_ORIGINAL_COMMAND`). The scripts and keys themselves are part of #28 (dev), #29 (prod) and #30 (rollback).
+`restrict` turns off PTYs and forwarding for that key; `command=` makes sshd run that script whatever the client asks for (the client's request is in `$SSH_ORIGINAL_COMMAND`). The profile is fixed by this root-owned line, so a key can never pick another one. The `dev` profile is #28's ([Deploy to dev](#deploy-to-dev-28)); #29 (prod) and #30 (rollback) add theirs.
 
 ### Upkeep
 
@@ -138,18 +138,17 @@ One image (root `Dockerfile`, multi-stage: Vite build, locked uv dependencies, s
 
 ### Running it on the server
 
-The server needs this repo's `infra/` directory. How it gets there, and how it is kept root-owned so a deploy key can't change what runs, is for #28. These are the steps the deploy and rollback scripts (#28–#30) will run, in this order:
+The server runs a root-owned copy of `infra/` in `/opt/focus/infra`, installed by Yacine with `infra/server/install.sh` ([Infra on the server](#infra-on-the-server-installsh)). The deploy keys run only the forced command `/opt/focus/bin/focus-ci`, which runs these steps for one environment ([Deploy to dev](#deploy-to-dev-28)):
 
 ```bash
-docker compose -f infra/compose.edge.yml up -d --wait          # once, and after Caddyfile changes
-export APP_TAG=<commit sha>
-infra/compose.sh dev pull app                                   # public package: no login needed
-infra/compose.sh dev run --rm app alembic upgrade head          # one-shot migration
-infra/compose.sh dev up -d --wait                               # app starts with MIGRATE_ON_START=0
-curl -fsS https://dev.ineedtofoc.us/healthz && curl -fsS https://dev.ineedtofoc.us/readyz
+docker pull ghcr.io/ybenzine/ineedtofocus@sha256:<digest>      # public package: no login needed
+docker tag ghcr.io/ybenzine/ineedtofocus@sha256:<digest> ghcr.io/ybenzine/ineedtofocus:<sha>
+export APP_TAG=<sha>                                            # passed with env -i, nothing else
+infra/compose.sh dev run --rm --pull never app alembic upgrade head   # one-shot migration
+infra/compose.sh dev up -d --wait --pull never                  # app starts with MIGRATE_ON_START=0
 ```
 
-A rollback is the same `up -d --wait` with the previous tag and no migration step, because migrations are expand-only (see [App image and migrations](#app-image-and-migrations)). To reload Caddy after a Caddyfile change without dropping connections: `docker compose -f infra/compose.edge.yml exec caddy caddy reload --config /etc/caddy/Caddyfile`.
+A rollback is the same `up -d --wait` with the previous release and no migration step, because migrations are expand-only (see [App image and migrations](#app-image-and-migrations)). The edge (`compose.edge.yml`) is started and updated by `install.sh`, never by a deploy key, because prod shares it.
 
 ### App settings fixed by the Compose file
 
@@ -164,14 +163,113 @@ Each environment's app sends OTLP to its own collector (`infra/otel-collector/co
 
 ### Human steps (Yacine)
 
+Both steps 1 and 2 were done on 2026-10-23: the package is Public, so the server pulls anonymously, and each `.env` has its own `POSTGRES_PASSWORD`.
+
 1. **After the first image is published** (the first push to `main` after this lands), make the package public. A new package in a personal account starts out private, so the server couldn't pull it without a token. On github.com, go to your profile → **Packages** → `ineedtofocus` → **Package settings**. Under **Danger Zone**, choose **Change visibility** → **Public**, then type `ineedtofocus` to confirm. If it already shows Public, there's nothing to do. The repository is public already. Under **Manage Actions access** on the same page, `ybenzine/ineedtofocus` should be listed: the workflow that created the package gets access automatically. If it isn't listed, add it with the **Write** role.
 2. **Before the first deploy (#28)**, put `POSTGRES_PASSWORD=<openssl rand -hex 32>` in both `/opt/focus/prod/.env` and `/opt/focus/dev/.env`, with a different value in each. Keep the files at mode 600, owner `deploy`. Anything else copied from `.env.example`'s local sections has no effect there.
 3. **With #32**, add the three `GRAFANA_CLOUD_*` values to both files.
 
+## Infra on the server: `install.sh`
+
+The deploy keys run Docker, and the `docker` group is root-equivalent. So whoever controls the compose files the keys run controls the whole host, prod included. Those files therefore change only when Yacine installs them. A merge to `main` doesn't change them, and neither does a deploy key. `infra/server/install.sh <sha>` (root, run with sudo) does it:
+
+1. Clones `main` from GitHub over HTTPS (bare, that branch only) and checks that `<sha>` is on `main`. `infra/` at `<sha>` must hold regular files only.
+2. Shows the commits and files that changed since the installed revision.
+3. Under `/opt/focus/deploy.lock`, so it never swaps files under a running deploy: replaces `/opt/focus/infra` with `infra/` at `<sha>` plus a `REVISION` file, all `root:root` with nothing group- or world-writable. The previous copy stays in `/opt/focus/infra.previous`. Then it installs `infra/server/focus-ci.sh` as `/opt/focus/bin/focus-ci` (root, 755).
+4. Starts or updates the edge. Caddy is recreated when the Caddyfile changed, because a running container keeps seeing the old file: a few seconds without HTTPS for both sites. When `infra/otel-collector/` changed, it also recreates each deployed environment's collector.
+5. Prints the installed revision and the `sha256` of `focus-ci`.
+
+It never touches the deploy keys, the `.env` files, the databases or the apps.
+
+```bash
+# First time (or when install.sh itself changed), like bootstrap.sh:
+scp infra/server/install.sh yacine@159.223.188.176:/tmp/focus-install.sh
+ssh -t yacine@159.223.188.176 'sudo bash /tmp/focus-install.sh <sha on main>'
+# Afterwards:
+ssh -t yacine@159.223.188.176 'sudo /opt/focus/infra/server/install.sh <sha on main>'
+```
+
+**When to run it:** after a merge that changes `infra/` files the server uses: `compose*.yml`, `compose.sh`, `env/`, `caddy/`, `otel-collector/` or `server/focus-ci.sh`. App-only merges don't need it; they reach dev through the deploy below. Each deploy records the infra revision it ran with (`infra_revision`), so `status` shows when the server is behind.
+
+Why not have the forced command fetch `infra/` itself? Then any merge to `main` would change, unreviewed by Yacine, what runs as root-equivalent on the host. That includes prod, which is supposed to change only with his approval ([process.md → Human gates](process.md#human-gates)). Infra changes are rare, and one command per change keeps that gate.
+
+## Deploy to dev (#28)
+
+Every push to `main` runs CI. Once the five required checks and `image` pass, `publish` pushes `ghcr.io/ybenzine/ineedtofocus:<sha>` and outputs its digest. Then `deploy-dev` (`.github/workflows/ci.yml`, `needs: publish`) deploys that exact digest. A red `main` never reaches dev, and a re-run that re-pushes the tag can't change what was deployed.
+
+| Step | Where | What |
+|---|---|---|
+| Gate | runner | Skips with a notice, green, while the `dev` environment has no `DEPLOY_SSH_KEY`/`DEPLOY_KNOWN_HOSTS` |
+| Deploy | server, `focus-ci dev` | `ssh deploy@159.223.188.176 "deploy <sha> sha256:<digest>"`: waits for the deploy lock, pulls by digest, checks the image's `org.opencontainers.image.revision` label is `<sha>`, tags it `:<sha>`, migrates (`run --rm`), starts (`up -d --wait`, the `/healthz` healthcheck), checks that the app container runs exactly that image and that `/readyz` answers inside it, then records the release |
+| Record | runner | `ssh … status` reads the record back; the job fails if it doesn't show this tag and digest |
+| Smoke | runner | `scripts/smoke_deploy.py https://dev.ineedtofoc.us`: `/healthz` and `/readyz` answer `{"status":"ok"}`, `/` serves the frontend, `http://` redirects to `https://`, the certificate verifies. Retried for up to 90 s |
+| Summary | runner | Tag, image digest, server time of the deploy, rollback target, infra revision, smoke results |
+
+A failed step stops the deploy and exits non-zero, which turns the job red. The record keeps the last successful release, and the attempt is logged with the step that failed. If the failure came after `up`, dev may be running the new image unhealthy; automatic revert to the previous release is #30.
+
+### The forced command: `focus-ci`
+
+`/opt/focus/bin/focus-ci <profile>` (source `infra/server/focus-ci.sh`) accepts exactly these requests in `$SSH_ORIGINAL_COMMAND`, matched whole, in the C locale:
+
+| Request | Profile `dev` | Does |
+|---|---|---|
+| `deploy <40 lowercase hex> sha256:<64 lowercase hex>` | yes | The deploy above |
+| `rollback` | yes | Starts the record's previous release again by digest, no migration, same checks. Rolling back again goes further back, not forward |
+| `status` | yes | Prints the record |
+
+Anything else gets exit status 2 and `focus-ci: refused`, before anything runs: another verb, extra or malformed arguments, a shell, scp or sftp, a newline, or an unknown profile. Requests are logged to syslog (`journalctl -t focus-ci`). Every `docker` and `compose.sh` call runs under `env -i` with only `PATH`, `HOME` and `APP_TAG`, so nothing from the SSH session (such as `LC_*`, which sshd accepts) can override `infra/env/<env>.env`. #29 and #30 add profiles (prod deploy; prod rollback restricted to recorded releases) and the automatic revert in the same `case`.
+
+**Serialization.** Every deploy and rollback takes `flock /opt/focus/deploy.lock` (waits up to 15 minutes), across environments, and `install.sh` takes the same lock. The memory budget counts one migration container at a time ([Memory](#memory-dev-cant-starve-prod)). In GitHub, `deploy-dev` has its own concurrency group (`deploy-dev`, no cancelling of the running deploy). Deploys of different environments don't share one group: GitHub cancels a *pending* job when another one joins the group, so a dev deploy queued behind a prod deploy would cancel a pending prod rollback. The server lock is what orders them.
+
+### The release record
+
+`/opt/focus/dev/release` (owner `deploy`, 640), written only by `focus-ci`. `status` prints it:
+
+```
+env=dev
+tag=<commit sha>
+digest=sha256:<digest>
+image=ghcr.io/ybenzine/ineedtofocus@sha256:<digest>
+action=deploy                  # or rollback
+deployed_at=2026-10-23T21:23:28Z
+previous_tag=<sha>             # what `rollback` restores
+previous_digest=sha256:<digest>
+infra_revision=<sha>           # /opt/focus/infra/REVISION when it ran
+```
+
+`/opt/focus/dev/releases.log` has one line per attempt: `time=… env=dev action=deploy|rollback outcome=ok|failed tag=… digest=… previous_tag=… previous_digest=… infra=… [step=…]`.
+
+### Credentials
+
+| Where | What | Who sets it |
+|---|---|---|
+| GitHub environment `dev` (deployment branches: `main` only, no reviewer) | `DEPLOY_SSH_KEY`: the private half of the `focus-ci-dev` key. `DEPLOY_KNOWN_HOSTS`: the Droplet's host key line | Yacine |
+| `/etc/ssh/authorized_keys/deploy` | `restrict,command="/opt/focus/bin/focus-ci dev" ssh-ed25519 … focus-ci-dev` | Yacine (sudo) |
+
+Nothing is stored at repo level. The key can only run the `dev` profile: deploy, roll back or read dev's release. Even if it leaked, it can't open a shell, touch prod, change the compose files or run an image that isn't in `ghcr.io/ybenzine/ineedtofocus`. The `main`-only branch policy keeps workflows on other branches from reading it. GitHub creates the `dev` environment, with no secrets, the first time the job runs; until the secrets are added the job skips.
+
+### One-time setup (Yacine)
+
+1. **Install `infra/` and the forced command** on the server at the merge commit of this change ([install.sh](#infra-on-the-server-installsh), first-time form).
+2. **Create the key pair** on your machine. It's used only by CI:
+   `ssh-keygen -t ed25519 -N '' -C focus-ci-dev -f /tmp/focus-ci-dev`
+3. **Authorize it on the server**, pinned to the forced command:
+   `ssh -t yacine@159.223.188.176 "echo 'restrict,command=\"/opt/focus/bin/focus-ci dev\" $(cat /tmp/focus-ci-dev.pub)' | sudo tee -a /etc/ssh/authorized_keys/deploy > /dev/null"`.
+   Then check that the file is still `640 root:deploy` (`sudo stat -c '%a %U:%G' /etc/ssh/authorized_keys/deploy`).
+4. **Get the host key line** from your own logged-in session, not from the network:
+   `ssh yacine@159.223.188.176 'printf "159.223.188.176 %s\n" "$(cut -d" " -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)"'`
+5. **Create the `dev` environment** on GitHub: repo **Settings** → **Environments** → **New environment** → `dev`. Under **Deployment branches and tags**, choose **Selected branches and tags** and add `main`. Leave **Required reviewers** off. Add two **Environment secrets**: `DEPLOY_SSH_KEY`, the whole content of `/tmp/focus-ci-dev` (the private key, `-----BEGIN OPENSSH PRIVATE KEY-----` to `-----END …-----`), and `DEPLOY_KNOWN_HOSTS`, the line from step 4.
+6. **Delete the local key files**: `rm /tmp/focus-ci-dev /tmp/focus-ci-dev.pub`.
+7. **Check:** CI now holds the only copy of the key. On **Actions**, open the latest `CI` run on `main`, open its `Deploy to dev` job (it skipped with a notice), and click **Re-run this job**: it reuses that run's published digest. The `Deploy to dev` job should go green and show the release in its summary, and `https://dev.ineedtofoc.us/healthz` should answer `{"status":"ok"}`.
+
+### Upkeep
+
+- **Infra changed in a merge:** run `install.sh` with the merge commit (see above); the next deploy records the new `infra_revision`.
+- **Rotate the key:** repeat steps 2–6, then remove the old line from `/etc/ssh/authorized_keys/deploy`.
+- **Roll dev back by hand** until #30's workflow exists: dev's key is only in GitHub, so use the server: `sudo -u deploy env -i SSH_ORIGINAL_COMMAND=rollback /opt/focus/bin/focus-ci dev`. That is what the key would run.
+
 ## Sections to write
 
-- DNS (Route 53) — #26
-- Deploy to dev — #28
 - Deploy to prod — #29
 - Health checks, auto-revert and rollback — #30
-- Credential separation — prod key and secrets only in the `production` environment; dev and rollback keys restricted by SSH forced commands (see [process.md](process.md#human-gates)) — #28–#30
+- Credential separation for the prod and rollback keys — #29, #30 (dev's is in [Deploy to dev → Credentials](#credentials))

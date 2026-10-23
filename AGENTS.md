@@ -50,7 +50,7 @@ All entry points go through `make` (`make help` lists them). Needs Docker with C
 | `make up` | Start the full local stack (app, Postgres, Grafana/OTel) with Docker Compose; the app service arrives with #4 |
 | `make down` | Stop it (keeps the database volume) |
 | `make test` | Run every test suite: backend unit + integration, frontend unit, repo scripts, the server bootstrap in an Ubuntu container, the production config checks (`test-infra`), Playwright end-to-end (Playwright arrives with #23). `make test-prod-stack` smoke-tests the production stack separately |
-| `make lint` | Linters and type checks for backend (ruff, mypy), frontend (ESLint, Prettier, tsc), repo scripts and shell scripts (shellcheck) |
+| `make lint` | Linters and type checks for backend (ruff, mypy), frontend (ESLint, Prettier, tsc), repo scripts, shell scripts (shellcheck) and workflows (actionlint) |
 | `make fmt` | Auto-format |
 | `make openapi` | Regenerate `_docs/api/openapi.json` (commit it with any API change) |
 | `make hooks` | Install the pre-commit hooks (ruff, ESLint, Prettier, hygiene checks) |
