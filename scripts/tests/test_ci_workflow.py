@@ -221,6 +221,9 @@ def test_actions_are_pinned_to_a_commit(path: Path) -> None:
 
 SHA = "a" * 40
 OTHER_SHA = "b" * 40
+THIRD_SHA = "d" * 40
+# Deployment 11 of SHA failed dev's smoke tests; 10, a retry of the same sha, passed.
+DEV_WITH_RETRY = f"12 {OTHER_SHA}\n11 {SHA}\n10 {SHA}\n"
 DIGEST = "sha256:" + "c" * 64
 
 
@@ -339,6 +342,22 @@ def test_deploy_prod_sends_requests_the_prod_profile_accepts(prod_jobs: dict[str
     assert "promote_from=dev" in prod.group(1)
 
 
+def test_deploy_prod_deletes_the_key_before_running_repo_code(prod_jobs: dict[str, Any]) -> None:
+    """The key is on disk only for the SSH steps: removed after the record is read back,
+    before the smoke test runs scripts/ from the checkout, and again at the very end."""
+    steps = prod_jobs["deploy"]["steps"]
+    names = [str(step.get("name", step.get("uses"))) for step in steps]
+    early = step_named(prod_jobs["deploy"], "Remove the deploy key before")
+    assert early["run"] == 'rm -rf "$RUNNER_TEMP/deploy-ssh"'
+    assert "always()" in early["if"]
+    position = names.index(early["name"])
+    assert names.index(step_named(prod_jobs["deploy"], "Read the server")["name"]) < position
+    assert position < names.index(step_named(prod_jobs["deploy"], "Smoke-test")["name"])
+    ssh_steps = [i for i, step in enumerate(steps) if "ssh " in str(step.get("run", ""))]
+    assert max(ssh_steps) < position
+    assert steps[-1]["if"] == "always()"
+
+
 def test_deploy_prod_smoke_tests_prod(prod_jobs: dict[str, Any]) -> None:
     deploy = prod_jobs["deploy"]
     assert deploy["env"]["PROD_URL"] == "https://ineedtofoc.us"
@@ -352,12 +371,22 @@ FAKE_GH = r"""#!/usr/bin/env bash
 # Fake gh for the plan step: canned answers (after --jq) per API path.
 path=$2
 case $path in
+  repos/o/r/deployments\?environment=dev\&sha=*) # the API's sha filter, on DEV_DEPLOYMENTS
+    sha=${path#*sha=}
+    sha=${sha%%&*}
+    printf '%b' "$DEV_DEPLOYMENTS" | awk -v s="$sha" '$2 == s { print $1 }'
+    ;;
   repos/o/r/deployments\?environment=dev*) printf '%b' "$DEV_DEPLOYMENTS" ;;
   repos/o/r/deployments/*/statuses*)
     id=${path#repos/o/r/deployments/}
     id=${id%%/*}
-    var=STATE_$id
-    echo "${!var:-}"
+    if [[ $path == *per_page=100 ]]; then
+      var=EVER_$id # any(.[]; .state == "success")
+      echo "${!var:-false}"
+    else
+      var=STATE_$id # .[0].state, the latest
+      echo "${!var:-}"
+    fi
     ;;
   repos/o/r/compare/*) [[ $COMPARE == missing ]] && exit 1; echo "$COMPARE" ;;
   repos/o/r/actions/workflows/ci.yml/runs*) echo "$CI_RUNS" ;;
@@ -412,6 +441,16 @@ def run_step(
         ({"INPUT_TAG": SHA, "COMPARE": "behind"}, 1, "", "title=Not on main"),
         ({"INPUT_TAG": SHA, "COMPARE": "missing"}, 1, "", "title=Unknown commit"),
         ({"INPUT_TAG": SHA, "CI_RUNS": "0"}, 1, "", "title=CI not green"),
+        # A tag must have a dev deployment that reached success (dev's smoke tests passed):
+        # 11 was a success, then superseded (inactive), which counts.
+        ({"INPUT_TAG": SHA, "EVER_11": "false"}, 1, "", "title=Not passed on dev"),
+        ({"INPUT_TAG": THIRD_SHA}, 1, "", "title=Not passed on dev"),
+        (
+            {"INPUT_TAG": SHA, "EVER_11": "false", "DEV_DEPLOYMENTS": DEV_WITH_RETRY},
+            0,
+            f"tag={SHA}\nfrom_dev=false\n",
+            "the `tag` input",
+        ),
     ],
 )
 def test_deploy_prod_plan_picks_a_commit_on_main_that_passed_ci(
@@ -434,6 +473,9 @@ def test_deploy_prod_plan_picks_a_commit_on_main_that_passed_ci(
         "DEV_DEPLOYMENTS": f"12 {OTHER_SHA}\n11 {SHA}\n",
         "STATE_12": "success",
         "STATE_11": "inactive",
+        "EVER_12": "true",
+        "EVER_11": "true",
+        "EVER_10": "true",
         "COMPARE": "ahead",
         "CI_RUNS": "1",
         **overrides,
@@ -461,7 +503,7 @@ printf '%b' "$ANSWER"
     [
         ("true", SHA, 0, "candidate", ""),
         ("false", SHA, 0, f"candidate {SHA}", ""),
-        ("true", OTHER_SHA, 1, "candidate", "title=Dev moved"),
+        ("true", OTHER_SHA, 1, "candidate", "title=Dev's record differs"),
     ],
 )
 def test_deploy_prod_resolves_the_digest_dev_ran(

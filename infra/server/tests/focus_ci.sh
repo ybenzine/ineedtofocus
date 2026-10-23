@@ -19,7 +19,8 @@
 #   prod        (#29) the prod key: hostile inputs; it can't roll back or touch dev, and
 #               the dev key can't touch prod; `candidate` reads dev's records only; a
 #               deploy needs dev to have run that exact sha and digest; it re-points the
-#               host-wide :<sha> at prod's digest under the lock; record, log, lock
+#               host-wide :<sha> at prod's digest under the lock; record, log, lock;
+#               a failing check or migration leaves the record and the running app alone
 set -euo pipefail
 
 SRC=/src
@@ -543,6 +544,23 @@ check "prod runs another image: at start" contains "$out" "failed at 'start'"
 check "prod runs another image: says so" contains "$out" "the app runs image"
 check "prod runs another image: record unchanged" eq "$(cat "$PROD_RECORD")" "$before_record"
 check "prod runs another image: logged" contains "$(tail -n1 "$PROD_HISTORY")" "outcome=failed tag=$S1 digest=$D1 previous_tag=$S2"
+# An older release on a newer schema: alembic can't locate the revision, before any DDL.
+before_record=$(cat "$PROD_RECORD")
+before_running=$(cat "$FAKE/running-prod")
+touch "$FAKE/fail/migrate"
+mark
+prod "deploy $S1 $D1"
+rm "$FAKE/fail/migrate"
+calls=$(new_calls)
+check "prod failed migration: fails (status 1)" eq "$rc" 1
+check "prod failed migration: at migrate" contains "$out" "failed at 'migrate'"
+check "prod failed migration: it did try prod's migration" contains "$calls" "$prod_migrate"
+check "prod failed migration: never starts the app" not_contains "$calls" " up -d"
+check "prod failed migration: no running-image check" not_contains "$calls" ":: inspect"
+check "prod failed migration: record unchanged" eq "$(cat "$PROD_RECORD")" "$before_record"
+check "prod failed migration: the app still runs the same image" eq "$(cat "$FAKE/running-prod")" "$before_running"
+check "prod failed migration: logged" contains "$(tail -n1 "$PROD_HISTORY")" "action=deploy outcome=failed tag=$S1 digest=$D1"
+check "prod failed migration: logged step" contains "$(tail -n1 "$PROD_HISTORY")" "step=migrate"
 
 echo "--- Prod: waits for the host-wide lock (a dev deploy, a rollback, install.sh)"
 rm -f /tmp/released

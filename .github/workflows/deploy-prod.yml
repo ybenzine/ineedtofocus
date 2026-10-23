@@ -6,8 +6,9 @@
 # `production` environment's approval.
 #
 #   plan    no credentials. Picks the commit: the `tag` input, or the release dev runs now
-#           (dev's latest successful GitHub deployment). Checks that it's on main and that
-#           CI passed on it, and shows it in the summary. Pinning it here means Yacine
+#           (dev's latest successful GitHub deployment). Checks that it's on main, that
+#           CI passed on it and that a dev deployment of it succeeded (deploy-dev's smoke
+#           tests passed), and shows it in the summary. Pinning it here means Yacine
 #           approves one exact commit. (What prod runs now is in prod's release record,
 #           shown by the deploy job as the rollback target: a `production` deployment's
 #           sha is the ref this workflow ran on, not the tag it deployed.)
@@ -21,7 +22,8 @@
 #           deploy-dev deployed), deploys that digest, reads the record back, then runs
 #           scripts/smoke_deploy.py against https://ineedtofoc.us. The server refuses a
 #           sha and digest dev hasn't run successfully, re-tags :<sha> from the digest
-#           under the host's deploy lock and checks the running image afterwards.
+#           under the host's deploy lock and checks the running image afterwards. The key
+#           is deleted before the smoke test, the first repository code the job runs.
 #
 # The prod key and host line are secrets of the `production` environment only; nothing
 # is stored at repo level. Until they're set, the deploy job skips with a notice; with only
@@ -30,7 +32,10 @@
 #
 # .claude/settings.json denies agents `gh workflow run deploy-prod*`. The workflow's name is
 # deploy-prod too, so starting it by name (`gh workflow run <name>`) matches the same rule.
-# The real gate is the environment's required approval.
+# The gate is the environment's required approval, but agents' `gh` is Yacine, the
+# required reviewer: `gh workflow run <id>`, `gh run rerun` and an API approval
+# (pending_deployments) get past these rules. #126 denies them; #127 gives agents a
+# credential that can't approve. See _docs/deployment.md, Deploy to prod.
 
 name: deploy-prod
 run-name: "Deploy to prod: ${{ inputs.tag || 'the release dev runs' }}"
@@ -69,6 +74,17 @@ jobs:
           die() { echo "::error title=$1::$2"; exit 1; }
           [[ $GITHUB_REF == refs/heads/main ]] ||
             die "Not main" "run this workflow from main (Use workflow from: main); the production environment accepts only main."
+          # dev_ok <sha>: some dev deployment of <sha> reached success, i.e. deploy-dev
+          # deployed it and its smoke tests passed (a superseded one is inactive now).
+          dev_ok() {
+            local ids id ever
+            ids=$(gh api "repos/$GH_REPO/deployments?environment=dev&sha=$1&per_page=100" --jq '.[].id')
+            for id in $ids; do
+              ever=$(gh api "repos/$GH_REPO/deployments/$id/statuses?per_page=100" --jq 'any(.[]; .state == "success")')
+              [[ $ever == true ]] && return 0
+            done
+            return 1
+          }
           # dev_now: the sha of dev's newest deployment whose latest status is success
           # (GitHub marks older ones inactive), or nothing. deploy-dev runs on push, so a
           # dev deployment's sha is the commit it deployed.
@@ -100,6 +116,8 @@ jobs:
             die "Not on main" "$tag isn't on main (compare: $status)."
           runs=$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$tag&event=push&branch=main&status=success&per_page=1" --jq .total_count)
           ((runs > 0)) || die "CI not green" "no successful CI run on main for $tag: it was never published or deployed to dev."
+          dev_ok "$tag" ||
+            die "Not passed on dev" "no dev deployment of $tag succeeded: deploy-dev didn't deploy it, or its smoke tests failed."
           subject=$(gh api "repos/$GH_REPO/commits/$tag" --jq '.commit.message | split("\n")[0]')
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "from_dev=$from_dev" >> "$GITHUB_OUTPUT"
@@ -114,6 +132,7 @@ jobs:
             fi
             echo "- On main: yes ([newer commits on main]($GITHUB_SERVER_URL/$GH_REPO/compare/$tag...main))"
             echo "- CI on main: passed"
+            echo "- Dev: deployed and smoke-tested"
             echo ""
             echo "Approving **Deploy to prod** deploys exactly this commit's image, by the digest dev ran."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -209,7 +228,7 @@ jobs:
           get() { sed -n "s/^$1=//p" "$RUNNER_TEMP/candidate"; }
           digest=$(get digest)
           if [[ $(get tag) != "$TAG" ]]; then
-            echo "::error title=Dev moved::dev runs $(get tag) now, not $TAG (what the plan showed and was approved). Nothing deployed. Start a new run for dev's release, or pass the tag explicitly."
+            echo "::error title=Dev's record differs::dev's release record shows $(get tag), not $TAG, which the plan chose (dev's newest deployment that passed its smoke tests) and was approved. Either dev moved since the plan (a newer deploy or a rollback), or dev's latest deploy passed the server checks but failed its smoke tests. Nothing deployed. Start a new run, or pass the tag explicitly."
             exit 1
           fi
           [[ $(get source) == dev && $digest =~ ^sha256:[0-9a-f]{64}$ ]] ||
@@ -234,6 +253,10 @@ jobs:
           for key in deployed_at infra_revision previous_tag; do
             echo "$key=$(get "$key")" >> "$GITHUB_OUTPUT"
           done
+      - name: Remove the deploy key before running repository code
+        if: ${{ always() && steps.config.outputs.configured == 'true' }}
+        # The smoke test runs scripts/ from the checkout: it must never see the key.
+        run: rm -rf "$RUNNER_TEMP/deploy-ssh"
       - name: Smoke-test https://ineedtofoc.us
         id: smoke
         if: steps.config.outputs.configured == 'true'
