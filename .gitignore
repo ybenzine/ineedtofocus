@@ -29,3 +29,6 @@ reports/
 
 # Claude Code personal overrides
 .claude/settings.local.json
+
+# Claude Code agent worktrees (one per isolated subagent run)
+.claude/worktrees/
