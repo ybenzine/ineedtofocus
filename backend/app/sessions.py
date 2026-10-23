@@ -5,14 +5,16 @@ Field names are snake_case; the frontend's `SessionRecord` maps one to one (see
 `_docs/architecture.md`).
 """
 
+import logging
 import re
 import uuid
 from collections import Counter
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import (
+    AfterValidator,
     AwareDatetime,
     BaseModel,
     BeforeValidator,
@@ -30,13 +32,16 @@ from app.errors import ErrorDetail, ErrorInfo, ErrorResponse, error_field
 from app.models import FocusSession, Mode, Status, Tag
 from app.models.enums import GOAL_MAX_LENGTH
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 MIN_FOCUS_SECONDS = 60  # AC6.2
 MAX_FOCUS_SECONDS = 12 * 60 * 60  # AC4.5: no session can hold more than 12 h of focus time
 MAX_BATCH = 100
+MAX_INT4 = 2_147_483_647  # column limit, not a product rule
 # The client rounds to whole seconds from millisecond timestamps.
-CLOCK_TOLERANCE = timedelta(seconds=2)
+CLOCK_TOLERANCE_SECONDS = 2
 
 # Every boundary str.splitlines() recognises: CR, LF, VT, FF, FS/GS/RS, NEL, LS, PS (tabs are
 # not line breaks). CRLF is a run of two.
@@ -51,8 +56,23 @@ def one_line_goal(value: object) -> object:
     return cleaned or None
 
 
+def _storable_goal(value: str | None) -> str | None:
+    """Postgres text cannot hold NUL, and a lone surrogate (valid in JSON) cannot be UTF-8."""
+    if value is None:
+        return None
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("Goal contains invalid characters") from None
+    if "\x00" in value:
+        raise ValueError("Goal contains invalid characters")
+    return value
+
+
 Goal = Annotated[
-    Annotated[str, Field(max_length=GOAL_MAX_LENGTH)] | None, BeforeValidator(one_line_goal)
+    Annotated[str, Field(max_length=GOAL_MAX_LENGTH)] | None,
+    BeforeValidator(one_line_goal),
+    AfterValidator(_storable_goal),
 ]
 
 
@@ -98,10 +118,20 @@ class SessionIn(BaseModel):
     started_at: AwareDatetime
     ended_at: AwareDatetime
     focus_seconds: int = Field(le=MAX_FOCUS_SECONDS)
-    paused_seconds: int = Field(ge=0)
+    # Technical bound: the column is a 32-bit integer.
+    paused_seconds: int = Field(ge=0, le=MAX_INT4)
     status: Status
     mode_config: ModeConfig
     blocks_completed: int = Field(default=0, ge=0, le=8)
+
+    @field_validator("started_at", "ended_at")
+    @classmethod
+    def _to_utc(cls, value: datetime) -> datetime:
+        """Store UTC; an offset that pushes the instant outside years 1-9999 is invalid."""
+        try:
+            return value.astimezone(UTC)
+        except (OverflowError, ValueError):
+            raise ValueError("Time is out of range") from None
 
     @field_validator("focus_seconds")
     @classmethod
@@ -116,8 +146,9 @@ class SessionIn(BaseModel):
             raise ValueError("mode_config does not match mode")
         if self.ended_at < self.started_at:
             raise ValueError("ended_at is before started_at")
-        elapsed = self.ended_at - self.started_at
-        if timedelta(seconds=self.focus_seconds + self.paused_seconds) > elapsed + CLOCK_TOLERANCE:
+        # Plain integer seconds: never build a timedelta from client input.
+        elapsed = int((self.ended_at - self.started_at).total_seconds())
+        if self.focus_seconds + self.paused_seconds > elapsed + CLOCK_TOLERANCE_SECONDS:
             raise ValueError("focus and paused time exceed the time between start and end")
         if self.mode != Mode.POMODORO and self.blocks_completed != 0:
             raise ValueError("blocks_completed applies to Pomodoro only")
@@ -228,8 +259,8 @@ async def _save(
             "mode": i.mode.value,
             "tag": i.tag.value,
             "goal": i.goal,
-            "started_at": i.started_at.astimezone(UTC),
-            "ended_at": i.ended_at.astimezone(UTC),
+            "started_at": i.started_at,  # already UTC (SessionIn._to_utc)
+            "ended_at": i.ended_at,
             "focus_seconds": i.focus_seconds,
             "paused_seconds": i.paused_seconds,
             "status": i.status.value,
@@ -307,6 +338,13 @@ async def sync_sessions(body: SyncRequest, user: CurrentUser, db: DbSession) -> 
                 for e in exc.errors()
             ]
             error = _item_error("validation_error", "Session validation failed", details)
+            results[index] = SyncItemResult(
+                index=index, id=_raw_id(raw), status="rejected", error=error
+            )
+        except Exception as exc:  # backstop: nothing a client sends may fail the batch
+            # Type name only: the message could quote submitted values.
+            logger.warning("sync item rejected", extra={"error_type": type(exc).__name__})
+            error = _item_error("invalid_session", "Session could not be processed")
             results[index] = SyncItemResult(
                 index=index, id=_raw_id(raw), status="rejected", error=error
             )

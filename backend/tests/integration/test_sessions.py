@@ -1,5 +1,6 @@
 """Sessions API (#10) against a real, migrated, throwaway Postgres."""
 
+import json
 import logging
 import uuid
 from collections.abc import Iterator
@@ -552,3 +553,83 @@ def test_ac1_3_a_session_id_owned_by_someone_else_is_a_conflict(
     ada_after = ada.patch(f"/api/sessions/{mine['id']}", json={"tag": "work"}).json()
     assert ada_after["tag"] == "work"
     assert ada.get("/api/sessions/archived").status_code == 200
+
+
+# Well-formed values that used to escape validation and crash with a 500.
+CRASHERS: dict[str, dict[str, Any]] = {
+    "huge_paused": {"paused_seconds": 10**15},
+    "int4_overflow_paused": {
+        "paused_seconds": 3_000_000_000,
+        "started_at": "1900-01-01T00:00:00Z",
+    },
+    "year_1_offset": {
+        "started_at": "0001-01-01T00:30:00+01:00",
+        "ended_at": "0001-01-02T00:00:00+01:00",
+        "paused_seconds": 0,
+    },
+    "year_9999_offset": {
+        "started_at": "9999-12-31T20:00:00-05:00",
+        "ended_at": "9999-12-31T21:00:00-05:00",
+        "paused_seconds": 0,
+    },
+    "nul_in_goal": {"goal": "bad\x00goal"},
+    "lone_surrogate_goal": {"goal": "bad\ud800goal"},
+    "huge_focus": {"focus_seconds": 10**30},
+    "huge_blocks": {"blocks_completed": 10**30},
+    "float_overflow": {"paused_seconds": 1e300},
+    "huge_minutes": {"mode_config": {"mode": "countdown", "minutes": 10**30}},
+}
+
+
+def raw(c: TestClient, method: str, url: str, payload: Any) -> Response:
+    """Send JSON with ASCII escapes, so lone surrogates (valid JSON) reach the server."""
+    r: Response = c.request(
+        method,
+        url,
+        content=json.dumps(payload, ensure_ascii=True),
+        headers={"content-type": "application/json"},
+    )
+    return r
+
+
+def test_out_of_range_items_are_rejected_not_500(ada: TestClient, app_url: str) -> None:
+    good = make_session()
+    bad = {name: make_session(**over) for name, over in CRASHERS.items()}
+    r = raw(ada, "POST", "/api/sessions/sync", {"sessions": [good, *bad.values()]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["created"], body["rejected"]) == (1, len(CRASHERS))
+    assert body["results"][0]["status"] == "created"
+    for result in body["results"][1:]:
+        assert result["status"] == "rejected"
+        assert result["error"]["code"] in {"validation_error", "invalid_session"}
+    assert "bad" not in r.text
+    assert count(app_url) == 1
+
+
+@pytest.mark.parametrize("name", list(CRASHERS))
+def test_out_of_range_single_save_is_422(ada: TestClient, app_url: str, name: str) -> None:
+    r = raw(ada, "POST", "/api/sessions", make_session(**CRASHERS[name]))
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "validation_error"
+    assert count(app_url) == 0
+
+
+def test_unstorable_goal_edit_is_422(ada: TestClient) -> None:
+    sid = save(ada)["id"]
+    for goal in ("a\x00b", "a\ud800b"):
+        assert raw(ada, "PATCH", f"/api/sessions/{sid}", {"goal": goal}).status_code == 422
+
+
+@pytest.mark.parametrize("literal", ["9" * 5000, "NaN", "Infinity", "1e999"])
+def test_extreme_json_numbers_are_a_client_error(ada: TestClient, literal: str) -> None:
+    body = json.dumps(make_session()).replace(
+        '"focus_seconds": 1500', f'"focus_seconds": {literal}'
+    )
+    assert literal in body
+    for url in ("/api/sessions", "/api/sessions/sync"):
+        payload = body if url.endswith("sessions") else '{"sessions": [' + body + "]}"
+        r = ada.post(url, content=payload, headers={"content-type": "application/json"})
+        assert r.status_code in (200, 400, 422), (url, r.status_code)
+        if r.status_code == 200:
+            assert r.json()["results"][0]["status"] == "rejected"
