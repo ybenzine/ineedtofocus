@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import AccountBar from './auth/AccountBar.tsx'
 import { LocalPreferencesStore, type PreferencesStore } from './setup/preferences.ts'
 import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
 import type { AudioSource } from './setup/options.ts'
@@ -101,6 +102,7 @@ export default function App({ controller, preferences }: AppProps) {
 
   return (
     <main>
+      <AccountBar controller={timer} />
       {notice && <p role="status">{notice}</p>}
       <SessionSetup preferences={prefs} onStart={start} />
     </main>
