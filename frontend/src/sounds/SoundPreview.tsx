@@ -1,0 +1,47 @@
+// Preview buttons and the alert volume slider (AC5.2, AC5.3). Reusable: the Settings screen
+// (#22) places it. The volume is the alert volume only, separate from background audio.
+
+import { useState } from 'react'
+import { type AlertPlayer, type AlertVolumeStore } from './alerts.ts'
+
+export interface SoundPreviewProps {
+  player: AlertPlayer
+  volume: AlertVolumeStore
+}
+
+export default function SoundPreview({ player, volume }: SoundPreviewProps) {
+  const [level, setLevel] = useState(() => volume.load())
+
+  function preview(name: 'chime' | 'bell') {
+    player.unlock() // a button press is a user gesture
+    void player.play(name)
+  }
+
+  return (
+    <section aria-labelledby="alert-sounds-heading">
+      <h2 id="alert-sounds-heading">Alert sounds</h2>
+      <label>
+        Alert volume
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={level}
+          aria-valuetext={`${level}%`}
+          onChange={(event) => {
+            const next = Number(event.target.value)
+            setLevel(next)
+            volume.save(next)
+          }}
+        />
+      </label>
+      <button type="button" onClick={() => preview('chime')}>
+        Preview chime
+      </button>
+      <button type="button" onClick={() => preview('bell')}>
+        Preview bell
+      </button>
+    </section>
+  )
+}

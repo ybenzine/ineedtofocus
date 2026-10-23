@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { AlertPlayer, MemoryAlertVolumeStore } from './sounds/alerts.ts'
 import App from './App.tsx'
 import { MemoryPreferencesStore } from './setup/preferences.ts'
 import { ACTIVE_SESSION_KEY, MemoryActiveSessionStore, TimerController } from './timer/index.ts'
@@ -28,6 +29,22 @@ describe('App', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Start' }))
     expect(await screen.findByRole('timer')).toHaveTextContent('25:00')
     expect(controller.current()?.config).toEqual({ mode: 'countdown', minutes: 25 })
+  })
+
+  it('unlocks audio on the Start press (browsers block it before a gesture)', async () => {
+    const alerts = new AlertPlayer({ volume: new MemoryAlertVolumeStore() })
+    const unlock = vi.spyOn(alerts, 'unlock').mockImplementation(() => undefined)
+    const controller = new TimerController({
+      store: new MemoryActiveSessionStore(),
+      saveRecord: () => undefined,
+    })
+    render(
+      <App controller={controller} preferences={new MemoryPreferencesStore()} alerts={alerts} />,
+    )
+    expect(unlock).not.toHaveBeenCalled()
+    fireEvent.click(await screen.findByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    expect(unlock).toHaveBeenCalledTimes(1)
   })
 
   it('shows the summary after stopping, then returns to setup', async () => {
