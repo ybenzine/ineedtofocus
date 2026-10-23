@@ -27,7 +27,10 @@ export interface TimerScreenProps {
   controller: TimerController
   /** The source picked on the setup screen. Playback arrives with #17 (Rain) and #18 (YouTube). */
   audio: AudioSource
-  /** Hook for the sounds (#16): bells and chimes due since the last tick. */
+  /**
+   * Hook for the sounds (#16): bells and chimes due since the last tick. A `phase-change` with
+   * `skipped: true` is the user skipping a break and must NOT ring (decision log, #13).
+   */
   onEvents?: (events: TimerEvent[]) => void
   /** The session is over (stopped, completed, or ended in another tab): show the summary. */
   onEnded: (update: TimerUpdate) => void
@@ -70,14 +73,28 @@ export default function TimerScreen({
     }
   }, [])
 
+  // One call at a time in this tab: saving a finished session may take a while (IndexedDB, #19),
+  // and a tick that started meanwhile would see "no session" and hide the real outcome. User
+  // actions wait their turn; ticks and storage reads are simply skipped while something runs.
+  const tail = useRef<Promise<void>>(Promise.resolve())
+  const inFlight = useRef(0)
+
   const run = useCallback(
-    async (action: () => Promise<TimerUpdate>) => {
-      setError(null)
-      try {
-        apply(await action())
-      } catch (caught) {
-        setError(caught instanceof Error ? caught.message : 'Something went wrong')
-      }
+    (action: () => Promise<TimerUpdate>, background = false): Promise<void> => {
+      if (background && inFlight.current > 0) return Promise.resolve()
+      inFlight.current += 1
+      const job = tail.current.then(async () => {
+        setError(null)
+        try {
+          apply(await action())
+        } catch (caught) {
+          setError(caught instanceof Error ? caught.message : 'Something went wrong')
+        } finally {
+          inFlight.current -= 1
+        }
+      })
+      tail.current = job
+      return job
     },
     [apply],
   )
@@ -86,13 +103,19 @@ export default function TimerScreen({
   // device or a reload can't make it drift (F6). Also tick when the tab is shown again and when
   // another tab changes the stored session.
   useEffect(() => {
-    const tick = () => void run(() => controller.tick())
+    const tick = () => void run(() => controller.tick(), true)
     const id = window.setInterval(tick, TICK_MS)
     const onVisible = () => {
       if (document.visibilityState === 'visible') tick()
     }
+    // Another tab changed the stored session: only read it. Writing here would make the other
+    // tab react in turn, and the two would write back and forth.
     const onStorage = (event: StorageEvent) => {
-      if (event.key === null || event.key === ACTIVE_SESSION_KEY) tick()
+      if (event.key !== null && event.key !== ACTIVE_SESSION_KEY) return
+      if (inFlight.current > 0) return
+      const current = controller.current()
+      if (current) setSnapshot(current)
+      else apply({ snapshot: null, events: [], outcome: null, recordPending: false })
     }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('storage', onStorage)
@@ -101,7 +124,7 @@ export default function TimerScreen({
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('storage', onStorage)
     }
-  }, [controller, run])
+  }, [controller, run, apply])
 
   if (snapshot === null) return null
 

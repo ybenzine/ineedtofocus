@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  ACTIVE_SESSION_KEY,
   DEFAULT_POMODORO,
   MINUTE_MS,
   MemoryActiveSessionStore,
@@ -191,6 +192,78 @@ describe('TimerScreen controls', () => {
     await advance(500)
     expect(onEnded).toHaveBeenCalledOnce()
     expect(onEnded.mock.calls[0]?.[0]).toMatchObject({ snapshot: null, outcome: null })
+  })
+})
+
+describe('async saving and two tabs', () => {
+  it('shows the real outcome when saving takes a while, even though ticks keep firing', async () => {
+    const saved: SessionRecord[] = []
+    const controller = new TimerController({
+      store: new MemoryActiveSessionStore(),
+      saveRecord: async (record) => {
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        saved.push(record)
+      },
+    })
+    await controller.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
+    const onEnded = vi.fn<(update: TimerUpdate) => void>()
+    render(<TimerScreen controller={controller} audio="none" onEnded={onEnded} />)
+    await advance(5 * MINUTE_MS)
+    await click('Stop')
+    await advance(1000) // interval ticks fire while the save is pending
+    expect(onEnded).toHaveBeenCalledOnce() // late ticks can't end it a second time
+    expect(onEnded.mock.calls[0]?.[0].outcome).toMatchObject({
+      kind: 'saved',
+      record: { status: 'ended_early' },
+    })
+    expect(saved).toHaveLength(1)
+  })
+
+  it('a countdown ending during a slow save, with Stop pressed at the same time, ends once', async () => {
+    const controller = new TimerController({
+      store: new MemoryActiveSessionStore(),
+      saveRecord: () => new Promise((resolve) => setTimeout(resolve, 400)),
+    })
+    await controller.start({ config: { mode: 'countdown', minutes: 2 }, tag: 'work', goal: null })
+    const onEnded = vi.fn<(update: TimerUpdate) => void>()
+    render(<TimerScreen controller={controller} audio="none" onEnded={onEnded} />)
+    await advance(2 * MINUTE_MS - 100)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+      await vi.advanceTimersByTimeAsync(2000)
+    })
+    expect(onEnded).toHaveBeenCalledOnce()
+    expect(onEnded.mock.calls[0]?.[0].outcome).toMatchObject({ kind: 'saved' })
+  })
+
+  it('two tabs reacting to each other’s writes do not write back and forth', async () => {
+    let writes = 0
+    class NoisyStore extends MemoryActiveSessionStore {
+      override save(state: Parameters<MemoryActiveSessionStore['save']>[0]) {
+        writes += 1
+        super.save(state)
+        // Every save tells the other tab (here: every listener on the window).
+        window.dispatchEvent(new StorageEvent('storage', { key: ACTIVE_SESSION_KEY }))
+      }
+    }
+    const store = new NoisyStore()
+    const tabA = new TimerController({ store, saveRecord: () => undefined })
+    const tabB = new TimerController({ store, saveRecord: () => undefined })
+    await tabA.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
+    await tabB.restore()
+    render(<TimerScreen controller={tabA} audio="none" onEnded={vi.fn()} />)
+    render(<TimerScreen controller={tabB} audio="none" onEnded={vi.fn()} />)
+    writes = 0
+    await advance(5 * 250)
+    // At most one write per tab per interval tick; quiet ticks write nothing.
+    expect(writes).toBeLessThanOrEqual(2 * 5)
+    await act(async () => {
+      await tabA.pause()
+    })
+    writes = 0
+    await advance(5 * 250)
+    expect(writes).toBeLessThanOrEqual(2 * 5)
+    expect(tabB.current()?.paused).toBe(true)
   })
 })
 

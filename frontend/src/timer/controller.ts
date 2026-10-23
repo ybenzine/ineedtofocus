@@ -125,7 +125,10 @@ export class TimerController {
       throw new ActiveSessionExistsError()
     }
     // Another start may have won while the previous record was being handed over.
-    if (this.#session !== null) throw new ActiveSessionExistsError()
+    // (including one another tab started: the store, not just this tab's memory, is the truth).
+    if (this.#session !== null || this.#store.load() !== null) {
+      throw new ActiveSessionExistsError()
+    }
     const now = this.#now()
     const session = startSession({ id: this.#newId(), ...options }, now)
     this.#session = session
@@ -141,10 +144,10 @@ export class TimerController {
     if (endedAt !== null) {
       return this.#finish(session, finishSession(session, endedAt, 'completed'), events)
     }
-    if (session !== this.#session) {
-      this.#session = session
-      this.#persist(session)
-    }
+    this.#session = session
+    // Only write when there is something other tabs must not replay (events already reported).
+    // A quiet tick changes nothing worth storing, so two tabs never write back and forth.
+    if (events.length > 0) this.#persist(session)
     return { ...NOTHING, snapshot: snapshot(session, now), events }
   }
 

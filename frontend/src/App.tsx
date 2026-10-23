@@ -42,6 +42,7 @@ export default function App({ controller, preferences }: AppProps) {
   const [view, setView] = useState<View>({ name: 'loading' })
   // Only the setup choice is known here; after a reload the audio source is not remembered yet
   // (audio playback and its persistence arrive with #17 and #18).
+  const [notice, setNotice] = useState<string | null>(null)
   const [audio, setAudio] = useState<AudioSource>('none')
 
   // Pick up a session that was running when the app closed (AC6.4), or show how one that ended
@@ -60,14 +61,20 @@ export default function App({ controller, preferences }: AppProps) {
   }, [timer])
 
   async function start(request: SessionRequest) {
+    setNotice(null)
     await timer.start({ config: request.config, tag: request.tag, goal: request.goal })
     setAudio(request.audio)
     setView({ name: 'timer' })
   }
 
   const ended = useCallback((update: TimerUpdate) => {
-    // An update with no outcome means another tab ended the session; nothing to summarise here.
-    setView(update.outcome ? { name: 'summary', update } : { name: 'setup' })
+    // An update with no outcome means another tab ended the session; that tab shows the summary.
+    if (update.outcome) {
+      setView({ name: 'summary', update })
+    } else {
+      setNotice('This session was ended in another tab.')
+      setView({ name: 'setup' })
+    }
   }, [])
 
   if (view.name === 'loading') return <main aria-busy="true" />
@@ -94,6 +101,7 @@ export default function App({ controller, preferences }: AppProps) {
 
   return (
     <main>
+      {notice && <p role="status">{notice}</p>}
       <SessionSetup preferences={prefs} onStart={start} />
     </main>
   )

@@ -374,6 +374,50 @@ describe('two tabs on one session', () => {
   })
 })
 
+describe('quiet ticks and starting across tabs', () => {
+  it('a tick with nothing to report does not write to the store', async () => {
+    const { controller, store } = setup()
+    await controller.start(startOptions(countdown(25)))
+    const save = vi.spyOn(store, 'save')
+    wait(SECOND)
+    await controller.tick()
+    expect(save).not.toHaveBeenCalled()
+  })
+
+  it('a reminder is still stored once reported, so another tab does not repeat it', async () => {
+    const { controller, make } = setup()
+    await controller.start(startOptions({ mode: 'unlimited', reminderMinutes: 15 }))
+    const other = make()
+    await other.restore()
+    wait(16 * MINUTE_MS)
+    expect((await controller.tick()).events).toHaveLength(1)
+    expect((await other.tick()).events).toHaveLength(0)
+  })
+
+  it('start does not overwrite a session another tab started while handing over a record', async () => {
+    const store = new MemoryActiveSessionStore()
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const slow = new TimerController({ store, saveRecord: () => gate, newId: () => 'slow' })
+    await slow.start(startOptions(countdown(25)))
+    wait(5 * MINUTE_MS)
+    // The session finishes, but its record can't be saved yet.
+    const stopping = slow.stop()
+    await Promise.resolve()
+    // Two tabs both want to start once the old record is handed over; only one may win.
+    const a = new TimerController({ store, saveRecord: () => undefined, newId: () => 'a' })
+    const b = new TimerController({ store, saveRecord: () => undefined, newId: () => 'b' })
+    const startA = a.start(startOptions(countdown(10)))
+    const startB = b.start(startOptions(countdown(15)))
+    release()
+    await stopping
+    const results = await Promise.allSettled([startA, startB])
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    const winner = results[0]?.status === 'fulfilled' ? 'a' : 'b'
+    expect(store.load()?.session.id).toBe(winner)
+  })
+})
+
 describe('LocalActiveSessionStore', () => {
   beforeEach(() => {
     localStorage.clear()

@@ -2,12 +2,19 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import App from './App.tsx'
 import { MemoryPreferencesStore } from './setup/preferences.ts'
-import { MemoryActiveSessionStore, TimerController } from './timer/index.ts'
+import { ACTIVE_SESSION_KEY, MemoryActiveSessionStore, TimerController } from './timer/index.ts'
 
 function setup(store = new MemoryActiveSessionStore()) {
   const controller = new TimerController({ store, saveRecord: () => undefined })
   render(<App controller={controller} preferences={new MemoryPreferencesStore()} />)
   return { controller, store }
+}
+
+async function runningStore() {
+  const store = new MemoryActiveSessionStore()
+  const first = new TimerController({ store, saveRecord: () => undefined })
+  await first.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
+  return store
 }
 
 describe('App', () => {
@@ -47,5 +54,15 @@ describe('App', () => {
     setup(store)
     expect(await screen.findByRole('timer')).toBeInTheDocument()
     expect(screen.getByText('Chapter 3')).toBeInTheDocument()
+  })
+
+  it('explains the jump to setup when another tab ended the session', async () => {
+    const store = await runningStore()
+    setup(store)
+    await screen.findByRole('timer')
+    store.clear()
+    window.dispatchEvent(new StorageEvent('storage', { key: ACTIVE_SESSION_KEY }))
+    expect(await screen.findByRole('status')).toHaveTextContent('ended in another tab')
+    expect(screen.getByRole('heading', { name: 'I Need To Focus' })).toBeInTheDocument()
   })
 })
