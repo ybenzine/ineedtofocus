@@ -10,7 +10,19 @@
 
 import type { AlertPlayer } from './alerts.ts'
 
-export const RAIN_URL = `${import.meta.env.BASE_URL}audio/rain.wav`
+export const RAIN_URL = `${import.meta.env.BASE_URL}audio/rain.mp3`
+
+/**
+ * The loop inside the MP3. MP3 decoders add or strip a little silence at each end (encoder delay
+ * and padding), so the file holds the 30 s periodic loop plus 0.1 s of the same signal on each
+ * side (`scripts/generate-rain.mjs`), and only [start, end) is looped: always real rain, with no
+ * gap at the seam whichever way the browser decodes.
+ */
+export const RAIN_LOOP_START = 0.1
+export const RAIN_LOOP_END = 30.1
+
+/** Gain ramp on start, pause and stop, so the noise never clicks (seconds). */
+export const FADE_SECONDS = 0.04
 
 /** Settings API `background_volume` default (0-100). */
 export const DEFAULT_BACKGROUND_VOLUME = 50
@@ -91,6 +103,7 @@ export class RainPlayer {
   #wanted = false
   #source: AudioBufferSourceNode | null = null
   #gain: GainNode | null = null
+  #context: AudioContext | null = null
 
   constructor(options: RainPlayerOptions) {
     this.#alerts = options.alerts
@@ -140,11 +153,18 @@ export class RainPlayer {
       const gain = context.createGain()
       source.buffer = buffer
       source.loop = true
-      gain.gain.value = this.#store.load() / 100
+      source.loopStart = RAIN_LOOP_START
+      source.loopEnd = Number.isFinite(buffer.duration)
+        ? Math.min(RAIN_LOOP_END, buffer.duration)
+        : RAIN_LOOP_END
+      const now = context.currentTime
+      gain.gain.setValueAtTime(0, now)
+      gain.gain.linearRampToValueAtTime(this.#store.load() / 100, now + FADE_SECONDS)
       source.connect(gain)
       gain.connect(context.destination)
-      source.start()
+      source.start(0, RAIN_LOOP_START)
       this.#source = source
+      this.#context = context
       this.#gain = gain
     } catch {
       // Blocked or unavailable audio: stay silent.
@@ -155,12 +175,19 @@ export class RainPlayer {
   pause(): void {
     this.#wanted = false
     const source = this.#source
+    const gain = this.#gain
+    const context = this.#context
     this.#source = null
     this.#gain = null
     if (source) {
       try {
-        source.stop()
-        source.disconnect()
+        const now = context?.currentTime ?? 0
+        if (gain) {
+          gain.gain.cancelScheduledValues(now)
+          gain.gain.setValueAtTime(gain.gain.value, now)
+          gain.gain.linearRampToValueAtTime(0, now + FADE_SECONDS)
+        }
+        source.stop(now + FADE_SECONDS)
       } catch {
         // Already stopped.
       }

@@ -1,5 +1,6 @@
 /// <reference types="node" />
 import { readFileSync, statSync } from 'node:fs'
+import { MPEGDecoder } from 'mpg123-decoder'
 import { resolve } from 'node:path'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -14,26 +15,54 @@ import {
   BACKGROUND_VOLUME_KEY,
   LocalBackgroundVolumeStore,
   MemoryBackgroundVolumeStore,
+  RAIN_LOOP_END,
+  RAIN_LOOP_START,
   RainPlayer,
 } from './rain.ts'
 
-function fakeAudio() {
+function fakeAudio(state: AudioContextState = 'running') {
   const sources: {
     buffer: unknown
     loop: boolean
+    loopStart: number
+    loopEnd: number
     connect: ReturnType<typeof vi.fn>
     disconnect: ReturnType<typeof vi.fn>
     start: ReturnType<typeof vi.fn>
     stop: ReturnType<typeof vi.fn>
   }[] = []
-  const gains: { gain: { value: number }; connect: ReturnType<typeof vi.fn> }[] = []
+  const gains: {
+    gain: {
+      value: number
+      setValueAtTime: ReturnType<typeof vi.fn>
+      linearRampToValueAtTime: ReturnType<typeof vi.fn>
+      cancelScheduledValues: ReturnType<typeof vi.fn>
+    }
+    connect: ReturnType<typeof vi.fn>
+  }[] = []
   const context = {
-    state: 'running' as AudioContextState,
+    state: state as AudioContextState,
+    currentTime: 1,
     destination: {},
-    resume: vi.fn(async () => undefined),
-    decodeAudioData: vi.fn(async (data: ArrayBuffer) => ({ bytes: data.byteLength })),
+    resume: vi.fn(async () => {
+      context.state = 'running'
+    }),
+    decodeAudioData: vi.fn(async (data: ArrayBuffer) => ({
+      bytes: data.byteLength,
+      duration: 30.2,
+    })),
     createGain: vi.fn(() => {
-      const gain = { gain: { value: 0 }, connect: vi.fn() }
+      const gain = {
+        gain: {
+          value: 0,
+          setValueAtTime: vi.fn(),
+          linearRampToValueAtTime: vi.fn((value: number) => {
+            gain.gain.value = value
+          }),
+          cancelScheduledValues: vi.fn(),
+        },
+        connect: vi.fn(),
+      }
       gains.push(gain)
       return gain
     }),
@@ -41,6 +70,8 @@ function fakeAudio() {
       const source = {
         buffer: null as unknown,
         loop: false,
+        loopStart: 0,
+        loopEnd: 0,
         connect: vi.fn(),
         disconnect: vi.fn(),
         start: vi.fn(),
@@ -64,11 +95,31 @@ describe('RainPlayer', () => {
   it('loops the decoded buffer on the shared context at the background volume', async () => {
     const { rain, sources, gains, fetchSound } = fakeAudio()
     await rain.play()
-    expect(fetchSound).toHaveBeenCalledWith(expect.stringContaining('audio/rain.wav'))
+    expect(fetchSound).toHaveBeenCalledWith(expect.stringContaining('audio/rain.mp3'))
     expect(sources).toHaveLength(1)
     expect(sources[0].loop).toBe(true)
+    // Only the loop itself repeats, not the encoder's padding at either end.
+    expect(sources[0].loopStart).toBe(0.1)
+    expect(sources[0].loopEnd).toBeCloseTo(30.1)
+    expect(sources[0].start).toHaveBeenCalledWith(0, 0.1)
     expect(sources[0].start).toHaveBeenCalled()
     expect(gains[0].gain.value).toBe(0.5)
+  })
+
+  it('fades in on start and out on pause and stop, with no click', async () => {
+    const { rain, sources, gains } = fakeAudio()
+    await rain.play()
+    expect(gains[0].gain.setValueAtTime).toHaveBeenCalledWith(0, 1)
+    expect(gains[0].gain.linearRampToValueAtTime).toHaveBeenCalledWith(0.5, expect.any(Number))
+    rain.pause()
+    expect(gains[0].gain.linearRampToValueAtTime).toHaveBeenLastCalledWith(
+      0,
+      expect.closeTo(1.04, 5),
+    )
+    expect(sources[0].stop).toHaveBeenCalledWith(expect.closeTo(1.04, 5))
+    await rain.play()
+    rain.stop()
+    expect(sources[1].stop).toHaveBeenCalledWith(expect.closeTo(1.04, 5))
   })
 
   it('does not start a second loop when played twice', async () => {
@@ -154,29 +205,62 @@ describe('device stores', () => {
   })
 })
 
-describe('rain.wav (AC8.3)', () => {
-  const path = resolve(process.cwd(), 'public/audio/rain.wav')
+describe('rain.mp3 (AC8.3)', () => {
+  const path = resolve(process.cwd(), 'public/audio/rain.mp3')
+  const SILENT = 0.001 // about -60 dBFS
 
-  it('is 30-60 s, at most 600 KB, and mono 16-bit PCM', () => {
+  async function decode() {
+    const decoder = new MPEGDecoder()
+    await decoder.ready
+    const { channelData, sampleRate } = decoder.decode(new Uint8Array(readFileSync(path)))
+    decoder.free()
+    return { samples: channelData[0], rate: sampleRate }
+  }
+
+  /** The length of the near-silent run starting at `from` and walking by `step`, in seconds. */
+  function silentRun(samples: Float32Array, from: number, rate: number, step: 1 | -1): number {
+    let run = 0
+    for (let i = from; i >= 0 && i < samples.length; i += step) {
+      if (Math.abs(samples[i]) > SILENT) break
+      run++
+    }
+    return run / rate
+  }
+
+  it('is 22.05 kHz or better, 30-60 s of loop, and at most 600 KB', async () => {
     expect(statSync(path).size).toBeLessThanOrEqual(600 * 1000)
-    const wav = readFileSync(path)
-    const rate = wav.readUInt32LE(24)
-    const seconds = wav.readUInt32LE(40) / 2 / rate
-    expect(wav.readUInt16LE(22)).toBe(1)
-    expect(wav.readUInt16LE(34)).toBe(16)
-    expect(seconds).toBeGreaterThanOrEqual(30)
-    expect(seconds).toBeLessThanOrEqual(60)
+    const { samples, rate } = await decode()
+    expect(rate).toBeGreaterThanOrEqual(22050)
+    const loopSeconds = RAIN_LOOP_END - RAIN_LOOP_START
+    expect(loopSeconds).toBeGreaterThanOrEqual(30)
+    expect(loopSeconds).toBeLessThanOrEqual(60)
+    expect(samples.length / rate).toBeGreaterThanOrEqual(RAIN_LOOP_END)
   })
 
-  it('loops without a seam: the last samples step into the first like any neighbours', () => {
-    const wav = readFileSync(path)
-    const n = wav.readUInt32LE(40) / 2
-    const at = (i: number) => wav.readInt16LE(44 + 2 * (((i % n) + n) % n))
-    let typicalStep = 0
-    for (let i = 0; i < 4000; i++) typicalStep += Math.abs(at(i + 1) - at(i))
-    typicalStep /= 4000
-    const seam = Math.abs(at(0) - at(n - 1))
-    expect(seam).toBeLessThan(typicalStep * 6)
+  it('is real rain at both ends of the looped region, with no silent gap (> 5 ms)', async () => {
+    const { samples, rate } = await decode()
+    // A decoder may strip its delay (up to ~60 ms of it) or keep it: check both readings.
+    for (const shift of [0, Math.round(0.06 * rate)]) {
+      const start = Math.round(RAIN_LOOP_START * rate) - shift
+      const end = Math.round(RAIN_LOOP_END * rate) - shift
+      expect(silentRun(samples, start, rate, 1)).toBeLessThan(0.005)
+      expect(silentRun(samples, end - 1, rate, -1)).toBeLessThan(0.005)
+    }
+  })
+
+  it('peaks at or below -1 dBFS and has broadband hiss', async () => {
+    const { samples } = await decode()
+    let peak = 0
+    for (const s of samples) peak = Math.max(peak, Math.abs(s))
+    expect(20 * Math.log10(peak)).toBeLessThanOrEqual(-1)
+    // The first difference approximates a high-pass: rain has plenty of energy up there.
+    let total = 0
+    let diff = 0
+    for (let i = 1; i < samples.length; i++) {
+      total += samples[i] * samples[i]
+      diff += (samples[i] - samples[i - 1]) ** 2
+    }
+    expect(diff / total).toBeGreaterThan(0.5)
   })
 })
 
@@ -262,8 +346,12 @@ describe('SessionSetup offline suggestion (AC8.7)', () => {
 })
 
 describe('App rain', () => {
-  function app(store: MemoryActiveSessionStore, audioStore: MemoryAudioSourceStore) {
-    const audio = fakeAudio()
+  function app(
+    store: MemoryActiveSessionStore,
+    audioStore: MemoryAudioSourceStore,
+    state: AudioContextState = 'running',
+  ) {
+    const audio = fakeAudio(state)
     const controller = new TimerController({ store, saveRecord: () => undefined })
     const view = render(
       <App
@@ -307,6 +395,25 @@ describe('App rain', () => {
     await screen.findByRole('timer')
     expect(screen.getByRole('region', { name: 'Background audio' })).toHaveTextContent('Rain')
     await vi.waitFor(() => expect(second.sources).toHaveLength(1))
+  })
+
+  it('after a reload with a locked context, the rain begins on the first click', async () => {
+    const store = new MemoryActiveSessionStore()
+    const audioStore = new MemoryAudioSourceStore()
+    const first = app(store, audioStore)
+    fireEvent.click(await screen.findByRole('radio', { name: 'Rain' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    first.view.unmount()
+
+    const second = app(store, audioStore, 'suspended')
+    await screen.findByRole('timer')
+    await vi.waitFor(() => expect(second.sources).toHaveLength(1)) // queued on the locked context
+    expect(second.context.state).toBe('suspended')
+    fireEvent.click(screen.getByRole('timer'))
+    expect(second.context.resume).toHaveBeenCalled()
+    await vi.waitFor(() => expect(second.context.state).toBe('running'))
+    expect(second.sources).toHaveLength(1)
   })
 
   it('forgets the source when the session ends', async () => {
