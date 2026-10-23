@@ -50,8 +50,8 @@ Users sign up and sign in with email and password; their sessions and settings a
 ### F3. Pomodoro timer
 
 - AC3.1 Defaults: 25 min focus, 5 min short break, 4 focus blocks, long break off.
-- AC3.2 Configurable: focus 5–90 min, short break 1–30 min, focus blocks 1–8, optional long break 5–60 min (default 15) after every 4th focus block. The user's last-used configuration is remembered.
-- AC3.3 Phases advance automatically; the end bell plays at every phase change. There is no break after the final focus block.
+- AC3.2 Configurable: focus 5–90 min, short break 1–30 min, focus blocks 1–8, optional long break 5–60 min (default 15) that replaces the short break after every 4th focus block. The user's last-used configuration is remembered.
+- AC3.3 Phases advance automatically; the end bell plays at every automatic phase change (not when the user skips a break or stops early). There is no break after the final focus block.
 - AC3.4 The screen always shows the current phase (Focus / Break / Long break), its remaining time, and progress (e.g. "Block 2 of 4").
 - AC3.5 The user can pause/resume at any point and skip the current break.
 - AC3.6 The whole Pomodoro is saved as **one** history entry. Only focus time counts toward totals; the entry also records how many focus blocks were completed.
@@ -63,7 +63,7 @@ Users sign up and sign in with email and password; their sessions and settings a
 - AC4.2 Optional reminder interval: Off (default), 15, 30, 45, 60, 90 or 120 min. At each interval a gentle chime (not a voice) plays.
 - AC4.3 Pause/resume is supported; reminders are based on focus time, not wall-clock time.
 - AC4.4 Stopping saves the session as **Completed**.
-- AC4.5 The timer stops itself at 12 hours and saves the session, so a forgotten timer cannot run indefinitely.
+- AC4.5 The timer stops itself at 12 hours of focus time (paused time excluded) and saves the session as **Completed**, so a forgotten timer cannot run indefinitely.
 
 ### F5. Sounds
 
@@ -178,3 +178,7 @@ Product decisions made after this document was agreed. The product manager agent
 | 2026-10-21 | What does an empty last-used tag mean in settings? | No stored last tag (`last_tag` NULL) means Work; the API and the app treat it as Work | Matches AC7.2 (Work for a new user): a new user has no last-used tag yet | #6 |
 | 2026-10-21 | What are the on-call secrets called? | `ANTHROPIC_API_KEY` (Claude API key used only by the on-call workflow) and `GRAFANA_READONLY_TOKEN` (read-only Grafana token), both secrets of the GitHub `oncall` environment | One fixed name per secret so Yacine's setup steps, the workflow and the docs agree | #35, #32 |
 | 2026-10-21 | Who runs migrations on deploy, now that the schema merged before the compose app service? | #4 owns running `alembic upgrade head` before the app starts (a failed migration fails startup); #6 keeps backward compatibility | The app service lives in #4; #6 had nothing to wire it into | #6, #4 |
+| 2026-10-23 | Is the unlimited timer's 12 h auto-stop (AC4.5) measured on focus time or wall-clock time? | Focus time (paused time excluded); a paused timer never auto-stops; saved as Completed with 12 h of focus | Same clock as the reminders (AC4.3) and the display; paused time never counts (AC2.4), so a paused timer cannot inflate history | #13 |
+| 2026-10-23 | How does the long break (AC3.2) interact with the short break and the final block? | It replaces the short break after blocks 4 and 8; no break after the final block (AC3.3), so with 1–4 blocks it never occurs | "After every 4th block" plus "no break after the final block" | #13 |
+| 2026-10-23 | Does the end bell play when the user skips a break or stops early? | No. The bell plays only on automatic transitions (a phase reaching zero, session completion, the 12 h auto-stop); a skip is still recorded as a phase change | The bell tells someone who isn't watching the screen; a user who just pressed the button doesn't need it | #13, #16 |
+| 2026-10-23 | What does Pomodoro progress (AC3.4) show during a break? | The block the break follows ("Block 2 of 4" during the break after block 2) | The block count stays stable and readable; the phase label already says Break | #13 |
