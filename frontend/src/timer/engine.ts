@@ -161,19 +161,44 @@ export function isPaused(session: ActiveSession): boolean {
   return last !== undefined && last.resumedAt === null
 }
 
+/**
+ * The pauses with their timestamps made monotonic. If the device clock jumped backwards (manual
+ * change, NTP, DST bugs), the time between the earlier and the later reading counts as zero
+ * elapsed, so no duration is negative and the pieces always fit between start and end.
+ */
+export function effectivePauses(session: ActiveSession): Pause[] {
+  let high = session.startedAt
+  return session.pauses.map((pause) => {
+    const pausedAt = Math.max(high, pause.pausedAt)
+    high = pausedAt
+    if (pause.resumedAt === null) return { pausedAt, resumedAt: null }
+    const resumedAt = Math.max(high, pause.resumedAt)
+    high = resumedAt
+    return { pausedAt, resumedAt }
+  })
+}
+
+/** `now` never earlier than the session's latest recorded moment. */
+export function effectiveNow(session: ActiveSession, now: number): number {
+  const last = effectivePauses(session).at(-1)
+  const high = last === undefined ? session.startedAt : (last.resumedAt ?? last.pausedAt)
+  return Math.max(now, high)
+}
+
 /** Paused wall-clock time between the start and `now`. */
 export function pausedMsAt(session: ActiveSession, now: number): number {
+  const at = effectiveNow(session, now)
   let total = 0
-  for (const pause of session.pauses) {
-    if (pause.pausedAt >= now) break
-    total += Math.min(pause.resumedAt ?? now, now) - pause.pausedAt
+  for (const pause of effectivePauses(session)) {
+    if (pause.pausedAt >= at) break
+    total += Math.min(pause.resumedAt ?? at, at) - pause.pausedAt
   }
   return total
 }
 
 /** Active (unpaused) time between the start and `now`. */
 export function activeMsAt(session: ActiveSession, now: number): number {
-  return Math.max(0, now - session.startedAt - pausedMsAt(session, now))
+  return Math.max(0, effectiveNow(session, now) - session.startedAt - pausedMsAt(session, now))
 }
 
 /**
@@ -183,7 +208,7 @@ export function activeMsAt(session: ActiveSession, now: number): number {
 export function wallTimeAtActive(session: ActiveSession, activeMs: number): number | null {
   let cursor = session.startedAt
   let remaining = activeMs
-  for (const pause of session.pauses) {
+  for (const pause of effectivePauses(session)) {
     const runSpan = pause.pausedAt - cursor
     if (remaining <= runSpan) return cursor + remaining
     remaining -= runSpan
@@ -481,6 +506,8 @@ export function finishSession(
   endedAt: number,
   status: SessionStatus,
 ): FinishOutcome {
+  // A clock that went backwards must not put the end before the start or the last event.
+  endedAt = effectiveNow(session, endedAt)
   const activeMs = Math.min(activeMsAt(session, endedAt), totalActiveMs(session))
   const focusMs = focusMsAtActive(session, activeMs)
   const focusSeconds = Math.floor(focusMs / 1000)
