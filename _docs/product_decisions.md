@@ -83,7 +83,7 @@ Users sign up and sign in with email and password; their sessions and settings a
 
 - AC7.1 Every session has exactly one tag from: **Work, Study, Nap, Read, Meditation, Exercise**.
 - AC7.2 The tag defaults to the last one used (Work for a new user).
-- AC7.3 The user can optionally enter a one-line goal ("What are you focusing on?"), up to 120 characters, shown on the timer screen and in history.
+- AC7.3 The user can optionally enter a one-line goal ("What are you focusing on?"), up to 120 characters, shown on the timer screen and in history. Line breaks in a goal are replaced by a single space.
 
 ### F8. Background audio
 
@@ -111,7 +111,7 @@ Users sign up and sign in with email and password; their sessions and settings a
 - AC10.6 Weeks start on **Sunday** by default; configurable in Settings (F12).
 - AC10.7 Totals and filters exclude archived sessions.
 - AC10.8 A clear empty state when a view has no sessions.
-- AC10.9 Sessions that are saved but not yet synced (F13) appear in history with a "not synced yet" indicator.
+- AC10.9 Sessions that are saved but not yet synced (F13) appear in history with a "not synced yet" indicator. A session the server rejected stays on the device with a separate "Couldn't sync" indicator.
 
 ### F11. Editing and archiving sessions
 
@@ -187,3 +187,8 @@ Product decisions made after this document was agreed. The product manager agent
 | 2026-10-23 | How long does a user stay signed in? | 30 days from sign-in, or until they sign out | Phone users shouldn't have to sign in again often; sign-out revokes the session at once | #8 |
 | 2026-10-23 | What happens after repeated failed sign-ins? | After 5 failed attempts for one email from one client (or 20 from one client) within 15 minutes, sign-in is refused for 15 minutes, even with the correct password. Sessions that are already signed in are not affected. For the MVP a server restart clears the counters | Basic brute-force protection (#8 AC). Refusing the correct password during the lockout is what makes it work. Keeping counters in memory is enough for one app process; hardening is in #77 | #8, #77 |
 | 2026-10-23 | Which issues own syncing the last-used Pomodoro configuration and tag (AC12.5)? | #12 validates and stores `pomodoro_config` (against AC3.2) and `last_tag` (NULL means Work) in the Settings API; #22 backs the setup screen's `PreferencesStore` (#14) with that API and keeps the device copy as the offline cache | The columns already exist (#6) and #12 already lists them; the setup screen (#14) stores them on the device behind an interface so the Settings screen work can plug in the API without touching it | #12, #22, #14 |
+| 2026-10-23 | When a sync batch contains a session the server rejects, what happens to the batch and to that session? | Results are per item (`created` / `existing` / `rejected` with a reason); valid items are saved even when others are rejected; only an invalid request envelope (not signed in, not a `sessions` list, 0 or more than 100 items) fails the whole batch. A rejected session stays on the device with a "Couldn't sync" indicator, isn't retried automatically and never blocks later syncs | One bad session must never block or lose the others (AC13.3, AC13.5) | #10, #19 |
+| 2026-10-23 | What does a repeat save of an already-saved session do? | Returns the stored copy and changes nothing, even after the session was edited or archived; offline tag/goal edits sync as separate edits, never as a re-save | A retry must never duplicate (AC13.4) or undo a later edit or archive | #10 |
+| 2026-10-23 | What is the maximum focus time of a saved session? | 12 h (43 200 s, inclusive) in every mode | The most any mode can produce: countdown 240 min (AC2.1), Pomodoro 90 min × 8 blocks (AC3.2), unlimited auto-stop (AC4.5) | #10 |
+| 2026-10-23 | Which characters count as line breaks in a goal (AC7.3)? | Every `str.splitlines()` boundary: CR, LF, CRLF, VT, FF, U+001C–U+001E, U+0085, U+2028, U+2029. Each run becomes one space, then the goal is trimmed before the 120-character check | AC7.3 promises one line; other line separators would still render as a new line | #10 |
+| 2026-10-23 | Is the Archive list (AC11.3) paginated? | No, not in the MVP; most recently archived first | AC11.3 lists all archived sessions, and "Delete all archived" (AC11.6) keeps the list short | #10 |
