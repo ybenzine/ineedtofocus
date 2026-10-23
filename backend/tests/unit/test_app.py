@@ -211,7 +211,17 @@ def test_missing_static_files_are_404_not_index_html(tmp_path: Path) -> None:
             r = c.get(path)
             assert r.status_code == 404, path
             assert "spa" not in r.text, path
+            assert r.json()["error"]["code"] == "not_found", path
         assert c.get("/assets/app.js").status_code == 200  # existing files still served
+
+
+def test_existing_root_files_with_extension_are_still_served(tmp_path: Path) -> None:
+    app = make_app(tmp_path, dist=True)
+    (tmp_path / "dist" / "sw.js").write_text("self.skipWaiting()")
+    (tmp_path / "dist" / "manifest.webmanifest").write_text('{"name":"x"}')
+    with TestClient(app) as c:
+        assert c.get("/sw.js").text == "self.skipWaiting()"
+        assert c.get("/manifest.webmanifest").json() == {"name": "x"}
 
 
 def test_extensionless_routes_still_get_index_html(tmp_path: Path) -> None:
