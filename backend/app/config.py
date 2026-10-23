@@ -19,6 +19,13 @@ class Settings(BaseSettings):
     # Built frontend (Vite output). Absent in local dev; the API still works.
     frontend_dist: Path = Field(default=Path(__file__).resolve().parents[2] / "frontend" / "dist")
     readiness_timeout_seconds: float = Field(default=2.0, gt=0)
+    # Session cookie: `Secure` must be on in deployed (HTTPS) environments (#8).
+    cookie_secure: bool = Field(default=True)
+    session_ttl_days: int = Field(default=30, ge=1)
+    # Failed sign-ins allowed per window: per (client, email) and per client (#8).
+    signin_max_failures: int = Field(default=5, ge=1)
+    signin_max_failures_per_client: int = Field(default=20, ge=1)
+    signin_window_seconds: float = Field(default=900.0, gt=0)
 
 
 @lru_cache

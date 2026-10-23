@@ -1,5 +1,6 @@
 """SQLAlchemy models. Importing this package registers every table on `Base`."""
 
+from app.models.auth_session import AuthSession
 from app.models.base import Base
 from app.models.enums import MODES, STATUSES, TAGS, Mode, Status, Tag
 from app.models.focus_session import FocusSession
@@ -10,6 +11,7 @@ __all__ = [
     "MODES",
     "STATUSES",
     "TAGS",
+    "AuthSession",
     "Base",
     "FocusSession",
     "Mode",
