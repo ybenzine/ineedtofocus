@@ -266,6 +266,7 @@ jobs:
         run: make test-prod-stack SMOKE_LOG_DIR=reports/prod-stack
       - name: Save the tested image for `publish`
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash # -eo pipefail: a failed `docker save` fails the step, not just gzip's status
         run: docker save "$IMAGE" | gzip -1 > image.tar.gz
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -307,6 +308,7 @@ jobs:
       - name: Load the image `image` tested
         env:
           REVISION: ${{ github.sha }}
+        shell: bash # -eo pipefail, for gunzip | docker load
         run: |
           gunzip -c image.tar.gz | docker load
           label=$(docker image inspect "$IMAGE" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')
@@ -316,6 +318,7 @@ jobs:
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GHCR_USER: ${{ github.actor }}
+        shell: bash # -eo pipefail, for printf | docker login
         run: |
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
           docker push "$IMAGE"

@@ -55,7 +55,7 @@ gh run watch <databaseId> --exit-status
 | `nothing to roll back to` | No known-good release other than the current one | Fix forward |
 | `… runs <tag> (<digest>) now, not the expected …` | A deploy or another rollback ran between the run's read and its request; nothing changed | Check what runs now (the latest deploy summary), then decide again |
 | `Wrong key: the rollback environment's key isn't the prod rollback key` | The `rollback` environment holds a key that can do more than roll back | `⛔ Needs Yacine:` replace it with the `focus-ci-rollback` key |
-| `releases.log line <n> is malformed` | The log was edited by hand; nothing that reads it runs | `⛔ Needs Yacine:` move that line out of `/opt/focus/<env>/releases.log` |
+| `releases.log line <n> is malformed` | A line focus-ci wouldn't write: a write cut short (for example a full disk) or a hand edit. Nothing that reads that log runs | `⛔ Needs Yacine:` look at it read-only first, `sudo sed -n '<n>p' /opt/focus/<env>/releases.log`, then move that line out of the file. Check the disk too (`df -h /`) |
 | `no known-good release of <sha> is recorded` | That sha never passed the checks there, is current, or was rolled back from | Leave `tag` out, or pick another sha from the deploy summaries |
 | `rollback of <sha> failed at 'start' … reverted to <tag>` | The target didn't pass its checks either; the server started the release it left again | The cause is probably not the release: investigate, don't retry blindly |
 | `… and reverting to <tag> failed too` | The environment may be down | `⛔ Needs Yacine:` server access ([deployment.md → Rollback](../deployment.md#rollback-rollbackyml), break-glass) |

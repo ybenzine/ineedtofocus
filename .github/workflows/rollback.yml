@@ -55,6 +55,13 @@ on:
 
 permissions: {}
 
+# `shell: bash` makes GitHub run every step with `bash --noprofile --norc -eo pipefail`.
+# Without it a step runs as `bash -e {0}`, and a pipeline takes its last command's status,
+# so `ssh … | tee` would hide a failed server request.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   rollback:
     name: Roll back ${{ inputs.env }}

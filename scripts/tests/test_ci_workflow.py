@@ -24,9 +24,40 @@ REQUIRED_JOBS = ["lint", "backend-unit", "backend-integration", "frontend-unit",
 MAIN_PUSH_ONLY = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
 
 
+def load_workflow(path: Path) -> dict[Any, Any]:
+    """A workflow, with each step's effective shell in `_shell` (the step's own `shell`,
+    else the job's, else the workflow's `defaults.run.shell`, else None), so the steps run
+    here exactly as GitHub runs them."""
+    data: dict[Any, Any] = yaml.safe_load(path.read_text())
+    top = (data.get("defaults") or {}).get("run", {}).get("shell")
+    for job in data["jobs"].values():
+        job_shell = (job.get("defaults") or {}).get("run", {}).get("shell", top)
+        for step in job.get("steps", []):
+            step["_shell"] = step.get("shell", job_shell)
+    return data
+
+
+def run_like_github(
+    step: dict[str, Any], tmp_path: Path, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Run a step's `run` the way GitHub's runner does on Linux: the script in a file, run
+    with `bash -e {0}` when no shell is set, or `bash --noprofile --norc -eo pipefail {0}`
+    for `shell: bash`. Adding pipefail here for every step would hide a missing one."""
+    script = tmp_path / "step.sh"
+    script.write_text(step["run"])
+    shell = step.get("_shell", step.get("shell"))
+    if shell is None:
+        argv = ["bash", "-e", str(script)]
+    elif shell == "bash":
+        argv = ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)]
+    else:
+        raise AssertionError(f"unexpected shell {shell!r}")
+    return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
+
+
 @pytest.fixture(scope="module")
 def workflow() -> dict[Any, Any]:
-    data: dict[Any, Any] = yaml.safe_load(CI.read_text())
+    data: dict[Any, Any] = load_workflow(CI)
     return data
 
 
@@ -163,13 +194,7 @@ def run_gate(
         "GITHUB_OUTPUT": str(output),
         "GITHUB_STEP_SUMMARY": str(summary),
     }
-    result = subprocess.run(
-        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = run_like_github(step, tmp_path, env)
     assert result.returncode == status, result
     assert says.format(env=env_title) in result.stdout
     expected = f"configured={configured}\n" if configured else ""
@@ -229,7 +254,7 @@ DIGEST = "sha256:" + "c" * 64
 
 @pytest.fixture(scope="module")
 def prod_workflow() -> dict[Any, Any]:
-    data: dict[Any, Any] = yaml.safe_load(DEPLOY_PROD.read_text())
+    data: dict[Any, Any] = load_workflow(DEPLOY_PROD)
     return data
 
 
@@ -415,13 +440,7 @@ def run_step(
         "GITHUB_SERVER_URL": "https://github.com",
         **env,
     }
-    result = subprocess.run(
-        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-        env=full_env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = run_like_github(step, tmp_path, full_env)
     return result, output, summary
 
 
@@ -548,7 +567,7 @@ ROLLBACK_ENVIRONMENT = "${{ inputs.env == 'prod' && 'rollback' || 'dev' }}"
 
 @pytest.fixture(scope="module")
 def rollback_workflow() -> dict[Any, Any]:
-    data: dict[Any, Any] = yaml.safe_load(ROLLBACK.read_text())
+    data: dict[Any, Any] = load_workflow(ROLLBACK)
     return data
 
 
@@ -952,3 +971,116 @@ def test_rollback_smoke_tests_the_environment(rollback_job: dict[str, Any]) -> N
     assert names.index(smoke["name"]) > names.index(
         step_named(rollback_job, "Roll back over SSH")["name"]
     )
+
+
+# --- Pipelines run with pipefail (#157 review round 2) --------------------------------
+
+
+def has_pipeline(script: str) -> bool:
+    """A `|` that pipes, outside quotes, comments, `||` and case patterns' `a | b)`."""
+    for line in script.splitlines():
+        code = re.sub(r"\"(?:[^\"\\]|\\.)*\"|'[^']*'", "", line).split(" #")[0]
+        if code.lstrip().startswith("#"):
+            continue
+        code = code.replace("||", "")
+        if re.search(r"^\s*[\w*=-]+(\s*\|\s*[\w*=-]+)+\)", code):  # a case pattern
+            continue
+        if "|" in code:
+            return True
+    return False
+
+
+def test_has_pipeline_reads_scripts_right() -> None:
+    assert has_pipeline('ssh x "a" | tee f')
+    assert has_pipeline("docker save x | gzip > y")
+    assert not has_pipeline("a || b")
+    assert not has_pipeline('echo "| a | b |"')
+    assert not has_pipeline("  from_tag=* | tag=*) echo x ;;")
+    assert not has_pipeline("# a | b")
+
+
+@pytest.mark.parametrize("path", all_workflows(), ids=lambda p: p.name)
+def test_every_step_with_a_pipeline_runs_with_pipefail(path: Path) -> None:
+    """GitHub runs a step with no shell as `bash -e {0}`: a pipeline then takes its last
+    command's status, so `ssh … | tee` hides a failed request. Such steps need `shell: bash`
+    (`-eo pipefail`), on the step or as a default."""
+    for job_name, job in load_workflow(path)["jobs"].items():
+        for step in job.get("steps", []):
+            if "run" in step and has_pipeline(step["run"]):
+                assert step["_shell"] == "bash", (path.name, job_name, step.get("name"))
+
+
+def test_rollback_and_deploy_prod_default_to_bash(
+    rollback_workflow: dict[Any, Any], prod_workflow: dict[Any, Any]
+) -> None:
+    assert rollback_workflow["defaults"] == {"run": {"shell": "bash"}}
+    assert prod_workflow["defaults"] == {"run": {"shell": "bash"}}
+
+
+FAKE_SSH_EXITS = r"""#!/usr/bin/env bash
+# Fake ssh for the rollback step: prints $ANSWER, exits $SSH_RC.
+echo "${*: -1}" >> "$SSH_LOG"
+printf '%b' "$ANSWER"
+exit "$SSH_RC"
+"""
+
+
+@pytest.mark.parametrize(
+    ("rc", "answer"),
+    [
+        (1, "focus-ci: FAILED: dev runs a now, not the expected b\n"),
+        (1, f"{RESULT}\n"),  # even a result line can't turn a failed request green
+        (2, "focus-ci: refused: not a request this key can make\n"),
+        (255, ""),
+    ],
+)
+def test_rollback_step_fails_when_the_server_does(
+    rollback_job: dict[str, Any], tmp_path: Path, rc: int, answer: str
+) -> None:
+    """A failed or refused server rollback turns the step red (pipefail), so the summary
+    reports a failure, not "rolled back"."""
+    step = step_named(rollback_job, "Roll back over SSH")
+    env = {
+        "TAG": "",
+        "EXPECT": DIGEST,
+        "SSH_CONFIG": "/dev/null",
+        "SSH_LOG": str(tmp_path / "ssh.log"),
+        "RUNNER_TEMP": str(tmp_path),
+        "ANSWER": answer,
+        "SSH_RC": str(rc),
+    }
+    result, output, _ = run_step(step, tmp_path, env, FAKE_SSH_EXITS, "ssh")
+    assert result.returncode == rc, result
+    assert output.read_text() == ""
+
+
+@pytest.mark.parametrize(
+    ("target", "outcome", "says", "never"),
+    [
+        ("dev", "failure", "The rollback failed", "marked as rolled back from"),
+        ("prod", "failure", "The rollback failed", "marked as rolled back from"),
+        ("dev", "success", "is marked as rolled back from on dev", "The rollback failed"),
+        ("prod", "success", "rolled back, smoke tests", "marked as rolled back from"),
+    ],
+)
+def test_rollback_summary_reports_a_failed_rollback_as_failed(
+    rollback_job: dict[str, Any], tmp_path: Path, target: str, outcome: str, says: str, never: str
+) -> None:
+    step = step_named(rollback_job, "Summary")
+    env = {
+        "TARGET_ENV": target,
+        "TAG": "",
+        "URL": "https://dev.ineedtofoc.us",
+        "RUNNER_TEMP": str(tmp_path),
+        "FROM_TAG": SHA,
+        "FROM_DIGEST": DIGEST,
+        "TO_TAG": THIRD_SHA if outcome == "success" else "",
+        "TO_DIGEST": OTHER_DIGEST if outcome == "success" else "",
+        "ROLLBACK_OUTCOME": outcome,
+        "SMOKE_OUTCOME": "success" if outcome == "success" else "skipped",
+    }
+    result, _, summary = run_step(step, tmp_path, env, "", "unused")
+    assert result.returncode == 0, result
+    text = summary.read_text()
+    assert f"### Roll back {target}: {'rolled back' if outcome == 'success' else 'failure'}" in text
+    assert says in text and never not in text
