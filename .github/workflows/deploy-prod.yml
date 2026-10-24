@@ -30,12 +30,13 @@
 # one set, it fails red. #30 adds the automatic revert and `rollback.yml`, which uses its
 # own `rollback` environment and key.
 #
-# .claude/settings.json denies agents `gh workflow run deploy-prod*`. The workflow's name is
-# deploy-prod too, so starting it by name (`gh workflow run <name>`) matches the same rule.
+# .claude/settings.json denies agents `gh workflow run` with deploy-prod in it or with a
+# numeric workflow ID, and approving through `pending_deployments` or GraphQL
+# `approveDeployments` (#126). The workflow's name is deploy-prod too, so starting it by
+# name matches the same rules. Re-runs aren't denied: they wait for the approval again.
 # The gate is the environment's required approval, but agents' `gh` is Yacine, the
-# required reviewer: `gh workflow run <id>`, `gh run rerun` and an API approval
-# (pending_deployments) get past these rules. #126 denies them; #127 gives agents a
-# credential that can't approve. See _docs/deployment.md, Deploy to prod.
+# required reviewer, and the rules only match command text. #127 gives agents a credential
+# that can't approve. See _docs/deployment.md, Deploy to prod.
 
 name: deploy-prod
 run-name: "Deploy to prod: ${{ inputs.tag || 'the release dev runs' }}"
