@@ -92,7 +92,7 @@ test-frontend: frontend/node_modules ## Frontend unit tests (Vitest)
 test-scripts: backend/.venv ## Repo script tests (scripts/tests, pytest; e.g. the reviewer App, #70)
 	$(SCRIPTS_RUN) pytest -p no:cacheprovider ../scripts/tests $(call pytest_junit,scripts)
 
-test-server: ## Server bootstrap (#25), installer and deploy forced command (#28) in an Ubuntu 24.04 container (needs Docker)
+test-server: ## Server bootstrap (#25), installer and deploy forced command (#28, #29) in an Ubuntu 24.04 container (needs Docker)
 	infra/server/tests/run.sh
 
 test-infra: ## Validate the production Compose, Caddy and Collector configs against the deploy rules (#27; needs Docker)

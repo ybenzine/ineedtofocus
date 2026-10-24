@@ -1,0 +1,292 @@
+# Deploy to prod (#29): manual, approved by Yacine, by digest, then smoke-tested.
+#
+# Started by hand only (`workflow_dispatch`): Actions → "deploy-prod" → Run workflow,
+# from `main`, with an optional commit sha. No push, tag or release trigger can start it:
+# the reviewer App can create tags (#70), and nothing may reach prod without the
+# `production` environment's approval.
+#
+#   plan    no credentials. Picks the commit: the `tag` input, or the release dev runs now
+#           (dev's latest successful GitHub deployment). Checks that it's on main, that
+#           CI passed on it and that a dev deployment of it succeeded (deploy-dev's smoke
+#           tests passed), and shows it in the summary. Pinning it here means Yacine
+#           approves one exact commit. (What prod runs now is in prod's release record,
+#           shown by the deploy job as the rollback target: a `production` deployment's
+#           sha is the ref this workflow ran on, not the tag it deployed.)
+#   deploy  in the `production` environment: waits for Yacine's approval (required
+#           reviewer) and runs only on main (branch rule). Its SSH key is pinned on the
+#           server to `focus-ci prod` (infra/server/focus-ci.sh), which can only:
+#             candidate [<sha>]   read dev's release record and log (no dev powers)
+#             deploy <sha> <digest>
+#             status
+#           It resolves the commit to the digest dev ran (the one `publish` pushed and
+#           deploy-dev deployed), deploys that digest, reads the record back, then runs
+#           scripts/smoke_deploy.py against https://ineedtofoc.us. The server refuses a
+#           sha and digest dev hasn't run successfully, re-tags :<sha> from the digest
+#           under the host's deploy lock and checks the running image afterwards. The key
+#           is deleted before the smoke test, the first repository code the job runs.
+#
+# The prod key and host line are secrets of the `production` environment only; nothing
+# is stored at repo level. Until they're set, the deploy job skips with a notice; with only
+# one set, it fails red. #30 adds the automatic revert and `rollback.yml`, which uses its
+# own `rollback` environment and key.
+#
+# .claude/settings.json denies agents `gh workflow run` with deploy-prod in it or with a
+# numeric workflow ID, and approving through `pending_deployments` or GraphQL
+# `approveDeployments` (#126). The workflow's name is deploy-prod too, so starting it by
+# name matches the same rules. Re-runs aren't denied: they wait for the approval again.
+# The gate is the environment's required approval, but agents' `gh` is Yacine, the
+# required reviewer, and the rules only match command text. #127 gives agents a credential
+# that can't approve. See _docs/deployment.md, Deploy to prod.
+
+name: deploy-prod
+run-name: "Deploy to prod: ${{ inputs.tag || 'the release dev runs' }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Commit sha (40 lowercase hex) whose image to deploy. Empty: the release dev runs now."
+        type: string
+        required: false
+        default: ""
+
+permissions: {}
+
+jobs:
+  plan:
+    name: Plan (which commit)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      from_dev: ${{ steps.plan.outputs.from_dev }}
+    steps:
+      - name: Pick the commit and check it passed CI on main
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          die() { echo "::error title=$1::$2"; exit 1; }
+          [[ $GITHUB_REF == refs/heads/main ]] ||
+            die "Not main" "run this workflow from main (Use workflow from: main); the production environment accepts only main."
+          # dev_ok <sha>: some dev deployment of <sha> reached success, i.e. deploy-dev
+          # deployed it and its smoke tests passed (a superseded one is inactive now).
+          dev_ok() {
+            local ids id ever
+            ids=$(gh api "repos/$GH_REPO/deployments?environment=dev&sha=$1&per_page=100" --jq '.[].id')
+            for id in $ids; do
+              ever=$(gh api "repos/$GH_REPO/deployments/$id/statuses?per_page=100" --jq 'any(.[]; .state == "success")')
+              [[ $ever == true ]] && return 0
+            done
+            return 1
+          }
+          # dev_now: the sha of dev's newest deployment whose latest status is success
+          # (GitHub marks older ones inactive), or nothing. deploy-dev runs on push, so a
+          # dev deployment's sha is the commit it deployed.
+          dev_now() {
+            local list id sha state
+            list=$(gh api "repos/$GH_REPO/deployments?environment=dev&per_page=30" --jq '.[] | "\(.id) \(.sha)"')
+            while read -r id sha; do
+              [[ -n $id ]] || continue
+              state=$(gh api "repos/$GH_REPO/deployments/$id/statuses?per_page=1" --jq '.[0].state // ""')
+              if [[ $state == success ]]; then
+                printf '%s' "$sha"
+                return 0
+              fi
+            done <<< "$list"
+          }
+          if [[ -n $INPUT_TAG ]]; then
+            [[ $INPUT_TAG =~ ^[0-9a-f]{40}$ ]] ||
+              die "Bad tag" "the tag must be a full 40-character lowercase commit sha, or empty for dev's release."
+            tag=$INPUT_TAG from_dev=false
+          else
+            tag=$(dev_now)
+            [[ $tag =~ ^[0-9a-f]{40}$ ]] ||
+              die "Dev's release unknown" "found no successful dev deployment; pass the tag explicitly."
+            from_dev=true
+          fi
+          status=$(gh api "repos/$GH_REPO/compare/$tag...main?per_page=1" --jq .status) ||
+            die "Unknown commit" "$tag isn't a commit of this repository."
+          [[ $status == ahead || $status == identical ]] ||
+            die "Not on main" "$tag isn't on main (compare: $status)."
+          runs=$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$tag&event=push&branch=main&status=success&per_page=1" --jq .total_count)
+          ((runs > 0)) || die "CI not green" "no successful CI run on main for $tag: it was never published or deployed to dev."
+          dev_ok "$tag" ||
+            die "Not passed on dev" "no dev deployment of $tag succeeded: deploy-dev didn't deploy it, or its smoke tests failed."
+          subject=$(gh api "repos/$GH_REPO/commits/$tag" --jq '.commit.message | split("\n")[0]')
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "from_dev=$from_dev" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Plan: deploy \`$tag\` to prod"
+            echo ""
+            echo "- Commit: [\`${tag:0:12}\`]($GITHUB_SERVER_URL/$GH_REPO/commit/$tag) ${subject//|/\\|}"
+            if [[ $from_dev == true ]]; then
+              echo "- Chosen as: the release dev runs now (the deploy re-checks that dev still runs it)"
+            else
+              echo "- Chosen as: the \`tag\` input (dev must have run it successfully)"
+            fi
+            echo "- On main: yes ([newer commits on main]($GITHUB_SERVER_URL/$GH_REPO/compare/$tag...main))"
+            echo "- CI on main: passed"
+            echo "- Dev: deployed and smoke-tested"
+            echo ""
+            echo "Approving **Deploy to prod** deploys exactly this commit's image, by the digest dev ran."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy to prod
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Required reviewer: Yacine. Deployment branches: main only. The prod key and the
+    # server's host key are secrets of this environment only.
+    environment:
+      name: production
+      url: https://ineedtofoc.us
+    # One prod deploy at a time; a running one is never cancelled. Its own group, not one
+    # shared with deploy-dev or rollback.yml: GitHub cancels a *pending* job when another
+    # joins its group, so a shared group could drop a queued rollback. Deploys of every
+    # environment are serialized on the server by flock on /opt/focus/deploy.lock.
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    env:
+      DEPLOY_HOST: 159.223.188.176
+      PROD_URL: https://ineedtofoc.us
+      TAG: ${{ needs.plan.outputs.tag }}
+      FROM_DEV: ${{ needs.plan.outputs.from_dev }}
+    steps:
+      - name: Check the production environment is set up
+        id: config
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        # Both secrets: deploy. Neither: not set up yet, skip green with a notice.
+        # Only one: a misconfiguration, fail red.
+        run: |
+          if [[ -n $DEPLOY_SSH_KEY && -n $DEPLOY_KNOWN_HOSTS ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -n $DEPLOY_SSH_KEY || -n $DEPLOY_KNOWN_HOSTS ]]; then
+            missing=DEPLOY_KNOWN_HOSTS
+            [[ -n $DEPLOY_SSH_KEY ]] || missing=DEPLOY_SSH_KEY
+            echo "::error title=Production environment half set up::the production environment has one of DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS but not $missing. Set both (_docs/deployment.md, Deploy to prod)."
+            exit 1
+          fi
+          echo "configured=false" >> "$GITHUB_OUTPUT"
+          msg="Not deployed: the production environment has neither DEPLOY_SSH_KEY nor DEPLOY_KNOWN_HOSTS yet. Nothing changed on prod; see _docs/deployment.md (Deploy to prod) for the one-time setup."
+          echo "::notice title=Prod deploy skipped::$msg"
+          printf '### Deploy to prod: skipped\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.config.outputs.configured == 'true'
+        with:
+          persist-credentials: false
+      - name: Set up the deploy key
+        if: steps.config.outputs.configured == 'true'
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          [[ $TAG =~ ^[0-9a-f]{40}$ && $FROM_DEV =~ ^(true|false)$ ]] ||
+            { echo "::error::bad plan output: '$TAG' '$FROM_DEV'"; exit 1; }
+          dir=$RUNNER_TEMP/deploy-ssh
+          install -d -m 700 "$dir"
+          (umask 077 && printf '%s\n' "$DEPLOY_SSH_KEY" > "$dir/key")
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$dir/known_hosts"
+          cat > "$dir/config" << EOF
+          Host focus-prod
+            HostName $DEPLOY_HOST
+            User deploy
+            IdentityFile $dir/key
+            IdentitiesOnly yes
+            UserKnownHostsFile $dir/known_hosts
+            StrictHostKeyChecking yes
+            BatchMode yes
+            ConnectTimeout 20
+            ServerAliveInterval 30
+            ServerAliveCountMax 4
+          EOF
+          echo "SSH_CONFIG=$dir/config" >> "$GITHUB_ENV"
+      - name: Resolve the commit to the digest dev ran (read-only)
+        id: resolve
+        if: steps.config.outputs.configured == 'true'
+        # `candidate` reads dev's release record (no argument: what dev runs now) or dev's
+        # releases.log (a sha: the last digest of it dev ran successfully). A dev key put
+        # in this environment by mistake can't run it, so the job stops here.
+        run: |
+          request="candidate $TAG"
+          [[ $FROM_DEV == true ]] && request=candidate
+          ssh -F "$SSH_CONFIG" focus-prod "$request" > "$RUNNER_TEMP/candidate"
+          cat "$RUNNER_TEMP/candidate"
+          get() { sed -n "s/^$1=//p" "$RUNNER_TEMP/candidate"; }
+          digest=$(get digest)
+          if [[ $(get tag) != "$TAG" ]]; then
+            echo "::error title=Dev's record differs::dev's release record shows $(get tag), not $TAG, which the plan chose (dev's newest deployment that passed its smoke tests) and was approved. Either dev moved since the plan (a newer deploy or a rollback), or dev's latest deploy passed the server checks but failed its smoke tests. Nothing deployed. Start a new run, or pass the tag explicitly."
+            exit 1
+          fi
+          [[ $(get source) == dev && $digest =~ ^sha256:[0-9a-f]{64}$ ]] ||
+            { echo "::error::unexpected candidate answer"; exit 1; }
+          echo "DIGEST=$digest" >> "$GITHUB_ENV"
+          echo "dev_time=$(get source_time)" >> "$GITHUB_OUTPUT"
+      - name: Deploy over SSH (promotion check, pull by digest, migrate, start, check, record)
+        id: deploy
+        if: steps.config.outputs.configured == 'true'
+        # #30: the automatic revert to the record's previous release, when a check fails,
+        # goes in focus-ci's deploy; this step stays the same.
+        run: ssh -F "$SSH_CONFIG" focus-prod "deploy $TAG $DIGEST"
+      - name: Read the server's release record
+        id: record
+        if: steps.config.outputs.configured == 'true'
+        run: |
+          ssh -F "$SSH_CONFIG" focus-prod status > "$RUNNER_TEMP/release"
+          cat "$RUNNER_TEMP/release"
+          get() { sed -n "s/^$1=//p" "$RUNNER_TEMP/release"; }
+          [[ $(get env) == prod && $(get tag) == "$TAG" && $(get digest) == "$DIGEST" ]] ||
+            { echo "::error::prod's record doesn't show $TAG $DIGEST"; exit 1; }
+          for key in deployed_at infra_revision previous_tag; do
+            echo "$key=$(get "$key")" >> "$GITHUB_OUTPUT"
+          done
+      - name: Remove the deploy key before running repository code
+        if: ${{ always() && steps.config.outputs.configured == 'true' }}
+        # The smoke test runs scripts/ from the checkout: it must never see the key.
+        run: rm -rf "$RUNNER_TEMP/deploy-ssh"
+      - name: Smoke-test https://ineedtofoc.us
+        id: smoke
+        if: steps.config.outputs.configured == 'true'
+        run: python3 scripts/smoke_deploy.py "$PROD_URL" --summary "$RUNNER_TEMP/smoke.md"
+      - name: Summary
+        if: ${{ !cancelled() && steps.config.outputs.configured == 'true' }}
+        env:
+          DEV_TIME: ${{ steps.resolve.outputs.dev_time }}
+          DEPLOYED_AT: ${{ steps.record.outputs.deployed_at }}
+          INFRA_REVISION: ${{ steps.record.outputs.infra_revision }}
+          PREVIOUS_TAG: ${{ steps.record.outputs.previous_tag }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          {
+            echo "### Deploy to prod: ${DEPLOY_OUTCOME/success/deployed}, smoke tests: ${SMOKE_OUTCOME/success/passed}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| URL | $PROD_URL |"
+            echo "| Tag (commit) | \`$TAG\` |"
+            echo "| Image | \`ghcr.io/ybenzine/ineedtofocus@${DIGEST:-not resolved}\` |"
+            echo "| Dev ran it since (server, UTC) | ${DEV_TIME:-unknown} |"
+            echo "| Deployed at (server, UTC) | ${DEPLOYED_AT:-not recorded} |"
+            echo "| Previous tag (rollback target) | \`${PREVIOUS_TAG:-none}\` |"
+            echo "| Infra revision on the server | \`${INFRA_REVISION:-unknown}\` |"
+            echo ""
+            cat "$RUNNER_TEMP/smoke.md" 2> /dev/null || true
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove the deploy key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/deploy-ssh"
