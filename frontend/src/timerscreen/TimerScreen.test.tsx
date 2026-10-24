@@ -176,6 +176,21 @@ describe('TimerScreen controls', () => {
     expect(saved).toEqual([expect.objectContaining({ status: 'completed' })])
   })
 
+  it('keeps an action error visible across ticks until the next user action', async () => {
+    const { controller } = await mount({ mode: 'countdown', minutes: 25 })
+    const pause = vi.spyOn(controller, 'pause').mockRejectedValueOnce(new Error('Disk is full'))
+    await click('Pause')
+    expect(screen.getByRole('alert')).toHaveTextContent('Disk is full')
+    await advance(2000) // several interval ticks
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: ACTIVE_SESSION_KEY }))
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent('Disk is full')
+    await click('Pause') // the next user action clears it
+    expect(pause).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
   it('follows a pause made in another tab', async () => {
     const { controller, store } = await mount({ mode: 'countdown', minutes: 25 })
     const otherTab = new TimerController({ store, saveRecord: () => undefined })
@@ -263,14 +278,16 @@ describe('async saving and two tabs', () => {
     render(<TimerScreen controller={tabB} audio="none" onEnded={vi.fn()} />)
     writes = 0
     await advance(5 * 250)
-    // At most one write per tab per interval tick; quiet ticks write nothing.
-    expect(writes).toBeLessThanOrEqual(2 * 5)
+    // Quiet ticks (no events) write nothing, in either tab.
+    expect(writes).toBe(0)
     await act(async () => {
       await tabA.pause()
     })
+    // One event, one write; the other tab only reads it.
+    expect(writes).toBe(1)
     writes = 0
     await advance(5 * 250)
-    expect(writes).toBeLessThanOrEqual(2 * 5)
+    expect(writes).toBe(0)
     expect(tabB.current()?.paused).toBe(true)
   })
 })

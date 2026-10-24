@@ -87,7 +87,8 @@ export default function TimerScreen({
       if (background && inFlight.current > 0) return Promise.resolve()
       inFlight.current += 1
       const job = tail.current.then(async () => {
-        setError(null)
+        // Only a user action clears the message; ticks must not make it vanish unread.
+        if (!background) setError(null)
         try {
           apply(await action())
         } catch (caught) {
