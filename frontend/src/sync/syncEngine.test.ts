@@ -262,12 +262,37 @@ describe('SyncEngine', () => {
     await store.edit(ALICE, record.id, { goal: 'Lost' })
     const report = await engine.syncNow()
     expect(report.outcome).toBe('done')
+    expect(report.dropped).toEqual([record.id])
     expect(server.get(record.id)?.goal).toBe('Kept')
     const stored = await store.get(record.id)
     expect(stored).toMatchObject({ edit: null, editState: null })
     expect(stored?.record.goal).toBe('Kept')
     await engine.syncNow()
     expect(server.editRequests).toHaveLength(1)
+  })
+
+  it('reports a dropped edit from every pass of one syncNow loop, not just the last', async () => {
+    const { server, store, engine } = setup()
+    const record = makeRecord()
+    await store.save(record, ALICE)
+    await engine.syncNow()
+    server.archive(record.id)
+    await store.edit(ALICE, record.id, { goal: 'Lost' })
+    // The second call runs a second pass after the first, which has nothing left to drop.
+    const [first, second] = await Promise.all([engine.syncNow(), engine.syncNow()])
+    expect(server.editRequests).toHaveLength(1)
+    expect(first.dropped).toEqual([record.id])
+    expect(second.dropped).toEqual([record.id])
+  })
+
+  it('reports no dropped edit when the edit was applied or nothing was queued', async () => {
+    const { store, engine } = setup()
+    const record = makeRecord()
+    await store.save(record, ALICE)
+    expect((await engine.syncNow()).dropped).toEqual([])
+    await store.edit(ALICE, record.id, { goal: 'Ok' })
+    const report = await engine.syncNow()
+    expect(report).toMatchObject({ edited: 1, dropped: [] })
   })
 
   it('an edit the server refuses (422) is kept as couldn’t sync and not retried', async () => {
