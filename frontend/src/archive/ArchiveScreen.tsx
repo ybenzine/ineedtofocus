@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { notifySessionExpired, signedInUserId } from '../auth/localData.ts'
 import { deviceTimeZone } from '../history/api.ts'
 import { formatDate, formatTime } from '../history/model.ts'
+import { markArchivedOnDevice } from '../sync/reconcile.ts'
 import type { SessionStore } from '../sync/sessionStore.ts'
 import { formatDuration } from '../timerscreen/format.ts'
 import { HttpArchiveApi, type ArchiveApi, type ArchivedSession } from './api.ts'
@@ -53,8 +54,13 @@ export default function ArchiveScreen({
       setLoad({ kind: 'loading' })
       const result = await api.list()
       if (cancelled) return
-      if (result.kind === 'ok') setLoad({ kind: 'ready', sessions: result.value })
-      else {
+      if (result.kind === 'ok') {
+        setLoad({ kind: 'ready', sessions: result.value })
+        // Archived on another device: the device copy follows (#133).
+        if (owner !== null && store) {
+          void markArchivedOnDevice(store, owner, result.value).catch(() => undefined)
+        }
+      } else {
         if (result.kind === 'unauthorized') notifySessionExpired()
         setLoad({ kind: 'error' })
       }
@@ -62,7 +68,7 @@ export default function ArchiveScreen({
     return () => {
       cancelled = true
     }
-  }, [api, reload])
+  }, [api, reload, store, owner])
 
   const fail = useCallback((kind: string, action: string) => {
     if (kind === 'unauthorized') notifySessionExpired()
@@ -106,7 +112,11 @@ export default function ArchiveScreen({
         deleteButton.current?.focus()
         return
       }
-      if (owner !== null) await store?.removeArchived(owner).catch(() => undefined)
+      // Also sessions archived on another device that this device hasn't been told about.
+      if (owner !== null) {
+        const ids = sessions.map((s) => s.id)
+        await store?.removeArchived(owner, ids).catch(() => undefined)
+      }
       setLoad({ kind: 'ready', sessions: [] })
       heading.current?.focus()
       const n = result.value
