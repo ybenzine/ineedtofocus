@@ -21,6 +21,10 @@ describe('360 px layout (#131)', () => {
     expect(body).not.toMatch(/place-items:\s*center/)
   })
 
+  it('centres the stretched main column on wide screens', () => {
+    expect(rule('main')).toMatch(/margin-inline:\s*auto/)
+  })
+
   it('wraps the Screens nav and the account bar', () => {
     expect(rule('.screen-nav')).toMatch(/flex-wrap:\s*wrap/)
     expect(rule('.account-bar')).toMatch(/flex-wrap:\s*wrap/)

@@ -18,6 +18,7 @@ body {
 main {
   width: 100%;
   max-width: 28rem;
+  margin-inline: auto;
   padding: 1rem;
   box-sizing: border-box;
 }
