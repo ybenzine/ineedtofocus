@@ -1,12 +1,17 @@
 // The timer screen's background audio controls (F8). Rain follows the timer: it plays while the
 // timer runs (through breaks too), pauses with it and stops when the session's screen goes away
-// (AC8.2). YouTube arrives with #18; until then, offline, it only offers to switch to Rain (AC8.7).
+// (AC8.2). YouTube (#18) follows the same rules in its own visible player; offline it only offers
+// to switch to Rain (AC8.7).
 
 import { useEffect, useId } from 'react'
 import { useSettingsState } from '../settings/SettingsContext.ts'
 import type { AudioSource } from '../setup/options.ts'
 import type { RainPlayer } from './rain.ts'
 import { useOnline } from './useOnline.ts'
+import type { YoutubeLinkStore } from './audioSource.ts'
+import YoutubeControls from './YoutubeControls.tsx'
+import type { LoadYoutubeApi } from './ytApi.ts'
+import type { YoutubeLinksApi } from './youtubeLinksApi.ts'
 
 /** AC8.7: YouTube needs a connection, rain doesn't. */
 export function OfflineRainSuggestion({ onUseRain }: { onUseRain: () => void }) {
@@ -26,6 +31,12 @@ export interface AudioControlsProps {
   paused: boolean
   rain: RainPlayer
   onSourceChange: (source: AudioSource) => void
+  /** Injectable for tests. */
+  youtube?: {
+    linkStore?: YoutubeLinkStore
+    api?: YoutubeLinksApi
+    loadApi?: LoadYoutubeApi
+  }
 }
 
 export default function AudioControls({
@@ -33,6 +44,7 @@ export default function AudioControls({
   paused,
   rain,
   onSourceChange,
+  youtube,
 }: AudioControlsProps) {
   const online = useOnline()
   const volumeId = useId()
@@ -66,6 +78,7 @@ export default function AudioControls({
           />
         </div>
       )}
+      {source === 'youtube' && online && <YoutubeControls paused={paused} {...youtube} />}
       {source === 'youtube' && !online && (
         <OfflineRainSuggestion onUseRain={() => onSourceChange('rain')} />
       )}

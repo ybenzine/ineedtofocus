@@ -15,6 +15,8 @@ import {
   type LocalDataHook,
 } from './localData.ts'
 
+import { YOUTUBE_LINK_KEY } from '../sounds/audioSource.ts'
+
 const user: User = { id: 'u1', email: 'a@b.co', created_at: '2026-10-23T00:00:00Z' }
 const other: User = { id: 'u2', email: 'c@d.co', created_at: '2026-10-23T00:00:00Z' }
 const offline = new AuthError('network', 'offline')
@@ -74,6 +76,7 @@ function seedUserData() {
   for (const legacy of ['preferences', 'keepAwake', 'alertVolume']) {
     localStorage.setItem(`ineedtofocus.${legacy}`, '1')
   }
+  localStorage.setItem(YOUTUBE_LINK_KEY, 'https://youtu.be/dQw4w9WgXcQ')
   localStorage.setItem('someone.elses.key', 'keep me')
 }
 
@@ -241,7 +244,7 @@ describe('sign out', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     expect(api.signOut).toHaveBeenCalled()
-    for (const key of [SETTINGS_KEY, USER_KEY, OWNER_KEY]) {
+    for (const key of [SETTINGS_KEY, USER_KEY, OWNER_KEY, YOUTUBE_LINK_KEY]) {
       expect(localStorage.getItem(key)).toBeNull()
     }
     for (const legacy of ['preferences', 'keepAwake', 'alertVolume']) {
