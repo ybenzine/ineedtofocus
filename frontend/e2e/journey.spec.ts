@@ -3,6 +3,8 @@ import {
   finishCountdown,
   expectTotals,
   installClock,
+  openHistoryFromSummary,
+  serverSessionCount,
   newEmail,
   openScreen,
   signUp,
@@ -57,12 +59,13 @@ test('a Pomodoro run with breaks is one History entry counting focus time only',
   await expect(page.locator('.summary-details')).toContainText('10 min')
   await expect(page.locator('.summary-details')).toContainText('2 of 2')
 
-  await openScreenFromSummary(page)
+  await openHistoryFromSummary(page)
   await expectTotals(page, { focus: '10 min', sessions: '1' })
   const row = page.locator('.history-row')
   await expect(row).toHaveCount(1)
   await expect(row).toContainText('Pomodoro')
   await expect(row).toContainText('10 min')
+  await expect.poll(() => serverSessionCount(page.request)).toBe(1)
 })
 
 test('archive a session, restore it, then delete all archived', async ({ page }) => {
@@ -71,7 +74,7 @@ test('archive a session, restore it, then delete all archived', async ({ page })
   await finishCountdown(page, { minutes: 1, tag: 'work' })
   await page.getByRole('button', { name: 'New session' }).click()
   await finishCountdown(page, { minutes: 2, tag: 'read' })
-  await openScreenFromSummary(page)
+  await openHistoryFromSummary(page)
   await expectTotals(page, { focus: '3 min', sessions: '2' })
 
   // Archive the 1-minute session: it leaves History and the totals.
@@ -118,8 +121,3 @@ test('archive a session, restore it, then delete all archived', async ({ page })
   await openScreen(page, 'History')
   await expect(page.getByText('No sessions in this period.')).toBeVisible()
 })
-
-async function openScreenFromSummary(page: import('@playwright/test').Page) {
-  await page.getByRole('link', { name: 'View history' }).click()
-  await expect(page.getByRole('heading', { name: 'History' })).toBeVisible()
-}

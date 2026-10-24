@@ -10,9 +10,28 @@ export function newEmail(): string {
   return `e2e-${Date.now()}-${counter}-${Math.random().toString(36).slice(2, 8)}@example.com`
 }
 
-/** A fake clock that starts at the real time and then runs on its own; tests jump ahead with it. */
+/**
+ * A fake clock that starts at midday local time, three days ago, and then runs on its own;
+ * tests jump ahead with it. A fixed midday keeps midnight and week boundaries from flaking.
+ */
 export async function installClock(page: Page): Promise<void> {
-  await page.clock.install({ time: new Date() })
+  const start = new Date()
+  start.setDate(start.getDate() - 3)
+  start.setHours(12, 0, 0, 0)
+  await page.clock.install({ time: start })
+}
+
+/** Signs up on a page with the fake clock installed. */
+export async function installClockAndSignUp(page: Page, email = newEmail()): Promise<string> {
+  await installClock(page)
+  await signUp(page, email)
+  return email
+}
+
+/** From the summary screen to History. */
+export async function openHistoryFromSummary(page: Page): Promise<void> {
+  await page.getByRole('link', { name: 'View history' }).click()
+  await expect(page.getByRole('heading', { name: 'History' })).toBeVisible()
 }
 
 export async function newPage(context: BrowserContext): Promise<Page> {

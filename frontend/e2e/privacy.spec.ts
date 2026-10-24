@@ -14,10 +14,9 @@ import {
 
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 
-/** The app container's logs, or null when Docker or the stack's project isn't reachable here. */
-function appLogs(): string | null {
+function composeOutput(command: string[]): string | null {
   const project = process.env.E2E_COMPOSE_PROJECT
-  const args = ['compose', ...(project ? ['-p', project] : []), 'logs', '--no-color', 'app']
+  const args = ['compose', ...(project ? ['-p', project] : []), ...command]
   try {
     return execFileSync('docker', args, { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 << 20 })
   } catch {
@@ -25,9 +24,20 @@ function appLogs(): string | null {
   }
 }
 
-test('the goal, email and password never reach the backend logs', async ({ page }) => {
-  const logs = appLogs()
-  test.skip(logs === null, 'needs `docker compose logs` for the stack under test')
+/** The app container's logs, or null when Docker or the project isn't reachable here. */
+function appLogs(): string | null {
+  return composeOutput(['logs', '--no-color', 'app'])
+}
+
+test('the goal, email and password never reach the backend logs', async ({ page, baseURL }) => {
+  // The app writes no access log, so check identity by port instead: the Compose project's app
+  // must publish the port the tests use. Otherwise skip, rather than read another stack's logs.
+  const published = composeOutput(['port', 'app', '8000'])
+  const port = new URL(baseURL ?? 'http://localhost:8000').port || '80'
+  test.skip(
+    published === null || !published.trim().endsWith(`:${port}`),
+    `the Compose project${process.env.E2E_COMPOSE_PROJECT ? ` ${process.env.E2E_COMPOSE_PROJECT}` : ''} does not publish the app on port ${port}; set E2E_COMPOSE_PROJECT to the stack under test`,
+  )
 
   const email = newEmail()
   const goal = `private-goal-${Math.random().toString(36).slice(2, 10)}`

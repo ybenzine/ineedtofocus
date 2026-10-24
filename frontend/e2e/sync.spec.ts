@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test'
 import {
   finishCountdown,
+  installClockAndSignUp,
   historyTotals,
   expectTotals,
   newEmail,
@@ -129,8 +130,3 @@ test('History tag filter and the week-start setting', async ({ page }) => {
   await page.getByRole('group', { name: 'View' }).getByRole('button', { name: 'Week' }).click()
   await expect(period).toHaveText(mondayWeek ?? '')
 })
-
-async function installClockAndSignUp(page: import('@playwright/test').Page): Promise<void> {
-  await page.clock.install({ time: new Date() })
-  await signUp(page, newEmail())
-}

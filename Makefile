@@ -11,7 +11,7 @@ NPM     := npm --prefix frontend
 COMPOSE := docker compose
 
 .PHONY: help install up down logs check-stack test test-backend test-backend-unit \
-	test-backend-integration test-frontend test-e2e test-scripts test-server test-infra test-prod-stack \
+	test-backend-integration test-frontend test-e2e test-e2e-if-up test-scripts test-server test-infra test-prod-stack \
 	migrate lint lint-backend \
 	lint-frontend lint-scripts lint-shell lint-workflows openapi fmt fmt-backend fmt-frontend hooks
 
@@ -75,7 +75,7 @@ openapi: backend/.venv ## Regenerate _docs/api/openapi.json (commit it with any 
 
 # --- Tests --------------------------------------------------------------------
 
-test: test-backend test-frontend test-scripts test-server test-infra test-e2e ## Run every test suite (test-e2e needs `make up` first)
+test: test-backend test-frontend test-scripts test-server test-infra test-e2e-if-up ## Run every test suite (e2e runs if a stack answers; fails in CI otherwise)
 
 test-backend: backend/.venv ## Backend tests, unit + integration (pytest)
 	$(UV) run pytest
@@ -100,6 +100,18 @@ test-infra: ## Validate the production Compose, Caddy and Collector configs agai
 
 test-prod-stack: ## Smoke-test the production stack: Caddy + prod + dev (#27; needs Docker; APP_TAG=<tag> skips the build)
 	infra/tests/prod_stack.sh
+
+# Inside `make test`: run e2e when a stack answers on the base URL, otherwise skip loudly
+# (fail when CI is set). `make test-e2e` itself is always strict.
+test-e2e-if-up:
+	@url="$${PLAYWRIGHT_BASE_URL:-http://localhost:8000}"; \
+	if curl -fsS --max-time 3 "$$url/healthz" > /dev/null 2>&1; then \
+		$(MAKE) test-e2e; \
+	elif [ -n "$${CI:-}" ]; then \
+		echo "FAILED e2e: no stack at $$url (CI is set). Run make up first." >&2; exit 1; \
+	else \
+		echo "SKIPPED e2e: no stack at $$url. Run make up, then make test-e2e." >&2; \
+	fi
 
 test-e2e: frontend/node_modules ## Playwright end-to-end tests against the running stack (`make up` first)
 	@if ! compgen -G 'frontend/playwright.config.*' > /dev/null; then \
