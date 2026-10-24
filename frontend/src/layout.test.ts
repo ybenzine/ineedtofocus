@@ -35,11 +35,11 @@ describe('360 px layout (#131)', () => {
     expect(rule('.history-row-goal')).toMatch(/overflow-wrap:\s*anywhere/)
   })
 
-  it('sizes the YouTube player by width, with no min-height forcing a minimum width (#140)', () => {
+  it("keeps YouTube's 200 px minimum height without a minimum width forcing overflow (#140)", () => {
     const player = rule('.youtube-player')
     expect(player).toMatch(/width:\s*100%/)
+    expect(player).toMatch(/min-width:\s*0/)
     expect(player).toMatch(/aspect-ratio:\s*16\s*\/\s*9/)
-    expect(player).not.toMatch(/min-height/)
-    expect(rule('.youtube-player iframe')).toMatch(/max-width:\s*100%/)
+    expect(player).toMatch(/min-height:\s*12\.5rem/)
   })
 })
