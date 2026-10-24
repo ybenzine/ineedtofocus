@@ -1,5 +1,7 @@
+/// <reference types="node" />
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import fixture from '../../../_docs/api/fixtures/youtube-links.json'
 import { checkYoutubeLink, normaliseYoutubeUrl, parseYoutubeLink } from './youtubeLink.ts'
 
 const ID = 'dQw4w9WgXcQ'
@@ -94,7 +96,10 @@ interface FixtureCase {
   sent: string | null
   reason: string
 }
-const SHARED = fixture as FixtureCase[]
+// Read at test time, not imported: the Docker build type-checks the tests with only `frontend/`.
+const SHARED = JSON.parse(
+  readFileSync(resolve(process.cwd(), '../_docs/api/fixtures/youtube-links.json'), 'utf8'),
+) as FixtureCase[]
 
 describe('shared client/server fixture', () => {
   it.each(SHARED.map((c) => [c.reason, c] as const))('%s', (_reason, c) => {

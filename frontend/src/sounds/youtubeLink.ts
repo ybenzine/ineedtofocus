@@ -27,7 +27,7 @@ export const YOUTUBE_URL_MAX_LENGTH = 2048
 export type YoutubeTarget = { kind: 'video'; id: string } | { kind: 'playlist'; id: string }
 
 export interface YoutubeLink {
-  /** The normalised link (scheme added), the form saved to the recent list. */
+  /** The normalised link (scheme added, non-ASCII percent-encoded): saved and POSTed as is. */
   url: string
   target: YoutubeTarget
 }

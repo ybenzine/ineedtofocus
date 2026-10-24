@@ -62,6 +62,8 @@ The prod deploy is its own workflow, `.github/workflows/deploy-prod.yml` (#29, [
 | End-to-end | Playwright | `frontend/e2e/` | The key user journey through the real stack (Compose) |
 | Accessibility | axe in Playwright | `frontend/e2e/` | No serious violations on main screens |
 
+The YouTube link check exists twice (server `_check_youtube_url`, client `youtubeLink.ts`). Both run the same cases from `_docs/api/fixtures/youtube-links.json` (`backend/tests/integration/test_settings.py` and `frontend/src/sounds/youtubeLink.test.ts`), so add a case there when either check changes.
+
 ## Rules
 
 - Every acceptance criterion that describes behavior has at least one test; name tests after the AC where practical (`test_ac13_4_retry_does_not_duplicate`).

@@ -249,14 +249,14 @@
   "server_ok": false,
   "client_ok": false,
   "sent": null,
-  "reason": "other host"
+  "reason": "other host (example.com)"
  },
  {
   "url": "https://vimeo.com/watch?v=dQw4w9WgXcQ",
   "server_ok": false,
   "client_ok": false,
   "sent": null,
-  "reason": "other host"
+  "reason": "other host (vimeo)"
  },
  {
   "url": "https://youtube.com.evil.example/watch",

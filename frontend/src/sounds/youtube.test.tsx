@@ -322,6 +322,19 @@ describe('loading the API', () => {
     expect(window.onYouTubeIframeAPIReady).toBeUndefined()
   })
 
+  it('on a blocked script removes the script and restores an earlier ready handler', async () => {
+    delete window.YT
+    const earlier = vi.fn()
+    window.onYouTubeIframeAPIReady = earlier
+    const pending = loadYoutubeApi()
+    const failure = expect(pending).rejects.toThrow('blocked')
+    document.head.querySelector('script')?.dispatchEvent(new Event('error'))
+    await failure
+    expect(document.head.querySelector('script')).toBeNull()
+    expect(window.onYouTubeIframeAPIReady).toBe(earlier)
+    delete window.onYouTubeIframeAPIReady
+  })
+
   it('adds one script, not two, when it is retried after a timeout', async () => {
     vi.useFakeTimers()
     delete window.YT
