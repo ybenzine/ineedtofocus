@@ -165,3 +165,43 @@ describe('IndexedDbSessionStore', () => {
     expect((await store.list(BOB)).map((s) => s.record.id)).toEqual([bobs.id])
   })
 })
+
+describe('archive state on the device', () => {
+  const WHEN = '2026-10-21T11:00:00Z'
+
+  async function synced(store: IndexedDbSessionStore, owner: string) {
+    const record = makeRecord()
+    await store.save(record, owner)
+    await store.markSynced(record.id, null)
+    return record
+  }
+
+  it('setArchived marks and unmarks the owner’s session, and ignores another owner', async () => {
+    const { store } = openStore()
+    const mine = await synced(store, ALICE)
+    await store.setArchived(BOB, mine.id, WHEN)
+    expect((await store.get(mine.id))?.archivedAt).toBeNull()
+    await store.setArchived(ALICE, mine.id, WHEN)
+    expect((await store.get(mine.id))?.archivedAt).toBe(WHEN)
+    await store.setArchived(ALICE, mine.id, null)
+    expect((await store.get(mine.id))?.archivedAt).toBeNull()
+  })
+
+  it('removeArchived deletes only the owner’s synced, archived sessions', async () => {
+    const { store } = openStore()
+    const archivedMine = await synced(store, ALICE)
+    const liveMine = await synced(store, ALICE)
+    const archivedBobs = await synced(store, BOB)
+    const unsynced = makeRecord()
+    await store.save(unsynced, ALICE)
+    await store.setArchived(ALICE, archivedMine.id, WHEN)
+    await store.setArchived(BOB, archivedBobs.id, WHEN)
+
+    await store.removeArchived(ALICE)
+
+    expect(await store.get(archivedMine.id)).toBeUndefined()
+    expect(await store.get(liveMine.id)).toBeDefined()
+    expect(await store.get(archivedBobs.id)).toBeDefined()
+    expect(await store.get(unsynced.id)).toBeDefined()
+  })
+})
