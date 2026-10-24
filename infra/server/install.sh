@@ -234,6 +234,7 @@ main() {
   echo "    CI keys go in /etc/ssh/authorized_keys/deploy, one per line, each pinned to its profile:"
   echo "    restrict,command=\"$FOCUS_ROOT/bin/focus-ci dev\" ssh-ed25519 AAAA... focus-ci-dev"
   echo "    restrict,command=\"$FOCUS_ROOT/bin/focus-ci prod\" ssh-ed25519 AAAA... focus-ci-prod"
+  echo "    restrict,command=\"$FOCUS_ROOT/bin/focus-ci rollback-prod\" ssh-ed25519 AAAA... focus-ci-rollback"
 }
 
 main "$@"

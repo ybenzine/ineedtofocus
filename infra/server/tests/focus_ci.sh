@@ -1,26 +1,38 @@
 #!/usr/bin/env bash
 # Runs in the `make test-server` container right after in_container.sh, on the server
 # bootstrap.sh has just set up. Tests infra/server/install.sh and the forced command
-# focus-ci (#28, #29) behind the real, hardened sshd. A fake docker CLI (fake_docker.sh)
+# focus-ci (#28, #29, #30) behind the real, hardened sshd. A fake docker CLI (fake_docker.sh)
 # stands in for Docker: it records every call and the environment variables it got.
 #
 #   installer   refuses non-root, malformed shas, commits not on main and trees with
 #               symlinks; writes the full diff and installs nothing without a typed
 #               "yes" on a terminal; installs root-owned files the deploy user can't
 #               change; starts the edge; on a change, recreates Caddy and the collectors
-#   refusals    anything but `deploy <sha> sha256:<digest>`, `rollback` or `status` is
-#               refused with exit status 2 before any docker call (shells, scp, sftp,
-#               injection, case, spacing, length, an unknown profile)
+#   refusals    anything but `deploy <sha> sha256:<digest>`, `rollback [<sha>]` or
+#               `status` is refused with exit status 2 before any docker call (shells,
+#               scp, sftp, injection, case, spacing, length, an unknown profile)
 #   deploy      pull by digest, revision label check, migrate, then up, then the
-#               running-image and /readyz checks; clean environment; the record
+#               running-image, /healthz and /readyz checks; clean environment; the record
 #   rollback    no migration; walks back through previous releases
-#   failures    each failing step stops the deploy, keeps the record and logs it
+#   failures    each failing step stops the deploy, keeps the record and logs it; a
+#               failure at start reverts, and says so when the revert fails too
 #   lock        a deploy waits for /opt/focus/deploy.lock
 #   prod        (#29) the prod key: hostile inputs; it can't roll back or touch dev, and
 #               the dev key can't touch prod; `candidate` reads dev's records only; a
 #               deploy needs dev to have run that exact sha and digest; it re-points the
 #               host-wide :<sha> at prod's digest under the lock; record, log, lock;
 #               a failing check or migration leaves the record and the running app alone
+#   revert      (#30) a deliberately broken build (never healthy, or no /readyz) on dev,
+#               and one broken on prod only: the deploy fails, and the release that ran
+#               before starts again by its digest, without migrating, under the same lock
+#   known-good  (#30) rollback picks the newest release that passed the checks there and
+#               wasn't rolled back from, re-tags it from its own digest (pulling it if
+#               needed), never migrates; `rollback <sha>` takes only a known-good release;
+#               a release dev rolled back from isn't promotable until dev runs it again; a
+#               rollback whose target fails starts the release it left again
+#   rollback-prod (#30) the prod rollback key: hostile inputs; only rollback and status;
+#               only prod's own known-good releases; never touches dev; the lock and the
+#               clean environment
 set -euo pipefail
 
 SRC=/src
@@ -55,13 +67,28 @@ clean_env_only() {
   return 1
 }
 last_history() { tail -n1 "$HISTORY"; }
+# put <file> <line>: (re)write a fake-docker state file the deploy user also writes. Root
+# can't open a file the deploy user owns in the sticky $FAKE dirs (fs.protected_regular),
+# so it replaces it with a world-writable one of its own.
+put() {
+  local tmp
+  tmp=$(mktemp "$FAKE/.put.XXXXXX")
+  printf '%s\n' "$2" >"$tmp"
+  chmod 0666 "$tmp"
+  mv -f "$tmp" "$1"
+}
+# History lines written since hmark: new_history [<file>].
+hmark() { hmark=$(wc -l <"${1:-$HISTORY}"); }
+new_history() { tail -n "+$((hmark + 1))" "${1:-$HISTORY}"; }
+# after <text> <pattern>: the lines from the first one containing pattern onwards.
+after() { tail -n "+$(line_of "$1" "$2")" <<<"$1"; }
 
 echo "--- Setup: git, a fake docker, an upstream repo"
 apt-get update -q >/dev/null
 apt-get install -y -q --no-install-recommends git >/dev/null
 mv /usr/bin/docker /usr/bin/docker.real
 install -m 0755 "$SRC/server/tests/fake_docker.sh" /usr/bin/docker
-install -d -m 1777 "$FAKE" "$FAKE/labels" "$FAKE/local" "$FAKE/tags" "$FAKE/fail"
+install -d -m 1777 "$FAKE" "$FAKE/labels" "$FAKE/local" "$FAKE/tags" "$FAKE/fail" "$FAKE/broken"
 install -m 0666 /dev/null "$FAKE/calls.log"
 
 # Upstream "GitHub": main has the working tree's infra/ (A), then a commit with a
@@ -159,13 +186,14 @@ done
 echo "--- CI keys behind the real sshd"
 keys=/tmp/ci-keys
 mkdir -p "$keys"
-for who in dev prod unknown env; do
+for who in dev prod rollback unknown env; do
   ssh-keygen -q -t ed25519 -N '' -C "focus-ci-$who" -f "$keys/$who"
 done
 {
   echo "# test keys (focus_ci.sh)"
   printf 'restrict,command="/opt/focus/bin/focus-ci dev" %s\n' "$(cat "$keys/dev.pub")"
   printf 'restrict,command="/opt/focus/bin/focus-ci prod" %s\n' "$(cat "$keys/prod.pub")"
+  printf 'restrict,command="/opt/focus/bin/focus-ci rollback-prod" %s\n' "$(cat "$keys/rollback.pub")"
   printf 'restrict,command="/opt/focus/bin/focus-ci staging" %s\n' "$(cat "$keys/unknown.pub")"
   printf 'restrict,command="env" %s\n' "$(cat "$keys/env.pub")"
 } >/etc/ssh/authorized_keys/deploy
@@ -223,8 +251,34 @@ refused=(
   "status"$'\n'"id"
   "status extra"
   "STATUS"
-  "rollback $S1"
+  "ROLLBACK"
   "rollback $S1 $D1"
+  "rollback $D1"
+  "rollback ${S1^^}"
+  "rollback ${S1:1}"
+  "rollback ${S1}0"
+  "rollback  $S1"
+  " rollback"
+  "rollback "
+  "rollback $S1 "
+  "rollback;id"
+  "rollback $S1;id"
+  "rollback \$(id)"
+  "rollback ../prod"
+  "rollback prod"
+  "rollback"$'\n'"id"
+  "rollback $S1"$'\n'"id"
+  "rollback expect"
+  "rollback expect ${D1#sha256:}"
+  "rollback expect ${D1^^}"
+  "rollback expect $S1"
+  "rollback $S1 expect"
+  "rollback expect $D1 extra"
+  "rollback expect $D1 $S1"
+  "rollback  expect $D1"
+  "rollback expect  $D1"
+  "rollback EXPECT $D1"
+  "rollback expect $D1;id"
   "scp -t /tmp"
   "/usr/lib/openssh/sftp-server"
   "deploy $S1 $D1 $(printf 'x%.0s' {1..200})"
@@ -284,7 +338,9 @@ check "pull before migrate" before "$calls" ":: pull --quiet" "$migrate"
 check "migrates with a one-shot container" contains "$calls" "$migrate"
 check "migrate before up" before "$calls" "$migrate" "$start"
 check "checks the running image after up" before "$calls" "$start" ":: inspect --format {{.Image}} container-dev-app"
+check "checks /healthz in the app" contains "$calls" "exec -T app python -c import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz'"
 check "checks /readyz in the app" contains "$calls" "exec -T app python -c import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz'"
+check "the endpoint checks come after the running-image check" before "$calls" ":: inspect --format {{.Image}}" "/healthz"
 check "every compose call gets APP_TAG=<sha>" eq "$(grep ':: compose' <<<"$calls" | grep -vc "app_tag=$S1 ")" 0
 check "docker gets PATH, HOME and APP_TAG only (no LC_*, LANG or SSH_*)" clean_env_only "$calls"
 check "runs as the deploy user" eq "$(grep -vc "uid=$(id -u deploy) " <<<"$calls")" 0
@@ -324,8 +380,12 @@ check "rollback: clean environment" clean_env_only "$calls"
 check "record: rolled back to the first release" eq "$(value tag) $(value digest)" "$S1 $D1"
 check "record: action rollback" eq "$(value action)" rollback
 check "record: the first release's own previous (none)" eq "$(value previous_tag)" ""
+check "history: the rollback names the release it left" \
+  contains "$(last_history)" "action=rollback outcome=ok tag=$S1 digest=$D1 previous_tag=- previous_digest=- infra=$A from_tag=$S2 from_digest=$D2"
+check "rollback said dev's left release isn't promotable" contains "$out" "prod won't take it from dev"
 ci rollback
 check "a second rollback has nowhere further back to go (status 1)" eq "$rc" 1
+check "it says so" contains "$out" "nothing to roll back to"
 check "record unchanged by it" eq "$(value tag) $(value action)" "$S1 rollback"
 
 echo "--- Failing steps stop the deploy and keep the record"
@@ -333,30 +393,53 @@ deploy_fails() { # <description> <step> <sha> <digest> <must not appear>
   local desc=$1 step=$2 tag=$3 dig=$4 absent=$5 before_record
   before_record=$(cat "$RECORD")
   mark
+  hmark
   ci "deploy $tag $dig"
   check "$desc: fails (status 1)" eq "$rc" 1
   check "$desc: says at which step" contains "$out" "failed at '$step'"
   check "$desc: stops before $absent" not_contains "$(new_calls)" "$absent"
   check "$desc: record unchanged" eq "$(cat "$RECORD")" "$before_record"
-  check "$desc: logged as failed" contains "$(last_history)" "action=deploy outcome=failed tag=$tag digest=$dig"
-  check "$desc: logged step" contains "$(last_history)" "step=$step"
+  check "$desc: logged as failed" contains "$(new_history | head -n1)" "action=deploy outcome=failed tag=$tag digest=$dig"
+  check "$desc: logged step" contains "$(new_history | head -n1)" "step=$step"
+}
+# Before `up`, the running app is untouched: nothing to revert.
+no_revert() { # <description>
+  check "$1: no revert (the app was never touched)" not_contains "$(new_history)" "action=revert"
+  check "$1: no up at all" not_contains "$(new_calls)" " up -d"
 }
 deploy_fails "image built from another commit" pull "$S2" "$D3" "alembic"
 check "image built from another commit: says so" contains "$out" "was built from"
+no_revert "image built from another commit"
 deploy_fails "digest not in the registry" pull "$S2" "$D4" "alembic"
+no_revert "digest not in the registry"
 touch "$FAKE/fail/migrate"
 deploy_fails "failed migration" migrate "$S2" "$D2" " up -d"
 rm "$FAKE/fail/migrate"
+no_revert "failed migration"
+# These fail every start, the revert's too (a broken host rather than a broken build;
+# the broken builds come with #30's tests below): the revert is tried and fails.
+revert_fails_too() { # <description>
+  check "$1: tries to start the release that ran before" contains "$(new_calls)" "app_tag=$S1 :: $compose_args up -d --wait"
+  check "$1: the revert doesn't migrate" not_contains "$(after "$(new_calls)" "app_tag=$S2 :: $compose_args up")" "alembic"
+  check "$1: logs the failed revert" contains "$(new_history | sed -n 2p)" "action=revert outcome=failed tag=$S1 digest=$D1"
+  check "$1: says the revert failed too" contains "$out" "reverting to $S1 failed too"
+}
 touch "$FAKE/fail/up"
 deploy_fails "app doesn't turn healthy" start "$S2" "$D2" "readyz"
 rm "$FAKE/fail/up"
+revert_fails_too "app doesn't turn healthy"
 touch "$FAKE/fail/verify"
 deploy_fails "app runs another image" start "$S2" "$D2" "readyz"
 check "app runs another image: says so" contains "$out" "the app runs image"
 rm "$FAKE/fail/verify"
+revert_fails_too "app runs another image"
 touch "$FAKE/fail/exec"
-deploy_fails "/readyz doesn't answer" start "$S2" "$D2" "no such call"
+deploy_fails "/healthz doesn't answer" start "$S2" "$D2" "no such call"
+check "/healthz doesn't answer: says so" contains "$out" "/healthz doesn't answer inside the app container"
+check "/healthz doesn't answer: retried $((3)) times, for the new release and the revert" \
+  eq "$(new_calls | grep -c "/healthz")" 6
 rm "$FAKE/fail/exec"
+revert_fails_too "/healthz doesn't answer"
 
 echo "--- One deploy at a time: the lock"
 rm -f /tmp/released
@@ -537,13 +620,16 @@ echo "--- Prod: a failing step stops the deploy and keeps the record"
 before_record=$(cat "$PROD_RECORD")
 touch "$FAKE/fail/verify"
 mark
+hmark "$PROD_HISTORY"
 prod "deploy $S1 $D1"
 rm "$FAKE/fail/verify"
 check "prod runs another image: fails (status 1)" eq "$rc" 1
 check "prod runs another image: at start" contains "$out" "failed at 'start'"
 check "prod runs another image: says so" contains "$out" "the app runs image"
 check "prod runs another image: record unchanged" eq "$(cat "$PROD_RECORD")" "$before_record"
-check "prod runs another image: logged" contains "$(tail -n1 "$PROD_HISTORY")" "outcome=failed tag=$S1 digest=$D1 previous_tag=$S2"
+check "prod runs another image: logged" contains "$(new_history "$PROD_HISTORY" | head -n1)" "outcome=failed tag=$S1 digest=$D1 previous_tag=$S2"
+check "prod runs another image: the revert to S2 was tried, and failed the same way" \
+  contains "$(new_history "$PROD_HISTORY" | sed -n 2p)" "env=prod action=revert outcome=failed tag=$S2 digest=$D2"
 # An older release on a newer schema: alembic can't locate the revision, before any DDL.
 before_record=$(cat "$PROD_RECORD")
 before_running=$(cat "$FAKE/running-prod")
@@ -576,6 +662,341 @@ first=$(new_calls | head -n1 | cut -d' ' -f1)
 check "prod: no docker call while another holder had the lock" \
   awk -v a="$first" -v b="$(cat /tmp/released)" 'BEGIN { exit !(a >= b) }'
 check "dev's state still untouched by every prod request" eq "$(cat "$RECORD" "$HISTORY" "$FAKE/running-dev")" "$dev_state"
+
+echo "--- Automatic revert: a deliberately broken build on dev (#30)"
+S4=$(sha 0xa4) D7=$(digest 0xd7) D8=$(digest 0xd8)
+echo "$S4" >"$FAKE/labels/$D7"
+echo up >"$FAKE/broken/$D7" # never turns healthy: /healthz fails, `up --wait` fails
+echo "$S4" >"$FAKE/labels/$D8"
+echo readyz >"$FAKE/broken/$D8" # healthy, but /readyz (the database) doesn't answer
+check "sanity: dev runs S1 (the re-push D5) before the broken deploys" eq "$(value tag) $(value digest)" "$S1 $D5"
+broken_deploy() { # <description> <digest> <what the output says failed>
+  local desc=$1 dig=$2 says=$3 before_record
+  before_record=$(cat "$RECORD")
+  put "$FAKE/tags/$S1" "$D2" # someone moved the host-wide :S1 (prod has D1, dev D5)
+  touch "$FAKE/probe-lock"
+  rm -f "$FAKE/lock-probe.log"
+  mark
+  hmark
+  ci_as dev -o 'SetEnv=LC_FOCUS=leak LANG=C.UTF-8' -- "deploy $S4 $dig"
+  rm "$FAKE/probe-lock"
+  printf '%s\n' "$out" | sed 's/^/     | /'
+  calls=$(new_calls)
+  check "$desc: the deploy fails (status 1), so the workflow goes red" eq "$rc" 1
+  check "$desc: says why" contains "$out" "$says"
+  check "$desc: says it failed at start and reverted" contains "$out" "failed at 'start' (its checks failed): reverted to $S1"
+  check "$desc: it migrated and started the broken build first" before "$calls" "app_tag=$S4 $migrate" "app_tag=$S4 $start"
+  check "$desc: then re-tags :S1 from dev's own digest D5" before "$calls" "app_tag=$S4 $start" ":: tag $REPO@$D5 $REPO:$S1"
+  check "$desc: then starts S1 again" before "$calls" ":: tag $REPO@$D5 $REPO:$S1" "app_tag=$S1 $start"
+  check "$desc: the revert doesn't migrate" not_contains "$(after "$calls" "app_tag=$S4 $start")" "alembic"
+  check "$desc: the revert checks the running image" contains "$(after "$calls" "app_tag=$S1 $start")" ":: inspect --format {{.Image}} container-dev-app"
+  check "$desc: the revert checks /healthz and /readyz" \
+    contains "$(after "$calls" "app_tag=$S1 $start")" "app_tag=$S1 :: $compose_args exec -T app python -c import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz'"
+  check "$desc: dev runs D5 again" eq "$(cat "$FAKE/running-dev")" "$D5"
+  check "$desc: the host-wide :S1 points at D5 again" eq "$(cat "$FAKE/tags/$S1")" "$D5"
+  check "$desc: the record still names S1 D5 (unchanged)" eq "$(cat "$RECORD")" "$before_record"
+  check "$desc: the failed deploy is logged" contains "$(new_history | sed -n 1p)" "action=deploy outcome=failed tag=$S4 digest=$dig previous_tag=$S1 previous_digest=$D5"
+  check "$desc: with its step" contains "$(new_history | sed -n 1p)" "step=start"
+  check "$desc: then the revert" contains "$(new_history | sed -n 2p)" "action=revert outcome=ok tag=$S1 digest=$D5"
+  check "$desc: which names what failed" contains "$(new_history | sed -n 2p)" "failed_action=deploy failed_tag=$S4 failed_digest=$dig"
+  check "$desc: two history lines" eq "$(new_history | wc -l)" 2
+  check "$desc: docker gets PATH, HOME and APP_TAG only" clean_env_only "$calls"
+  check "$desc: no prod file in any call" not_contains "$calls" "/opt/focus/prod/"
+  check "$desc: both starts ran under the deploy lock" \
+    eq "$(cat "$FAKE/lock-probe.log")" "app_tag=$S4 lock=held"$'\n'"app_tag=$S1 lock=held"
+  prod "candidate $S4"
+  check "$desc: prod can't take the broken build" eq "$rc" 1
+  check "$desc: candidate says dev never ran it successfully" contains "$out" "dev ran no release of $S4 successfully"
+}
+broken_deploy "never healthy" "$D7" "focus-ci: FAILED"
+check "never healthy: no endpoint check on the broken build (up --wait failed)" \
+  not_contains "$(new_calls | grep "app_tag=$S4 ")" "exec -T app"
+broken_deploy "no /readyz" "$D8" "/readyz doesn't answer inside the app container"
+check "no /readyz: /healthz passed on the broken build, /readyz retried 3 times" \
+  eq "$(new_calls | grep "app_tag=$S4 " | grep -c "8000/readyz")" 3
+
+echo "--- A dropped SSH session doesn't stop the revert (#30 review)"
+before_record=$(cat "$RECORD")
+echo 2 >"$FAKE/sleep-up" # each start takes 2 s
+mark
+hmark
+ssh "${ssh_opts[@]}" -i "$keys/dev" deploy@127.0.0.1 "deploy $S4 $D7" >/tmp/dropped.out 2>&1 &
+client=$!
+for _ in $(seq 100); do # until the broken build's start has begun
+  grep -q "app_tag=$S4 :: $compose_args up" <<<"$(new_calls)" && break
+  sleep 0.1
+done
+kill "$client"
+wait "$client" || true
+flock -w 60 /opt/focus/deploy.lock true # focus-ci is done once the lock is free
+rm "$FAKE/sleep-up"
+check "dropped session: the client was gone before the revert began" not_contains "$(cat /tmp/dropped.out)" "revert:"
+check "dropped session: the failed deploy is logged" contains "$(new_history | sed -n 1p)" "action=deploy outcome=failed tag=$S4 digest=$D7"
+check "dropped session: the revert still ran and is logged" contains "$(new_history | sed -n 2p)" "action=revert outcome=ok tag=$S1 digest=$D5"
+check "dropped session: dev runs D5 again" eq "$(cat "$FAKE/running-dev")" "$D5"
+check "dropped session: record unchanged" eq "$(cat "$RECORD")" "$before_record"
+check "dropped session: the revert checked /readyz" contains "$(after "$(new_calls)" "app_tag=$S1 :: $compose_args up")" "8000/readyz"
+
+echo "--- Automatic revert on prod: a build broken only there (#30)"
+S5=$(sha 0xa5) D9=$(digest 0xd9)
+echo "$S5" >"$FAKE/labels/$D9"
+echo "up prod" >"$FAKE/broken/$D9"
+ci "deploy $S5 $D9"
+check "dev runs S5 fine" eq "$rc" 0
+dev_state=$(cat "$RECORD" "$HISTORY" "$FAKE/running-dev")
+before_record=$(cat "$PROD_RECORD")
+check "sanity: prod runs S1 D1" eq "$(pvalue tag) $(pvalue digest) $(cat "$FAKE/running-prod")" "$S1 $D1 $D1"
+mark
+hmark "$PROD_HISTORY"
+prod "deploy $S5 $D9"
+calls=$(new_calls)
+check "prod deploy of the broken build fails (status 1)" eq "$rc" 1
+check "prod: reverted to S1" contains "$out" "reverted to $S1"
+check "prod: migrated prod for S5, then started it" before "$calls" "app_tag=$S5 $prod_migrate" "app_tag=$S5 $prod_start"
+check "prod: the revert re-tags :S1 from prod's digest D1" before "$calls" "app_tag=$S5 $prod_start" ":: tag $REPO@$D1 $REPO:$S1"
+check "prod: the revert starts S1, no migration" contains "$(after "$calls" "app_tag=$S5 $prod_start")" "app_tag=$S1 $prod_start"
+check "prod: the revert doesn't migrate" not_contains "$(after "$calls" "app_tag=$S5 $prod_start")" "alembic"
+check "prod runs D1 again" eq "$(cat "$FAKE/running-prod")" "$D1"
+check "prod record unchanged" eq "$(cat "$PROD_RECORD")" "$before_record"
+check "prod log: failed deploy, then the revert" \
+  eq "$(new_history "$PROD_HISTORY" | sed 's/^time=[^ ]* //' | cut -d' ' -f1-5)" \
+  "env=prod action=deploy outcome=failed tag=$S5 digest=$D9"$'\n'"env=prod action=revert outcome=ok tag=$S1 digest=$D1"
+check "prod revert: every compose call is prod's" eq "$(grep ':: compose' <<<"$calls" | grep -vc ":: $prod_compose ")" 0
+check "prod revert: dev's state untouched" eq "$(cat "$RECORD" "$HISTORY" "$FAKE/running-dev")" "$dev_state"
+check "prod revert: clean environment" clean_env_only "$calls"
+
+echo "--- Rollback picks the last known-good release (#30)"
+S6=$(sha 0xa6) S7=$(sha 0xa7) S8=$(sha 0xa8) S9=$(sha 0xa9)
+D10=$(digest 0xe0) D11=$(digest 0xe1) D12=$(digest 0xe2) D13=$(digest 0xe3)
+echo "$S6" >"$FAKE/labels/$D10"
+echo "$S7" >"$FAKE/labels/$D11"
+echo "$S8" >"$FAKE/labels/$D12"
+echo "$S9" >"$FAKE/labels/$D13"
+for release in "$S6 $D10" "$S7 $D11" "$S8 $D12"; do
+  ci "deploy $release"
+  check "deploy $release succeeds" eq "$rc" 0
+done
+check "record: S8, rollback target S7" eq "$(value tag) $(value previous_tag)" "$S8 $S7"
+put "$FAKE/tags/$S7" "$D10" # the host-wide :S7 moved
+rm "$FAKE/local/$D11"         # and S7's image was pruned from the host
+before_record=$(cat "$RECORD")
+mark
+hmark
+ci "rollback expect $D11"
+check "rollback expect <not the current digest>: fails (status 1)" eq "$rc" 1
+check "rollback expect: says a deploy or rollback ran in between" contains "$out" "not the expected $D11"
+check "rollback expect: no docker call" no_new_calls
+check "rollback expect: record unchanged, nothing logged" eq "$(cat "$RECORD")$(new_history)" "$before_record"
+mark
+ci "rollback expect $D12"
+calls=$(new_calls)
+check "rollback succeeds" eq "$rc" 0
+check "rollback prints what it left and what runs now" contains "$out" "result from_tag=$S8 from_digest=$D12 tag=$S7 digest=$D11"
+check "rollback: to S7, the release before S8" eq "$(value tag) $(value digest) $(value action)" "$S7 $D11 rollback"
+check "rollback: pulls S7 by its recorded digest" contains "$calls" ":: pull --quiet $REPO@$D11"
+check "rollback: checks its revision label" contains "$calls" "org.opencontainers.image.revision\" }} $REPO@$D11"
+check "rollback: re-tags :S7 from its own digest" before "$calls" ":: tag $REPO@$D11 $REPO:$S7" "app_tag=$S7 $start"
+check "rollback: runs no migration" not_contains "$calls" "alembic"
+check "rollback: dev runs D11" eq "$(cat "$FAKE/running-dev")" "$D11"
+check "rollback: checks /healthz and /readyz" contains "$calls" "8000/readyz"
+check "rollback: dev's files only" not_contains "$calls" "/opt/focus/prod/"
+check "rollback: clean environment" clean_env_only "$calls"
+check "rollback: the next target is S6" eq "$(value previous_tag) $(value previous_digest)" "$S6 $D10"
+check "rollback: logged with the release it left" contains "$(last_history)" "action=rollback outcome=ok tag=$S7 digest=$D11 previous_tag=$S6 previous_digest=$D10 infra=$D from_tag=$S8 from_digest=$D12"
+
+echo "--- A release dev rolled back from isn't promotable (#30, #125 review)"
+mark
+prod "candidate $S8"
+check "candidate of a rolled-back release: fails (status 1)" eq "$rc" 1
+check "candidate: says dev rolled back from it" contains "$out" "dev rolled back from every release of $S8"
+before_record=$(cat "$PROD_RECORD")
+hmark "$PROD_HISTORY"
+prod "deploy $S8 $D12"
+check "prod deploy of a rolled-back release: fails (status 1)" eq "$rc" 1
+check "prod deploy: at the promote step" contains "$out" "failed at 'promote'"
+check "prod deploy: says it isn't promotable" contains "$out" "dev rolled back from $S8 $D12, so it is not promotable"
+check "prod deploy: no docker call" no_new_calls
+check "prod deploy: prod record unchanged" eq "$(cat "$PROD_RECORD")" "$before_record"
+check "prod deploy: logged as failed at promote" contains "$(new_history "$PROD_HISTORY")" "action=deploy outcome=failed tag=$S8 digest=$D12"
+prod "candidate $S7"
+check "the release dev rolled back to is promotable" eq "$rc" 0
+prod candidate
+check "candidate without a sha: dev's current release (S7)" contains "$out" "tag=$S7"
+
+echo "--- rollback <sha>: only a known-good release"
+rollback_refused() { # <description> <sha>
+  local before_record
+  before_record=$(cat "$RECORD")
+  mark
+  hmark
+  ci "rollback $2"
+  check "$1: fails (status 1)" eq "$rc" 1
+  check "$1: says it's not known-good" contains "$out" "no known-good release of $2 is recorded on dev"
+  check "$1: no docker call" no_new_calls
+  check "$1: record unchanged" eq "$(cat "$RECORD")" "$before_record"
+  check "$1: nothing logged" eq "$(new_history)" ""
+}
+rollback_refused "the release dev rolled back from" "$S8"
+rollback_refused "the current release" "$S7"
+rollback_refused "a commit whose image dev never ran" "$S3"
+rollback_refused "a build that only failed (and was reverted)" "$S4"
+rollback_refused "a commit nobody deployed" "$(sha 0xbad)"
+ci rollback
+check "rolling back again goes further back: S6" eq "$rc $(value tag)" "0 $S6"
+check "the next target skips S8 and S7, both rolled back from: S5" eq "$(value previous_tag)" "$S5"
+ci "deploy $S9 $D13"
+check "deploy S9: the rollback target is S6, not a rolled-back release" eq "$rc $(value previous_tag)" "0 $S6"
+mark
+ci "rollback $S1"
+check "rollback <sha>: succeeds" eq "$rc" 0
+check "rollback <sha>: the newest known-good digest of that commit (D5, not D1)" eq "$(value tag) $(value digest)" "$S1 $D5"
+check "rollback <sha>: no migration" not_contains "$(new_calls)" "alembic"
+check "rollback <sha>: names the release it left" contains "$(last_history)" "from_tag=$S9 from_digest=$D13"
+ci "deploy $S8 $D12"
+check "dev deploys S8 again" eq "$rc" 0
+prod "candidate $S8"
+check "once dev runs S8 again, it's promotable again" eq "$rc" 0
+check "candidate: S8's digest" contains "$out" "digest=$D12"
+
+echo "--- A rollback whose target fails starts the release it left again"
+echo up >"$FAKE/broken/$D5" # the target, S1 D5, turns out broken now
+before_record=$(cat "$RECORD")
+mark
+hmark
+ci rollback
+rm "$FAKE/broken/$D5"
+calls=$(new_calls)
+check "failed rollback: fails (status 1)" eq "$rc" 1
+check "failed rollback: tried S1 D5" contains "$calls" "app_tag=$S1 $start"
+check "failed rollback: says so and went back to S8" contains "$out" "rollback of $S1 failed at 'start' (its checks failed): reverted to $S8"
+check "failed rollback: dev runs S8 again" eq "$(cat "$FAKE/running-dev")" "$D12"
+check "failed rollback: no migration" not_contains "$calls" "alembic"
+check "failed rollback: record unchanged" eq "$(cat "$RECORD")" "$before_record"
+check "failed rollback: logged" contains "$(new_history | sed -n 1p)" "action=rollback outcome=failed tag=$S1 digest=$D5"
+check "failed rollback: and the revert" contains "$(new_history | sed -n 2p)" "action=revert outcome=ok tag=$S8 digest=$D12"
+prod "candidate $S8"
+check "failed rollback: S8 wasn't rolled back from, so it stays promotable" eq "$rc" 0
+
+echo "--- The prod rollback key: rollback-prod (#30)"
+rb() { ci_as rollback -- "$@"; }
+rb_refused=(
+  "${refused[@]}"
+  "deploy $S1 $D1"
+  "deploy $S2 $D2"
+  "candidate"
+  "candidate $S1"
+  "status prod"
+  "status dev"
+  "rollback dev"
+  "rollback $S1 dev"
+)
+for request in "${rb_refused[@]}"; do
+  mark
+  rb "$request"
+  shown=$(printf '%q' "${request:0:60}")
+  check "rollback key refused: $shown" eq "$rc" 2
+  check "rollback key refused with a message: $shown" contains "$out" "focus-ci: refused"
+  check "rollback key: no docker call for: $shown" no_new_calls
+done
+rb "deploy $S1 $D1"
+check "rollback key can't deploy" contains "$out" "deploy isn't allowed for profile rollback-prod"
+rb candidate
+check "rollback key can't read dev's records" contains "$out" "candidate isn't allowed for profile rollback-prod"
+rb status
+check "rollback key: status prints prod's record" eq "$out" "$(cat "$PROD_RECORD")"
+prod_rollback_refused() { # <description> <sha>
+  local before_record
+  before_record=$(cat "$PROD_RECORD")
+  mark
+  rb "rollback $2"
+  check "rollback key, $1: fails (status 1)" eq "$rc" 1
+  check "rollback key, $1: not known-good on prod" contains "$out" "no known-good release of $2 is recorded on prod"
+  check "rollback key, $1: no docker call" no_new_calls
+  check "rollback key, $1: prod record unchanged" eq "$(cat "$PROD_RECORD")" "$before_record"
+}
+prod_rollback_refused "a release only dev ran" "$S8"
+prod_rollback_refused "a release prod only failed with" "$S5"
+prod_rollback_refused "prod's current release" "$S1"
+prod_rollback_refused "a commit nobody deployed" "$(sha 0xbad)"
+
+dev_state=$(cat "$RECORD" "$HISTORY" "$FAKE/running-dev")
+rm "$FAKE/local/$D2" # pruned from the host: the rollback pulls it by its recorded digest
+put "$FAKE/tags/$S2" "$D5"
+rm -f /tmp/released
+flock /opt/focus/deploy.lock bash -c 'sleep 3; date +%s.%N > /tmp/released' &
+holder=$!
+sleep 0.5
+mark
+ci_as rollback -o 'SetEnv=LC_FOCUS=leak LANG=C.UTF-8' -- "rollback expect $D1"
+wait "$holder"
+printf '%s\n' "$out" | sed 's/^/     | /'
+calls=$(new_calls)
+check "rollback key: rollback succeeds once the lock is free" eq "$rc" 0
+check "rollback key: prints the result" contains "$out" "result from_tag=$S1 from_digest=$D1 tag=$S2 digest=$D2"
+check "rollback key: said it was waiting" contains "$out" "waiting up to 900s"
+first=$(new_calls | head -n1 | cut -d' ' -f1)
+check "rollback key: no docker call while another holder had the lock" \
+  awk -v a="$first" -v b="$(cat /tmp/released)" 'BEGIN { exit !(a >= b) }'
+check "rollback key: prod rolled back to S2, prod's release before S1" eq "$(pvalue tag) $(pvalue digest) $(pvalue action)" "$S2 $D2 rollback"
+check "rollback key: pulls S2 by prod's recorded digest" contains "$calls" ":: pull --quiet $REPO@$D2"
+check "rollback key: re-tags :S2 from it" before "$calls" ":: tag $REPO@$D2 $REPO:$S2" "app_tag=$S2 $prod_start"
+check "rollback key: runs no migration" not_contains "$calls" "alembic"
+check "rollback key: prod runs D2" eq "$(cat "$FAKE/running-prod")" "$D2"
+check "rollback key: every compose call is prod's, APP_TAG=S2" eq "$(grep ':: compose' <<<"$calls" | grep -vc "app_tag=$S2 :: $prod_compose ")" 0
+check "rollback key: no dev file in any call" not_contains "$calls" "/opt/focus/dev/"
+check "rollback key: docker gets PATH, HOME and APP_TAG only" clean_env_only "$calls"
+check "rollback key: dev's state untouched" eq "$(cat "$RECORD" "$HISTORY" "$FAKE/running-dev")" "$dev_state"
+check "rollback key: logged in prod's log" contains "$(tail -n1 "$PROD_HISTORY")" "env=prod action=rollback outcome=ok tag=$S2 digest=$D2"
+check "rollback key: with the release it left" contains "$(tail -n1 "$PROD_HISTORY")" "from_tag=$S1 from_digest=$D1"
+check "rollback key: nothing further back (S1 was rolled back from)" eq "$(pvalue previous_tag)" ""
+rb rollback
+check "rollback key: a second rollback has nowhere to go (status 1)" eq "$rc" 1
+check "rollback key: says so" contains "$out" "nothing to roll back to"
+prod "deploy $S1 $D1"
+check "prod key deploys S1 again (dev ran it)" eq "$rc" 0
+check "prod: the rollback target is S2 again" eq "$(pvalue previous_tag)" "$S2"
+mark
+rb "rollback $S2"
+check "rollback key: rollback <sha> to a known-good prod release succeeds" eq "$rc" 0
+check "rollback key: prod runs S2 D2" eq "$(pvalue tag) $(pvalue digest) $(cat "$FAKE/running-prod")" "$S2 $D2 $D2"
+check "rollback key: rollback <sha>: no migration" not_contains "$(new_calls)" "alembic"
+
+echo "--- releases.log is read strictly, and fails closed (#30 review)"
+cp -p "$HISTORY" /tmp/dev-history.bak
+log_refused() { # <description> <bad line> <reason shown>
+  local n
+  cp /tmp/dev-history.bak "$HISTORY"
+  printf '%s\n' "$2" >>"$HISTORY"
+  n=$(wc -l <"$HISTORY")
+  mark
+  ci rollback
+  check "$1: rollback fails (status 1)" eq "$rc" 1
+  check "$1: names the line and why" contains "$out" "/opt/focus/dev/releases.log line $n is malformed ($3)"
+  ci "deploy $S2 $D2"
+  check "$1: a deploy fails the same way, loudly" contains "$out" "line $n is malformed"
+  check "$1: no docker call" no_new_calls
+  prod "candidate $S2"
+  check "$1: prod's candidate fails too" eq "$rc" 1
+  check "$1: and says why" contains "$out" "line $n is malformed"
+}
+ok_line="time=2026-01-01T00:00:00Z env=dev action=deploy outcome=ok tag=$S2 digest=$D2 previous_tag=- previous_digest=- infra=$D"
+log_refused "an empty key" "$ok_line =x" "=x isn't key=value"
+log_refused "a repeated key" "${ok_line/outcome=ok/outcome=failed} outcome=ok" "outcome appears twice"
+log_refused "an uppercase key" "${ok_line/outcome=ok/Outcome=ok}" "Outcome=ok isn't key=value"
+log_refused "a word without =" "$ok_line garbage" "garbage isn't key=value"
+cp /tmp/dev-history.bak "$HISTORY"
+printf '\n' >>"$HISTORY" # an empty line carries no claim: skipped
+S10=$(sha 0xaa) D14=$(digest 0xe4)
+echo "$S10" >"$FAKE/labels/$D14"
+hand_line="time=2026-01-01T00:00:00Z env=dev action=deploy outcome=ok tag=$S10 digest=$D14 previous_tag=- previous_digest=- infra=$D"
+printf '%s' "$hand_line" >>"$HISTORY" # no final newline
+prod "candidate $S10"
+check "a last line without a newline still counts" eq "$rc" 0
+check "it's that line's digest" contains "$out" "digest=$D14"
+ci "deploy $S10 $D14"
+check "the next deploy succeeds" eq "$rc" 0
+check "and doesn't glue its line onto the last one" eq "$(tail -n 2 "$HISTORY" | head -n 1)" "$hand_line"
+check "its own line is whole" contains "$(last_history)" "action=deploy outcome=ok tag=$S10 digest=$D14"
 
 pkill -f "sshd -p $SSH_PORT" || true
 finish

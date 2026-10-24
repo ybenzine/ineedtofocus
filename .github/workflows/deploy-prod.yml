@@ -27,8 +27,11 @@
 #
 # The prod key and host line are secrets of the `production` environment only; nothing
 # is stored at repo level. Until they're set, the deploy job skips with a notice; with only
-# one set, it fails red. #30 adds the automatic revert and `rollback.yml`, which uses its
-# own `rollback` environment and key.
+# one set, it fails red. If the release fails its checks after starting, focus-ci starts
+# the previous prod release again and the job fails (#30). Rolling prod back is
+# rollback.yml, with its own `rollback` environment and key, and no approval. focus-ci also
+# refuses (in `candidate` and `promote`) a release dev rolled back from, which this plan
+# can't see: such a run stops at the resolve or deploy step, before anything changes.
 #
 # .claude/settings.json denies agents `gh workflow run` with deploy-prod in it or with a
 # numeric workflow ID, and approving through `pending_deployments` or GraphQL
@@ -51,6 +54,13 @@ on:
         default: ""
 
 permissions: {}
+
+# `shell: bash` makes GitHub run every step with `bash --noprofile --norc -eo pipefail`.
+# Without it a step runs as `bash -e {0}`, and a pipeline takes its last command's status,
+# so `ssh … | tee` would hide a failed server request.
+defaults:
+  run:
+    shell: bash
 
 jobs:
   plan:
@@ -239,8 +249,8 @@ jobs:
       - name: Deploy over SSH (promotion check, pull by digest, migrate, start, check, record)
         id: deploy
         if: steps.config.outputs.configured == 'true'
-        # #30: the automatic revert to the record's previous release, when a check fails,
-        # goes in focus-ci's deploy; this step stays the same.
+        # A failed check after the start reverts to the release prod ran before (#30),
+        # inside focus-ci's deploy and under its lock; the step still fails.
         run: ssh -F "$SSH_CONFIG" focus-prod "deploy $TAG $DIGEST"
       - name: Read the server's release record
         id: record
@@ -285,6 +295,10 @@ jobs:
             echo "| Previous tag (rollback target) | \`${PREVIOUS_TAG:-none}\` |"
             echo "| Infra revision on the server | \`${INFRA_REVISION:-unknown}\` |"
             echo ""
+            if [[ $DEPLOY_OUTCOME == failure ]]; then
+              echo "The deploy failed and the record is unchanged. If the new release failed its checks after starting, the server started the previous release again (automatic revert, #30): see the deploy step's log."
+              echo ""
+            fi
             cat "$RUNNER_TEMP/smoke.md" 2> /dev/null || true
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Remove the deploy key
