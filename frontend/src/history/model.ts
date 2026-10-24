@@ -246,3 +246,81 @@ export function formatTime(iso: string, timeZone: string): string {
     new Date(iso),
   )
 }
+
+/** Goals are one line (AC7.3): line breaks become spaces. */
+export function oneLine(text: string): string {
+  return text.replace(/\s*[\r\n]+\s*/g, ' ')
+}
+
+function sortedTags(tags: Map<Tag, TagTotal>): TagTotal[] {
+  return [...tags.values()]
+    .filter((t) => t.sessions > 0)
+    .sort((a, b) => b.focusSeconds - a.focusSeconds)
+}
+
+/** The view without the sessions `ids` (archived): list, totals, tag breakdown and bars. */
+export function removeSessions(base: HistoryData, ids: ReadonlySet<string>): HistoryData {
+  const gone = base.sessions.filter((s) => ids.has(s.id))
+  if (gone.length === 0) return base
+  const byKey = new Map(base.buckets.map((b) => [b.date, { ...b }]))
+  const tagTotals = new Map<Tag, TagTotal>(base.tags.map((t) => [t.tag, { ...t }]))
+  let total = base.totalFocusSeconds
+  for (const s of gone) {
+    const day = localDate(s.startedAt, base.timeZone)
+    const bucket = byKey.get(base.bucket === 'month' ? firstOfMonth(day) : day)
+    if (bucket) {
+      bucket.focusSeconds -= s.focusSeconds
+      bucket.sessions -= 1
+    }
+    const t = tagTotals.get(s.tag)
+    if (t) {
+      t.focusSeconds -= s.focusSeconds
+      t.sessions -= 1
+    }
+    total -= s.focusSeconds
+  }
+  return {
+    ...base,
+    totalFocusSeconds: Math.max(0, total),
+    sessionCount: base.sessionCount - gone.length,
+    tags: sortedTags(tagTotals),
+    buckets: [...byKey.values()],
+    sessions: base.sessions.filter((s) => !ids.has(s.id)),
+  }
+}
+
+export interface SessionChange {
+  tag?: Tag
+  goal?: string | null
+  indicator?: HistorySession['indicator']
+}
+
+/**
+ * Applies changes the device holds but the server hasn't confirmed (AC11.1) to the sessions of
+ * `base`, moving their time between tags in the breakdown. Which sessions a tag filter shows is
+ * still the server's call.
+ */
+export function applyChanges(
+  base: HistoryData,
+  changes: ReadonlyMap<string, SessionChange>,
+): HistoryData {
+  if (!base.sessions.some((s) => changes.has(s.id))) return base
+  const tagTotals = new Map<Tag, TagTotal>(base.tags.map((t) => [t.tag, { ...t }]))
+  const sessions = base.sessions.map((s) => {
+    const change = changes.get(s.id)
+    if (!change) return s
+    if (change.tag !== undefined && change.tag !== s.tag) {
+      const from = tagTotals.get(s.tag)
+      if (from) {
+        from.focusSeconds -= s.focusSeconds
+        from.sessions -= 1
+      }
+      const to = tagTotals.get(change.tag) ?? { tag: change.tag, focusSeconds: 0, sessions: 0 }
+      to.focusSeconds += s.focusSeconds
+      to.sessions += 1
+      tagTotals.set(change.tag, to)
+    }
+    return { ...s, ...change }
+  })
+  return { ...base, sessions, tags: sortedTags(tagTotals) }
+}

@@ -47,6 +47,8 @@ export interface DeviceSession {
   /** The session with any pending edit applied: what the user sees. */
   record: SessionRecord
   syncState: SyncState
+  /** The tag/goal change the server hasn't confirmed, if any (already applied in `record`). */
+  edit: SessionEdit | null
   editState: EditState | null
   indicator: SyncIndicator
   archivedAt: string | null
@@ -62,6 +64,7 @@ export function toDeviceSession(entry: StoredSession): DeviceSession {
   return {
     record: { ...entry.record, ...entry.edit },
     syncState: entry.syncState,
+    edit: entry.edit,
     editState: entry.editState,
     indicator: indicatorOf(entry),
     archivedAt: entry.archivedAt,
@@ -92,6 +95,13 @@ export interface SessionStore {
    * session is on the server. Does nothing for another account's session.
    */
   edit(ownerId: string, id: string, change: SessionEdit): Promise<void>
+  /**
+   * Records that the server archived (`archivedAt`) or restored (`null`) the session, so the
+   * device's copy follows. Does nothing for another account's session.
+   */
+  setArchived(ownerId: string, id: string, archivedAt: string | null): Promise<void>
+  /** Forgets the owner's archived sessions on the device (the server just deleted them all). */
+  removeArchived(ownerId: string): Promise<void>
   /** Deletes every session (and edit) of this owner from the device; others' stay. */
   clearOwner(ownerId: string | null): Promise<void>
 
@@ -193,6 +203,20 @@ export class IndexedDbSessionStore implements SessionStore {
             editVersion: entry.editVersion + 1,
           },
     )
+  }
+
+  async setArchived(ownerId: string, id: string, archivedAt: string | null): Promise<void> {
+    await this.#update(id, (entry) => (entry.ownerId === ownerId ? { archivedAt } : {}))
+  }
+
+  async removeArchived(ownerId: string): Promise<void> {
+    const sessions = this.#db.sessions
+    await this.#db.transaction('rw', sessions, async () => {
+      const ids = (await this.#owned(ownerId))
+        .filter((entry) => entry.syncState === 'synced' && entry.archivedAt !== null)
+        .map((entry) => entry.id)
+      await sessions.bulkDelete(ids)
+    })
   }
 
   async clearOwner(ownerId: string | null): Promise<void> {
