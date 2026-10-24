@@ -109,6 +109,9 @@ export default function HistoryScreen({
   // Sessions being archived: left out of every answer until the server has confirmed or refused.
   const archiving = useRef(new Set<string>())
   const lastEdited = useRef<string | null>(null)
+  // After Save the list reloads and its rows are rebuilt: focus goes back to that row's Edit
+  // button once the new list is on screen.
+  const pendingFocus = useRef<string | null>(null)
 
   useEffect(() => heading.current?.focus(), [])
   useEffect(() => {
@@ -129,11 +132,14 @@ export default function HistoryScreen({
     const id = lastEdited.current
     lastEdited.current = null
     if (id === null) return
-    const button = Array.from(document.querySelectorAll<HTMLElement>('[data-edit-for]')).find(
-      (el) => el.dataset.editFor === id,
-    )
-    ;(button ?? heading.current)?.focus()
+    ;(editButton(id) ?? heading.current)?.focus()
   }, [editingId])
+  useEffect(() => {
+    const id = pendingFocus.current
+    if (id === null || load.kind !== 'ready') return
+    pendingFocus.current = null
+    ;(editButton(id) ?? heading.current)?.focus()
+  }, [load])
   useEffect(() => {
     const onOnline = () => setReload((n) => n + 1)
     window.addEventListener('online', onOnline)
@@ -271,13 +277,19 @@ export default function HistoryScreen({
       if (owner !== null && sessions && onDevice) {
         await sessions.edit(owner, session.id, change)
         setEditingId(null)
+        pendingFocus.current = session.id
         setReload((n) => n + 1)
-        void sync?.syncNow().then(async (report) => {
+        void sync?.syncNow().then((report) => {
           if (!mounted.current) return
-          // Dropped by the server (409) rather than applied: archived on another device.
-          const entry = await sessions.get(session.id)
-          if (report.edited === 0 && entry && entry.editState === null && entry.edit === null) {
+          // Only when this sync dropped the edit after a 409 (the engine says so), and not while
+          // this session is being archived here: then the archive is what the user asked for.
+          if (report.dropped.includes(session.id) && !archiving.current.has(session.id)) {
             setProblem(ARCHIVED_ELSEWHERE)
+          }
+          // The reload rebuilds the rows: keep focus on this row's Edit button if it's there.
+          const active = document.activeElement
+          if (active === null || active === document.body || active === editButton(session.id)) {
+            pendingFocus.current = session.id
           }
           setReload((n) => n + 1)
         })
@@ -290,11 +302,13 @@ export default function HistoryScreen({
     const result = await sessionsApi.edit(session.id, change)
     if (result.kind === 'ok') {
       setEditingId(null)
+      pendingFocus.current = session.id
       cache.current.clear()
       setReload((n) => n + 1)
     } else if (result.kind === 'conflict') {
       setProblem(ARCHIVED_ELSEWHERE)
       setEditingId(null)
+      pendingFocus.current = session.id
       cache.current.clear()
       setReload((n) => n + 1)
     } else {
@@ -311,10 +325,11 @@ export default function HistoryScreen({
     const gone = new Set([session.id])
     archiving.current.add(session.id)
     setLoad({ ...load, data: removeSessions(load.data, gone) })
-    for (const [key, data] of cache.current) cache.current.set(key, removeSessions(data, gone))
+    // The cache is left alone until the server confirms: `archiving` keeps the session out of
+    // every answer meanwhile, and a failed archive (offline) must not wipe what's cached for
+    // offline use, such as other devices' sessions.
     const rollBack = (kind: string) => {
       archiving.current.delete(session.id)
-      cache.current.clear()
       setReload((n) => n + 1)
       if (kind === 'unsynced') {
         setProblem('Couldn’t archive the session: your change hasn’t synced yet. Try again soon.')
@@ -339,7 +354,7 @@ export default function HistoryScreen({
       await sessions?.setArchived(owner, session.id, result.value).catch(() => undefined)
     }
     archiving.current.delete(session.id)
-    cache.current.clear()
+    for (const [key, data] of cache.current) cache.current.set(key, removeSessions(data, gone))
     setUndo(session.id)
     setReload((n) => n + 1)
   }
@@ -350,8 +365,10 @@ export default function HistoryScreen({
     const result = await archiveApi.restore(undo)
     if (!mounted.current) return
     if (result.kind !== 'ok') return fail(result.kind, 'undo the archive')
-    if (owner !== null) await sessions?.setArchived(owner, undo, null).catch(() => undefined)
+    // Cleared before the next await, so the message is gone by the time the row is back.
+    const restored = undo
     setUndo(null)
+    if (owner !== null) await sessions?.setArchived(owner, restored, null).catch(() => undefined)
     cache.current.clear()
     setReload((n) => n + 1)
   }
@@ -472,6 +489,12 @@ export default function HistoryScreen({
         />
       )}
     </section>
+  )
+}
+
+function editButton(id: string): HTMLElement | undefined {
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-edit-for]')).find(
+    (el) => el.dataset.editFor === id,
   )
 }
 

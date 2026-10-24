@@ -43,4 +43,5 @@ ebur128=peak=true -f null -`). That sits below the alerts at background volume 5
 - **Offline:** it lives in `public/audio/`, so the service worker (#19) precaches it; the app loads
   it from `${import.meta.env.BASE_URL}audio/rain.mp3` and plays it through a looping Web Audio
   `AudioBufferSourceNode`.
-- **Listening check:** to be done by QA on a real device (see the PR).
+- **Listening check:** Yacine listened on 2026-10-23 and accepted it for the MVP; a real light-rain
+  recording replaces it in #135.
