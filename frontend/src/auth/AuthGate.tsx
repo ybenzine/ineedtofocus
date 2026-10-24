@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AccountContext, type Account } from './AccountContext.tsx'
 import { AuthError, httpAuthApi, type AuthApi, type User } from './api.ts'
 import AuthScreen from './AuthScreen.tsx'
@@ -8,6 +8,7 @@ import {
   clearLocalUserData,
   clearPendingLogout,
   forgetCachedUser,
+  hasActiveTimer,
   hasPendingLogout,
   loadCachedUser,
   SESSION_EXPIRED_EVENT,
@@ -37,6 +38,16 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
   const [user, setUser] = useState<User | null>(null)
   const [checking, setChecking] = useState(() => !hasPendingLogout())
   const [logoutPending, setLogoutPending] = useState(hasPendingLogout)
+  // The sign-in expired while a timer runs: the app (and its timer) stays up, signed out on the
+  // device, until the app calls `leaveExpired` once no timer runs (#120).
+  const [expired, setExpired] = useState(false)
+  // Read by the event handlers, which are set up once: a second 401 never ends the expired state.
+  const expiredRef = useRef(false)
+  const userRef = useRef<User | null>(null)
+  useEffect(() => {
+    expiredRef.current = expired
+    userRef.current = user
+  }, [expired, user])
 
   /** Ends the server session left over from an offline sign-out. True once none is left. */
   const flushLogout = useCallback(async (): Promise<boolean> => {
@@ -68,7 +79,14 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
           cacheUser(current)
         } else {
           // Expired or revoked elsewhere: keep the data for its owner (AC1.3).
+          const cached = loadCachedUser()
           forgetCachedUser()
+          if (cached && hasActiveTimer()) {
+            // A timer is still running or paused: keep its screen until it ends (#120).
+            setExpired(true)
+            setUser(cached)
+            return
+          }
         }
         setUser(current)
       })
@@ -89,7 +107,21 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
   useEffect(() => {
     // Signing out in one tab removes the remembered user; the others follow.
     function onStorage(event: StorageEvent) {
-      if (event.key === USER_KEY && event.newValue === null) setUser(null)
+      if (event.key !== USER_KEY) return
+      if (event.newValue === null) {
+        // Another tab signed out or found the sign-in expired. A timer running here keeps its
+        // screen (an explicit sign-out has removed the active session first).
+        if (userRef.current && hasActiveTimer()) setExpired(true)
+        else setUser(null)
+      } else if (expiredRef.current) {
+        // The same user signed in again in another tab: this one is signed in again too.
+        try {
+          const next = JSON.parse(event.newValue) as User
+          if (next.id === userRef.current?.id) setExpired(false)
+        } catch {
+          // Unreadable: stay as we are.
+        }
+      }
     }
     function onOnline() {
       void flushLogout()
@@ -97,11 +129,16 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
     // Sync got a 401: check the sign-in again, handled like an expiry found at start-up (the
     // data stays for its owner). An unreachable server leaves things as they are.
     function onExpired() {
+      // Already expired (or signed out): further 401s change nothing.
+      if (expiredRef.current || !userRef.current) return
       api.me().then(
         (current) => {
-          if (current) return
+          if (current || expiredRef.current || !userRef.current) return
           forgetCachedUser()
-          setUser(null)
+          // Keep the app mounted: it shows sign-in itself (`leaveExpired`) once no timer runs
+          // and no summary is open (#120).
+          expiredRef.current = true
+          setExpired(true)
         },
         () => undefined,
       )
@@ -120,6 +157,12 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
     if (!user) return null
     return {
       user,
+      expired,
+      leaveExpired: () => {
+        if (!expired) return
+        setExpired(false)
+        setUser(null)
+      },
       signOut: async () => {
         try {
           await api.signOut()
@@ -136,7 +179,7 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
         return null
       },
     }
-  }, [user, api])
+  }, [user, api, expired])
 
   if (checking) {
     return (
