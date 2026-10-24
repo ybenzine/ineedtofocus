@@ -85,10 +85,6 @@ describe('a 401 while a timer runs (#120)', () => {
     return read()
   }
 
-  async function settle() {
-    await act(() => vi.advanceTimersByTimeAsync(50))
-  }
-
   async function expire() {
     act(() => notifySessionExpired())
     await act(() => vi.advanceTimersByTimeAsync(10))
@@ -204,7 +200,9 @@ describe('a 401 while a timer runs (#120)', () => {
         running: true,
         settings: false,
       })
-      await act(() => preStarted)
+      await act(async () => {
+        await preStarted
+      })
       await act(() => vi.advanceTimersByTimeAsync(3000))
       expect(screen.getByRole('timer')).toBeInTheDocument()
       expect(screen.queryByRole('heading', { name: 'Sign in' })).not.toBeInTheDocument()
