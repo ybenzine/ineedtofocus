@@ -389,3 +389,20 @@ describe('SessionSummary', () => {
     expect(screen.getByText('Too short.')).toBeInTheDocument()
   })
 })
+
+describe('keyboard focus on screen changes (#151)', () => {
+  it('focuses the timer heading when the timer opens', async () => {
+    await mount({ mode: 'countdown', minutes: 25 })
+    expect(screen.getByRole('heading', { name: 'Focus' })).toHaveFocus()
+  })
+
+  it('focuses the summary heading when the summary opens', () => {
+    render(
+      <SessionSummary
+        outcome={{ kind: 'failed', message: 'Too short.' } as never}
+        onNewSession={() => undefined}
+      />,
+    )
+    expect(screen.getByRole('heading', { name: 'Session not saved' })).toHaveFocus()
+  })
+})
