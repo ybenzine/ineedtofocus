@@ -1,3 +1,6 @@
+/// <reference types="node" />
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { checkYoutubeLink, normaliseYoutubeUrl, parseYoutubeLink } from './youtubeLink.ts'
 
@@ -81,5 +84,54 @@ describe('parseYoutubeLink', () => {
       expect(checkYoutubeLink(raw)).toEqual({ ok: false, reason: 'no-id' })
     }
     expect(checkYoutubeLink('https://vimeo.com/x')).toEqual({ ok: false, reason: 'invalid' })
+  })
+})
+
+// The same cases run against the server in backend/tests/integration/test_settings.py, so the two
+// checks can't drift. `sent` is the link the client saves and POSTs.
+interface FixtureCase {
+  url: string
+  server_ok: boolean | null
+  client_ok: boolean
+  sent: string | null
+  reason: string
+}
+// Read at test time, not imported: the Docker build type-checks the tests with only `frontend/`.
+const SHARED = JSON.parse(
+  readFileSync(resolve(process.cwd(), '../_docs/api/fixtures/youtube-links.json'), 'utf8'),
+) as FixtureCase[]
+
+describe('shared client/server fixture', () => {
+  it.each(SHARED.map((c) => [c.reason, c] as const))('%s', (_reason, c) => {
+    const result = checkYoutubeLink(c.url)
+    expect(result.ok).toBe(c.client_ok)
+    if (result.ok) expect(result.link.url).toBe(c.sent)
+    else expect(c.sent).toBeNull()
+  })
+
+  it('sends the server nothing but ASCII', () => {
+    for (const c of SHARED) if (c.sent !== null) expect(c.sent).toMatch(/^[\x21-\x7e]+$/)
+  })
+})
+
+describe('Unicode versions', () => {
+  it.each([
+    ['U+2FFC', '\u2ffc'],
+    ['U+31EF', '\u31ef'],
+    ['U+1CC00', '\u{1cc00}'],
+    ['U+0897', '\u0897'],
+    ['U+1FA89', '\u{1fa89}'],
+  ])('percent-encodes %s, which newer Unicode assigns, so the server sees ASCII', (_n, char) => {
+    const result = checkYoutubeLink(`https://youtu.be/${ID}?x=${char}`)
+    expect(result.ok && result.link.url).toBe(
+      `https://youtu.be/${ID}?x=${encodeURIComponent(char)}`,
+    )
+  })
+
+  it('encodes the path and fragment too, and counts the length after encoding', () => {
+    expect(parseYoutubeLink(`https://youtu.be/${ID}/\u00e9#\u00e9`)?.url).toBe(
+      `https://youtu.be/${ID}/%C3%A9#%C3%A9`,
+    )
+    expect(parseYoutubeLink(`https://youtu.be/${ID}?x=${'\u00e9'.repeat(1000)}`)).toBeNull()
   })
 })

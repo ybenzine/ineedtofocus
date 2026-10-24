@@ -49,7 +49,11 @@ export const loadYoutubeApi: LoadYoutubeApi = () => {
   apiPromise ??= new Promise<YtNamespace>((resolve, reject) => {
     const previous = window.onYouTubeIframeAPIReady
     // A content blocker can stop the widget scripts after `iframe_api` itself has loaded.
+    const script = document.createElement('script')
     const timer = window.setTimeout(() => {
+      // Take both back, so a retry adds one script and one handler rather than a second of each.
+      script.remove()
+      window.onYouTubeIframeAPIReady = previous
       apiPromise = null
       reject(new Error('YouTube API timed out'))
     }, API_TIMEOUT_MS)
@@ -59,12 +63,12 @@ export const loadYoutubeApi: LoadYoutubeApi = () => {
       if (window.YT?.Player) resolve(window.YT)
       else reject(new Error('YouTube API missing'))
     }
-    const script = document.createElement('script')
     script.src = YOUTUBE_API_SCRIPT
     script.async = true
     script.onerror = () => {
       window.clearTimeout(timer)
       script.remove()
+      window.onYouTubeIframeAPIReady = previous
       apiPromise = null
       reject(new Error('YouTube API blocked'))
     }
