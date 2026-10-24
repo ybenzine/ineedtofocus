@@ -3,6 +3,18 @@
   color-scheme: light dark;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Error colour, WCAG AA (4.5:1) on the page background; pinned in colors.test.ts (#149). */
+  --error: #b3261e; /* on white */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --error: #ff8a80; /* on the dark canvas */
+  }
+}
+
+main.dark-screen {
+  --error: #ff8a80; /* on #0e1116, whatever the system theme */
 }
 
 body {
@@ -75,7 +87,7 @@ main {
 }
 
 .field-error {
-  color: #ff8a80;
+  color: var(--error);
   opacity: 1;
 }
 
@@ -239,8 +251,8 @@ main.dark-screen {
 }
 
 .dark-screen button.danger {
-  border-color: #ff8a80;
-  color: #ff8a80;
+  border-color: var(--error);
+  color: var(--error);
 }
 
 .timer-audio,
@@ -483,8 +495,8 @@ main.history-screen {
 }
 
 .history-badge-error {
-  border-color: #ff8a80;
-  color: #ff8a80;
+  border-color: var(--error);
+  color: var(--error);
 }
 
 .history-row-actions,
@@ -520,7 +532,7 @@ main.history-screen {
   gap: 0.5rem;
   margin-top: 1rem;
   padding: 1rem;
-  border: 1px solid #ff8a80;
+  border: 1px solid var(--error);
   border-radius: 0.5rem;
 }
 
@@ -529,8 +541,8 @@ main.history-screen {
 }
 
 .archive .danger {
-  border-color: #ff8a80;
-  color: #ff8a80;
+  border-color: var(--error);
+  color: var(--error);
 }
 
 .youtube-player {
