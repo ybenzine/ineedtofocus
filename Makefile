@@ -75,7 +75,7 @@ openapi: backend/.venv ## Regenerate _docs/api/openapi.json (commit it with any 
 
 # --- Tests --------------------------------------------------------------------
 
-test: test-backend test-frontend test-scripts test-server test-infra ## Run every test suite
+test: test-backend test-frontend test-scripts test-server test-infra test-e2e ## Run every test suite (test-e2e needs `make up` first)
 
 test-backend: backend/.venv ## Backend tests, unit + integration (pytest)
 	$(UV) run pytest
@@ -103,10 +103,10 @@ test-prod-stack: ## Smoke-test the production stack: Caddy + prod + dev (#27; ne
 
 test-e2e: frontend/node_modules ## Playwright end-to-end tests against the running stack (`make up` first)
 	@if ! compgen -G 'frontend/playwright.config.*' > /dev/null; then \
-		echo 'No Playwright suites yet: frontend/playwright.config.* lands with #23.' >&2; \
+		echo 'frontend/playwright.config.* is missing.' >&2; \
 		exit 1; \
 	fi
-	$(NPM) exec --no -- playwright test
+	$(NPM) exec --no -- playwright test --config frontend/playwright.config.ts
 
 # --- Lint and format ----------------------------------------------------------
 

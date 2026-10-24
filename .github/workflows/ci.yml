@@ -189,6 +189,8 @@ jobs:
     env:
       # Where Playwright (#23) reaches the app started by `make up`.
       PLAYWRIGHT_BASE_URL: http://localhost:8000
+      # The suite signs up a fresh user per test (and retries): lift the per-client limit (default 10 an hour).
+      SIGNUP_MAX_PER_CLIENT: "1000"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

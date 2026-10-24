@@ -1,6 +1,6 @@
 # Testing
 
-> **Status:** commands and CI are in place (#1, #5). Playwright suites are added by #23.
+> **Status:** commands and CI are in place (#1, #5); the Playwright suites came with #23.
 
 ## One command
 
@@ -13,7 +13,7 @@
 | `make test-backend-integration` | `backend/tests/integration/` only, with `-rs` (prints why anything skipped) |
 | `make test-frontend` | `vitest run` in `frontend/` |
 | Frontend dev server | `npm --prefix frontend run dev` serves the app on port 5173 and proxies `/api` to the backend on `http://localhost:8000` (`server.proxy` in `vite.config.ts`), so the session cookie stays first-party. Start the backend first (`make up`, or run it from `backend/`; local Compose sets `COOKIE_SECURE=0`, which plain-http sign-in needs). The proxy applies to the dev server only, not to tests or the production build |
-| `make test-e2e` | Playwright against the running stack (`make up` first); fails until #23 adds the suites |
+| `make test-e2e` | Playwright (`frontend/e2e/*.spec.ts`, config `frontend/playwright.config.ts`) against the running stack: `make up` first. `PLAYWRIGHT_BASE_URL` sets the app URL (default `http://localhost:8000`). Fake clock (`page.clock`), never real waiting. Each test signs up its own user, so raise `SIGNUP_MAX_PER_CLIENT` in the stack's environment for repeated runs (CI sets 1000; the default is 10 an hour). Set `E2E_COMPOSE_PROJECT` if the stack runs under another Compose project name (the log-privacy test reads `docker compose logs app`; it skips without Docker). To keep your own stack beside another, run `docker compose -p focus-e2e up -d --build --wait` with `APP_PORT`, `POSTGRES_PORT`, `GRAFANA_PORT`, `OTLP_GRPC_PORT` and `OTLP_HTTP_PORT` changed. Install the browser once with `npm --prefix frontend exec --no -- playwright install chromium` |
 | `make test-scripts` | `scripts/tests/`: the repo tooling, e.g. the reviewer App token and review scripts (#70), with the backend's locked pytest plus the token script's pinned dependencies. No network or real key: GitHub, `uv` and `gh` are faked |
 | `make test-server` | `infra/server/tests/run.sh`: runs the Droplet setup script `infra/server/bootstrap.sh` (#25) in a fresh `ubuntu:24.04` container three times. Checks packages, Docker and Compose, unattended-upgrades config, the `deploy` user (docker, no sudo), file permissions and the sshd config, then makes real SSH logins: the CI key runs only its forced command, root and keys in `~deploy/.ssh` are refused, the admin user still gets in. The second run must change nothing; the third must flag a deploy key without a forced command. Then, on that bootstrapped container, `focus_ci.sh` tests the deploy side (#28) against a fake `docker` that records every call and its environment: `install.sh` refuses non-root, malformed shas, commits not on `main` and trees with symlinks, writes the full diff and installs nothing without a typed `yes` on a terminal (driven through `script`), installs root-owned files the `deploy` user can't change, and recreates Caddy and the collectors on a change. The forced command `focus-ci`, behind the real sshd with a real CI key, refuses about 30 malformed or hostile requests (shells, scp, sftp, injection, case, spacing, length, an unknown profile) before any docker call. It deploys in order (pull by digest, label check, migrate, up, running-image and `/readyz` checks) with only `PATH`, `HOME` and `APP_TAG` reaching docker, records the release, rolls back without migrating, stops and logs at each failing step, and waits for the deploy lock. The prod key (#29) gets the same hostile requests plus `candidate` variants. It can't roll back or touch dev, and the dev key can't touch prod. `candidate` reads dev's records without a docker call. A prod deploy needs dev to have run that exact sha and digest. It re-points a `:<sha>` that dev moved at prod's digest before `up`, and it records, logs, waits for the lock and stops on a failing step like dev's. A failed migration (an older release on a newer schema) leaves prod's record and running app unchanged. Needs Docker and network (apt); about 1 min. No systemd in a container, so service management is the one part only tested on the Droplet |
 | `make test-infra` | `infra/tests/check_config.sh` (#27): renders `infra/compose.edge.yml` and `infra/compose.prod.yml` as prod and dev with dummy secrets (`docker compose config`) and checks that they refuse to render without `APP_TAG` or `POSTGRES_PASSWORD`. Checks the collector picks the right exporters, runs `otelcol validate` on both collector configs, and runs `caddy validate`, `caddy fmt` and `caddy adapt` on the Caddyfile. Then `scripts/check_prod_compose.py` checks the deploy rules: every container has a memory limit, the 2 GiB budget holds, dev stays below prod, only Caddy publishes ports, Caddy's fixed addresses sit outside the networks' `ip_range`, `COOKIE_SECURE=1`, `MIGRATE_ON_START=0`, proxy headers are trusted only from Caddy's address, and Caddy routes each host to its own environment. Needs Docker; about 10 s |
@@ -24,7 +24,7 @@
 | `make lint-shell` | `shellcheck` (pinned `shellcheck-py`, run through `uvx`) on every tracked `*.sh` |
 | `make lint-workflows` | `actionlint` (pinned `actionlint-py`, through `uvx`) on `.github/workflows/`, with the pinned ShellCheck on every `run:` script |
 
-Add `JUNIT_DIR=reports` to any `test-*` target except `test-e2e`, `test-server`, `test-infra` and `test-prod-stack` to also write a JUnit XML report to `reports/<suite>.xml` (git-ignored). Playwright end-to-end tests join `make test` with #23.
+Add `JUNIT_DIR=reports` to any `test-*` target except `test-e2e`, `test-server`, `test-infra` and `test-prod-stack` to also write a JUnit XML report to `reports/<suite>.xml` (git-ignored). `make test` also runs `test-e2e`, so start the stack first (`make up`).
 
 ## CI
 
@@ -36,7 +36,7 @@ Add `JUNIT_DIR=reports` to any `test-*` target except `test-e2e`, `test-server`,
 | `Backend unit tests` | `make test-backend-unit`, then `make test-scripts` and `make test-server` | The script and server bootstrap tests ride in this job so the five required check names stay the same |
 | `Backend integration tests` | `make test-backend-integration` against a `postgres:17-alpine` service | Connects as `focus`, a role with `CREATEDB` and `pg_signal_backend` but not superuser (`pg_signal_backend` lets `DROP DATABASE ... WITH (FORCE)` end an autovacuum worker on a test database; #88). **Fails if any test skipped**, since a skip means the database was never reached (`scripts/check_junit.py --no-skips`) |
 | `Frontend unit tests` | `make test-frontend` | |
-| `End-to-end (Compose stack)` | `make up`, `make check-stack`, then `make test-e2e` when `frontend/playwright.config.*` exists | Until #23 lands, Playwright doesn't run. The job then posts a "Playwright not run" warning and job summary, and only checks the stack: health, frontend, sign-up over plain http (session cookie not `Secure`), telemetry and no query strings or cookies in telemetry. `PLAYWRIGHT_BASE_URL` is `http://localhost:8000` |
+| `End-to-end (Compose stack)` | `make up`, `make check-stack` (health, frontend, sign-up over plain http with the session cookie not `Secure`, telemetry, no query strings or cookies in telemetry), then `make test-e2e` | Playwright runs the suites in `frontend/e2e/` against the same stack. `PLAYWRIGHT_BASE_URL` is `http://localhost:8000`; `SIGNUP_MAX_PER_CLIENT` is raised to 1000 so every test can sign up |
 
 Three more jobs aren't required checks (#27, #28, [deployment.md → Images](deployment.md#images-and-production-compose-27)):
 
@@ -59,7 +59,7 @@ The prod deploy is its own workflow, `.github/workflows/deploy-prod.yml` (#29, [
 | Backend unit | pytest | `backend/tests/unit/` | Pure logic: validation, history bucketing, time-zone and week-start rules |
 | Backend integration | pytest + real Postgres | `backend/tests/integration/` | API endpoints end to end against the database; user isolation; idempotent sync |
 | Frontend unit | Vitest + Testing Library | `frontend/src/**/*.test.ts(x)` | Timer engine with a fake clock, components, sync queue |
-| End-to-end | Playwright | `frontend/e2e/` | The key user journey through the real stack (Compose) |
+| End-to-end | Playwright | `frontend/e2e/` | The key user journey through the real stack (Compose): `journey.spec.ts` (sign up, countdown, Pomodoro, archive, restore, delete), `sync.spec.ts` (offline finish then sync, AC1.4 two devices, tag filter, week start), `layout.spec.ts` (no sideways scroll at 360 px, centred at 1280 px), `privacy.spec.ts` (no goal, email or password in backend logs) |
 | Accessibility | axe in Playwright | `frontend/e2e/` | No serious violations on main screens |
 
 ## Rules
