@@ -67,17 +67,22 @@ export const SETTINGS_WAIT_MS = 1500
  */
 export default function App(props: AppProps) {
   const { settings: given } = props
+  // Expired at mount (start-up with a timer running): the store is bound to the expired user
+  // so it shows their cached settings, but `currentOwner()` is null, so it never fetches,
+  // sends or rewrites the cache (#120).
+  const account = useAccount()
+  const [mountOwner] = useState(() => (account?.expired ? account.user.id : signedInUserId()))
   const settings = useMemo(
     () =>
       given ??
       new SettingsStore({
         api: httpSettingsApi,
         storage: window.localStorage,
-        owner: signedInUserId(),
+        owner: mountOwner,
         currentOwner: signedInUserId,
         onUnauthorized: notifySessionExpired,
       }),
-    [given],
+    [given, mountOwner],
   )
   // Re-armed on every setup: StrictMode runs setup, cleanup, setup on the same instance.
   useEffect(() => {
