@@ -22,10 +22,16 @@ export default function AccountBar({ controller }: { controller: TimerController
   const [unsynced, setUnsynced] = useState<UnsyncedCount | null>(null)
   const [busy, setBusy] = useState(false)
   const cancelRef = useRef<HTMLButtonElement>(null)
+  const signOutRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (unsynced) cancelRef.current?.focus()
   }, [unsynced])
+
+  function cancelConfirm() {
+    setUnsynced(null)
+    signOutRef.current?.focus()
+  }
 
   if (!account) return null
   const { signOut } = account
@@ -63,14 +69,24 @@ export default function AccountBar({ controller }: { controller: TimerController
   return (
     <header className="account-bar">
       <span>{account.user.email}</span>
-      <button type="button" onClick={() => void request()} disabled={busy}>
+      <button type="button" ref={signOutRef} onClick={() => void request()} disabled={busy}>
         Sign out
       </button>
       {message && <span role="alert">{message}</span>}
       {unsynced && (
-        <div role="alertdialog" aria-label="Confirm sign out" className="account-confirm">
+        <div
+          role="alertdialog"
+          aria-label="Confirm sign out"
+          className="account-confirm"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.stopPropagation()
+              cancelConfirm()
+            }
+          }}
+        >
           <p>{unsyncedWarning(unsynced)}</p>
-          <button type="button" ref={cancelRef} onClick={() => setUnsynced(null)}>
+          <button type="button" ref={cancelRef} onClick={cancelConfirm}>
             Cancel
           </button>
           <button type="button" onClick={() => void finish()}>

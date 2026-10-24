@@ -536,6 +536,7 @@ main.history-screen {
 .youtube-player {
   width: 100%;
   max-width: 24rem;
+  min-width: 0;
   aspect-ratio: 16 / 9;
   min-height: 12.5rem;
   margin: 0 auto;
@@ -543,6 +544,7 @@ main.history-screen {
 }
 
 .youtube-player iframe {
+  display: block;
   width: 100%;
   height: 100%;
   border: 0;

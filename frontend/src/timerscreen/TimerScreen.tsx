@@ -65,6 +65,13 @@ export default function TimerScreen({
 
   const endedRef = useRef(false)
 
+  // Keyboard and screen-reader users arrive on the new screen: focus its heading (WCAG 2.4.3).
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  const hasSession = snapshot !== null
+  useEffect(() => {
+    if (hasSession) headingRef.current?.focus()
+  }, [hasSession])
+
   const apply = useCallback((update: TimerUpdate) => {
     if (endedRef.current) return // a tick already in flight when the session ended
     if (update.events.length > 0) callbacks.current.onEvents?.(update.events)
@@ -140,7 +147,7 @@ export default function TimerScreen({
     <section className={`timer-screen${inBreak ? ' on-break' : ''}`} aria-label="Focus timer">
       <p className="timer-mode">{MODE_LABEL[snapshot.mode]}</p>
 
-      <h1 className="timer-phase" aria-live="polite">
+      <h1 className="timer-phase" aria-live="polite" tabIndex={-1} ref={headingRef}>
         {snapshot.paused ? `${label}, paused` : label}
       </h1>
 
