@@ -3,6 +3,7 @@ import { AlertPlayer } from './sounds/alerts.ts'
 import AudioControls from './sounds/AudioControls.tsx'
 import { LocalAudioSourceStore, type AudioSourceStore } from './sounds/audioSource.ts'
 import { RainPlayer } from './sounds/rain.ts'
+import { useAccount } from './auth/AccountContext.tsx'
 import AccountBar from './auth/AccountBar.tsx'
 import ArchiveScreen from './archive/ArchiveScreen.tsx'
 import HistoryScreen from './history/HistoryScreen.tsx'
@@ -125,6 +126,15 @@ function AppBody({
   // The audio source is remembered with the active session (sourceStore), so a reload restores it.
   const [notice, setNotice] = useState<string | null>(null)
   const [audio, setAudio] = useState<AudioSource>('none')
+
+  // The sign-in expired mid-session: the timer screen and its summary stay; sign-in follows
+  // as soon as the user is on any other screen (#120).
+  const account = useAccount()
+  const leaveExpired = account?.expired ? account.leaveExpired : null
+  useEffect(() => {
+    if (leaveExpired && view.name !== 'loading' && view.name !== 'timer' && view.name !== 'summary')
+      leaveExpired()
+  }, [leaveExpired, view.name])
 
   // A session restored after a reload has had no user gesture yet: unlock audio on the first
   // one, or iOS keeps every later chime and bell silent.

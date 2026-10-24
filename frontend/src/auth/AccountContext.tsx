@@ -7,6 +7,10 @@ export interface Account {
    * Ends the session on the server and clears this user's data from the device. Resolves to an
    * error message if the user must stay signed in, or `null` once signed out.
    */
+  /** The sign-in expired while a timer ran: still shown, but signed out on this device (#120). */
+  expired: boolean
+  /** Call once no timer runs and no summary is shown: ends the expired state with sign-in. */
+  leaveExpired: () => void
   signOut: () => Promise<string | null>
 }
 
