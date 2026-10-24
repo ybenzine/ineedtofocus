@@ -66,7 +66,13 @@ export default function ArchiveScreen({
 
   const fail = useCallback((kind: string, action: string) => {
     if (kind === 'unauthorized') notifySessionExpired()
-    setProblem(`Couldn’t ${action}. Check your connection and try again.`)
+    if (kind === 'not_found') {
+      setProblem(`Couldn’t ${action}. The session may have been deleted on another device.`)
+    } else if (kind === 'unavailable' || kind === 'unauthorized') {
+      setProblem(`Couldn’t ${action}. Check your connection and try again.`)
+    } else {
+      setProblem(`Couldn’t ${action}.`)
+    }
   }, [])
 
   async function restore(session: ArchivedSession) {
@@ -83,6 +89,7 @@ export default function ArchiveScreen({
           : current,
       )
       setNotice('Session restored to History.')
+      heading.current?.focus()
     } finally {
       setBusy(false)
     }
@@ -94,9 +101,14 @@ export default function ArchiveScreen({
     try {
       const result = await api.deleteAll()
       setConfirming(false)
-      if (result.kind !== 'ok') return fail(result.kind, 'delete the archived sessions')
+      if (result.kind !== 'ok') {
+        fail(result.kind, 'delete the archived sessions')
+        deleteButton.current?.focus()
+        return
+      }
       if (owner !== null) await store?.removeArchived(owner).catch(() => undefined)
       setLoad({ kind: 'ready', sessions: [] })
+      heading.current?.focus()
       const n = result.value
       setNotice(`Deleted ${n} archived ${n === 1 ? 'session' : 'sessions'}.`)
     } finally {
@@ -174,7 +186,6 @@ export default function ArchiveScreen({
       {confirming && (
         <div
           role="alertdialog"
-          aria-modal="true"
           aria-labelledby="archive-confirm-title"
           className="archive-confirm"
           onKeyDown={(event) => {

@@ -14,3 +14,33 @@ Both are mono, 16 kHz, 16-bit WAV with no voice. To change them, edit the script
 
 They live in `public/` so the service worker (#19) can precache `sounds/chime.wav` and
 `sounds/bell.wav`; the app loads them from `${import.meta.env.BASE_URL}sounds/…`.
+
+## Rain loop (F8, AC8.3)
+
+| File                             | Used for                    | Format                             | Length / size                                |
+| -------------------------------- | --------------------------- | ---------------------------------- | -------------------------------------------- |
+| `frontend/public/audio/rain.mp3` | Background rain (AC8.1-8.2) | MP3, mono, 22.05 kHz, 128 kbps CBR | 30.2 s (30 s loop + 0.1 s each side), 485 KB |
+
+- **Source and license:** an original generated work, owned by the project, made by
+  `frontend/scripts/generate-rain.mjs` (seeded noise hiss plus random droplets). It contains no
+  third-party material. A generated loop is accepted for the MVP by the product manager's ruling
+  on #17; the sound is not a recording.
+- **Level:** integrated loudness -21.9 LUFS, true peak -11.7 dBFS (`ffmpeg -i rain.mp3 -af
+ebur128=peak=true -f null -`). That sits below the alerts at background volume 50.
+- **Spectrum:** broadband hiss up to Nyquist (11 kHz); about 17% of the energy is above 7 kHz and
+  31% below 1.5 kHz (`ffmpeg -af highpass=f=7000,astats`).
+- **Deterministic:** the synthesis uses a fixed seed; the committed file was produced by
+  `node scripts/generate-rain.mjs` (run from `frontend/`) and LAME 4.0
+  (`lame -q 0 -m m --cbr -b 128 --noreplaygain`, run by the script). CI does not encode; it uses
+  the committed file. Re-running with the same LAME gives the same bytes.
+- **Seamless loop:** the signal is exactly periodic over 30 s (the filter wraps around, droplet
+  tails wrap, the swell has whole cycles). MP3 decoders add or strip a little silence at each end
+  and browsers differ, so the file carries 0.1 s of the periodic signal on each side and the
+  player loops only `[0.1 s, 30.1 s)` with `loopStart`/`loopEnd` (`RAIN_LOOP_START`,
+  `RAIN_LOOP_END` in `src/sounds/rain.ts`). Tests decode the MP3 and check that no silent run
+  longer than 5 ms sits at either end of the looped region, with and without the decoder's delay
+  stripped.
+- **Offline:** it lives in `public/audio/`, so the service worker (#19) precaches it; the app loads
+  it from `${import.meta.env.BASE_URL}audio/rain.mp3` and plays it through a looping Web Audio
+  `AudioBufferSourceNode`.
+- **Listening check:** to be done by QA on a real device (see the PR).

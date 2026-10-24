@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fake docker CLI for focus_ci.sh (#28): installed as /usr/bin/docker in the throwaway
+# Fake docker CLI for focus_ci.sh (#28, #29): installed as /usr/bin/docker in the throwaway
 # test container. It records every call, with the names of the environment variables
 # it got, and imitates just enough of docker and docker compose for focus-ci and
 # install.sh. Its state lives in /tmp/fake-docker (fixed: callers run with env -i):
@@ -7,8 +7,10 @@
 #   calls.log            one line per call: <epoch> uid=<uid> env=<names> app_tag=<APP_TAG> :: <args>
 #   labels/<digest>      the registry: that digest exists, built from the commit in the file
 #   local/<digest>       pulled to this host
-#   tags/<tag>           the digest a local :<tag> points at
-#   running              the tag the app container was last started with
+#   tags/<tag>           the digest a local :<tag> points at (one image store for the
+#                        host, shared by every environment, like the real one)
+#   running-<env>        the digest <env>'s app container was created from: what
+#                        tags/<APP_TAG> pointed at when `compose up` ran
 #   fail/<what>          make a call fail: pull, migrate, up, exec, verify (wrong image)
 #   sleep-up             seconds `compose up` takes
 set -euo pipefail
@@ -58,20 +60,24 @@ case ${1:-} in
     digest=$(digest_of "$2")
     printf '%s\n' "$digest" >"$state/tags/${3##*:}"
     ;;
-  inspect) # docker inspect --format '{{.Image}}' <container>
+  inspect) # docker inspect --format '{{.Image}}' container-<env>-app
+    container=${*: -1}
+    env_name=${container#container-}
+    env_name=${env_name%-app}
     if [[ -e $state/fail/verify ]]; then
       image_id sha256:0000000000000000000000000000000000000000000000000000000000000000
     else
-      image_id "$(cat "$state/tags/$(cat "$state/running")")"
+      image_id "$(cat "$state/running-$env_name")"
     fi
     ;;
   compose)
     shift
-    edge=0
+    edge=0 env_name=""
     while (($#)); do
       case $1 in
         -f | --env-file | -p)
           [[ $2 == */compose.edge.yml ]] && edge=1
+          if [[ $2 =~ ^/opt/focus/(prod|dev)/\.env$ ]]; then env_name=${BASH_REMATCH[1]}; fi
           shift 2
           ;;
         *) break ;;
@@ -83,10 +89,12 @@ case ${1:-} in
         [[ ! -e $state/fail/up ]] || exit 1
         [[ ! -f $state/sleep-up ]] || sleep "$(cat "$state/sleep-up")"
         if ((!edge)) && [[ " $* " != *" otel-collector "* ]]; then
-          printf '%s\n' "$APP_TAG" >"$state/running"
+          # --pull never: the image must be on the host under :<APP_TAG>.
+          [[ -n $env_name && -f $state/tags/$APP_TAG ]] || exit 1
+          cp "$state/tags/$APP_TAG" "$state/running-$env_name"
         fi
         ;;
-      ps) echo container-app ;;
+      ps) echo "container-$env_name-app" ;;
       exec) [[ ! -e $state/fail/exec ]] || exit 1 ;;
       *) ;;
     esac

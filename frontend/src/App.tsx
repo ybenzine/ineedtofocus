@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertPlayer } from './sounds/alerts.ts'
+import AudioControls from './sounds/AudioControls.tsx'
+import { LocalAudioSourceStore, type AudioSourceStore } from './sounds/audioSource.ts'
+import { RainPlayer } from './sounds/rain.ts'
 import AccountBar from './auth/AccountBar.tsx'
 import ArchiveScreen from './archive/ArchiveScreen.tsx'
 import HistoryScreen from './history/HistoryScreen.tsx'
@@ -7,7 +10,11 @@ import { notifySessionExpired, signedInUserId } from './auth/localData.ts'
 import ScreenNav from './nav/ScreenNav.tsx'
 import { pathForScreen, screenFromPath, type ScreenId } from './nav/screens.ts'
 import { httpSettingsApi } from './settings/api.ts'
-import { SettingsAlertVolumeStore, SettingsPreferencesStore } from './settings/adapters.ts'
+import {
+  SettingsAlertVolumeStore,
+  SettingsBackgroundVolumeStore,
+  SettingsPreferencesStore,
+} from './settings/adapters.ts'
 import { SettingsContext, useSettingsState } from './settings/SettingsContext.ts'
 import SettingsScreen from './settings/SettingsScreen.tsx'
 import { SettingsStore } from './settings/store.ts'
@@ -36,6 +43,10 @@ export interface AppProps {
   pendingRetryMs?: number
   /** Injectable for tests; plays the chime and the end bell (#16). */
   alerts?: AlertPlayer
+  /** Injectable for tests; plays the background rain (#17). */
+  rain?: RainPlayer
+  /** Injectable for tests; remembers the chosen audio source across reloads. */
+  audioStore?: AudioSourceStore
 }
 
 export const PENDING_RETRY_MS = 10_000
@@ -85,6 +96,8 @@ function AppBody({
   settings,
   preferences,
   alerts,
+  rain,
+  audioStore,
   pendingRetryMs = PENDING_RETRY_MS,
 }: AppProps & { settings: SettingsStore }) {
   const services = useMemo<AppServices>(
@@ -100,10 +113,16 @@ function AppBody({
     () => alerts ?? new AlertPlayer({ volume: new SettingsAlertVolumeStore(settings) }),
     [alerts, settings],
   )
+  const rainPlayer = useMemo(
+    () =>
+      rain ??
+      new RainPlayer({ alerts: player, volume: new SettingsBackgroundVolumeStore(settings) }),
+    [rain, player, settings],
+  )
+  const sourceStore = useMemo(() => audioStore ?? new LocalAudioSourceStore(), [audioStore])
   const { values } = useSettingsState()
   const [view, setView] = useState<View>({ name: 'loading' })
-  // Only the setup choice is known here; after a reload the audio source is not remembered yet
-  // (audio playback and its persistence arrive with #17 and #18).
+  // The audio source is remembered with the active session (sourceStore), so a reload restores it.
   const [notice, setNotice] = useState<string | null>(null)
   const [audio, setAudio] = useState<AudioSource>('none')
 
@@ -121,8 +140,12 @@ function AppBody({
     void timer.restore().then(async (update) => {
       if (update.snapshot) {
         void settings.refresh() // no wait: sends pending edits, fetches the server copy
-        if (!cancelled) setView({ name: 'timer' })
+        if (!cancelled) {
+          setAudio(sourceStore.load())
+          setView({ name: 'timer' })
+        }
       } else if (update.outcome) {
+        sourceStore.clear()
         void settings.refresh()
         if (!cancelled) setView({ name: 'summary', update })
       } else if (screenFromPath(window.location.pathname) !== 'setup') {
@@ -130,6 +153,7 @@ function AppBody({
         void settings.refresh()
         if (!cancelled) setView({ name: screenFromPath(window.location.pathname) })
       } else {
+        sourceStore.clear()
         // Only the setup screen needs the server's last-used config and tag, which it reads
         // once: give them a moment to arrive (another device may have changed them). Offline,
         // or slow, it opens from the device copy.
@@ -147,7 +171,7 @@ function AppBody({
     return () => {
       cancelled = true
     }
-  }, [timer, settings])
+  }, [timer, settings, sourceStore])
 
   // Sync settings whenever the connection returns; at launch `refresh()` runs in the restore
   // effect above (waited for only when the setup screen opens).
@@ -211,19 +235,32 @@ function AppBody({
     void player.unlock() // the Start press is the user gesture browsers require before audio
     setNotice(null)
     await timer.start({ config: request.config, tag: request.tag, goal: request.goal })
+    sourceStore.save(request.audio)
     setAudio(request.audio)
     setView({ name: 'timer' })
   }
 
-  const ended = useCallback((update: TimerUpdate) => {
-    // An update with no outcome means another tab ended the session; that tab shows the summary.
-    if (update.outcome) {
-      setView({ name: 'summary', update })
-    } else {
-      setNotice('This session was ended in another tab.')
-      setView({ name: 'setup' })
-    }
-  }, [])
+  const ended = useCallback(
+    (update: TimerUpdate) => {
+      sourceStore.clear()
+      // An update with no outcome means another tab ended the session; that tab shows the summary.
+      if (update.outcome) {
+        setView({ name: 'summary', update })
+      } else {
+        setNotice('This session was ended in another tab.')
+        setView({ name: 'setup' })
+      }
+    },
+    [sourceStore],
+  )
+
+  const changeAudio = useCallback(
+    (source: AudioSource) => {
+      sourceStore.save(source)
+      setAudio(source)
+    },
+    [sourceStore],
+  )
 
   if (view.name === 'loading') return <main aria-busy="true" />
 
@@ -235,6 +272,14 @@ function AppBody({
           audio={audio}
           onEvents={player.handleEvents}
           onEnded={ended}
+          audioControls={({ paused }) => (
+            <AudioControls
+              source={audio}
+              paused={paused}
+              rain={rainPlayer}
+              onSourceChange={changeAudio}
+            />
+          )}
         />
       </main>
     )

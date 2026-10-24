@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Forced command for the CI deploy keys (#28; #29 and #30 extend it).
+# Forced command for the CI deploy keys (#28, #29; #30 extends it).
 #
 # infra/server/install.sh installs it, root-owned, as /opt/focus/bin/focus-ci. Every CI
 # key is pinned to it in /etc/ssh/authorized_keys/deploy (root-owned). The key's line
@@ -21,12 +21,20 @@
 #       migrating (migrations are expand-only). Then check it and record it.
 #   status
 #       Print the current release record.
+#   candidate [<commit sha>]
+#       Read-only, for the prod deploy (#29): print the tag and digest of the release
+#       dev runs now or, with a sha, of the last release of that commit dev ran
+#       successfully (from dev's releases.log). It reads dev's records and nothing else:
+#       no docker call, no lock, no write.
 #
 # Profiles:
-#   dev    deploy, rollback, status    on focus-dev
-# #29 adds the prod deploy profile; #30 adds the prod rollback profile and the automatic
-# revert when the checks fail. Add a profile in the `case` below, and keep each one to
-# the verbs its key needs.
+#   dev    deploy, rollback, status     on focus-dev
+#   prod   deploy, status, candidate    on focus-prod. A prod deploy also needs dev to have
+#          run that exact sha and digest successfully (an ok line in dev's releases.log),
+#          checked under the lock: prod only gets bytes dev ran, which deploy-dev took
+#          from `publish`. The prod key can read dev's records but not change dev.
+# #30 adds the prod rollback profile and the automatic revert when the checks fail. Add a
+# profile in the `case` below, and keep each one to the verbs its key needs.
 #
 # Anything else is refused with exit status 2, before anything runs. That covers
 # another verb, extra or malformed arguments, a shell, scp or sftp, and an unknown
@@ -67,6 +75,7 @@ export PATH=$CLEAN_PATH
 readonly SHA_RE='^[0-9a-f]{40}$'
 readonly DIGEST_RE='^sha256:[0-9a-f]{64}$'
 readonly DEPLOY_RE='^deploy ([0-9a-f]{40}) (sha256:[0-9a-f]{64})$'
+readonly CANDIDATE_RE='^candidate( ([0-9a-f]{40}))?$'
 
 profile=${1:-}
 request=${SSH_ORIGINAL_COMMAND-}
@@ -91,6 +100,12 @@ case $profile in
   dev)
     env_name=dev
     allowed=(deploy rollback status)
+    promote_from="" # dev deploys what `publish` pushed
+    ;;
+  prod)
+    env_name=prod
+    allowed=(deploy status candidate)
+    promote_from=dev # prod deploys only what dev ran (#29)
     ;;
   *) refuse "unknown profile $(printf '%q' "${profile:0:20}")" ;;
 esac
@@ -104,6 +119,9 @@ if [[ $request =~ $DEPLOY_RE ]]; then
   verb=deploy
   tag=${BASH_REMATCH[1]}
   digest=${BASH_REMATCH[2]}
+elif [[ $request =~ $CANDIDATE_RE ]]; then
+  verb=candidate
+  tag=${BASH_REMATCH[2]}
 elif [[ $request == rollback || $request == status ]]; then
   verb=$request
 else
@@ -128,16 +146,17 @@ compose() {
   clean APP_TAG="$app_tag" "$INFRA_DIR/compose.sh" "$env_name" "$@"
 }
 
-# record_get <key>: a value from the current release record (never sourced).
+# record_get <key> [record file]: a value from a release record (never sourced); the
+# current environment's unless another file is given.
 record_get() {
-  local line
-  [[ -f $record ]] || return 0
+  local line file=${2:-$record}
+  [[ -f $file ]] || return 0
   while IFS= read -r line; do
     if [[ $line == "$1="* ]]; then
       printf '%s' "${line#*=}"
       return 0
     fi
-  done <"$record"
+  done <"$file"
 }
 # field <history line> <key>: one key=value field of a releases.log line.
 field() {
@@ -148,6 +167,19 @@ field() {
       return 0
     fi
   done
+}
+
+# last_ok <history file> <tag> [digest]: the last outcome=ok line of that log for <tag>
+# (and <digest>, when given), or nothing.
+last_ok() {
+  local line found=""
+  [[ -f $1 ]] || return 0
+  while IFS= read -r line; do
+    [[ $(field "$line" outcome) == ok && $(field "$line" tag) == "$2" ]] || continue
+    [[ -z ${3:-} || $(field "$line" digest) == "$3" ]] || continue
+    found=$line
+  done <"$1"
+  printf '%s' "$found"
 }
 
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -171,7 +203,18 @@ check_install() {
 
 # --- Steps (each returns non-zero on failure; `step` records and stops) ------------------
 
+# promoted <tag> <digest>: the source environment ran exactly this release successfully.
+promoted() {
+  [[ -n $(last_ok "$FOCUS_ROOT/$promote_from/releases.log" "$1" "$2") ]] && return 0
+  printf 'focus-ci: %s ran no release %s %s successfully: deploy it to %s first\n' \
+    "$promote_from" "$1" "$2" "$promote_from" >&2
+  return 1
+}
+
 # pull_image <tag> <digest>: the image by digest, built from <tag>, tagged :<tag> locally.
+# The local :<tag> is shared by every environment on the host and moved by their deploys,
+# so it's never trusted: it's re-pointed at <digest> here, under the lock, right before
+# `up`, and start_app checks the running container's image afterwards (#110 review).
 pull_image() {
   local ref=$IMAGE_REPO@$2 revision
   if clean docker image inspect "$ref" >/dev/null 2>&1; then
@@ -264,6 +307,29 @@ do_status() {
   fi
 }
 
+# candidate [<sha>]: what a prod deploy may take from dev, read-only.
+do_candidate() {
+  local source_record=$FOCUS_ROOT/$promote_from/release
+  local source_history=$FOCUS_ROOT/$promote_from/releases.log
+  local found want_digest="" at=""
+  if [[ -z $tag ]]; then
+    tag=$(record_get tag "$source_record")
+    want_digest=$(record_get digest "$source_record")
+    [[ -n $tag ]] || fail "$promote_from has no release recorded yet"
+    [[ $tag =~ $SHA_RE && $want_digest =~ $DIGEST_RE ]] || fail "$promote_from's release record is malformed"
+  fi
+  found=$(last_ok "$source_history" "$tag" "$want_digest")
+  [[ -n $found ]] || fail "$promote_from ran no release of $tag successfully: deploy it to $promote_from first"
+  digest=$(field "$found" digest)
+  at=$(field "$found" time)
+  [[ $digest =~ $DIGEST_RE ]] || fail "$promote_from's releases.log has a malformed digest for $tag"
+  echo "source=$promote_from"
+  echo "tag=$tag"
+  echo "digest=$digest"
+  echo "source_time=$at"
+  echo "source_action=$(field "$found" action)"
+}
+
 do_deploy() {
   take_lock
   check_install
@@ -280,6 +346,9 @@ do_deploy() {
   fi
   audit "deploy tag=$tag digest=$digest"
   log "deploying $tag ($IMAGE_REPO@$digest) to $env_name, infra $infra_revision"
+  if [[ -n $promote_from ]]; then
+    step deploy promote promoted "$tag" "$digest"
+  fi
   step deploy pull pull_image "$tag" "$digest"
   step deploy migrate migrate "$tag"
   step deploy start start_app "$tag" "$digest"
@@ -324,4 +393,5 @@ case $verb in
   status) do_status ;;
   deploy) do_deploy ;;
   rollback) do_rollback ;;
+  candidate) do_candidate ;;
 esac

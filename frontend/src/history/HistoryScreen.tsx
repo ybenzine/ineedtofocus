@@ -106,6 +106,9 @@ export default function HistoryScreen({
   const [problem, setProblem] = useState('')
   const undoButton = useRef<HTMLButtonElement>(null)
   const mounted = useRef(true)
+  // Sessions being archived: left out of every answer until the server has confirmed or refused.
+  const archiving = useRef(new Set<string>())
+  const lastEdited = useRef<string | null>(null)
 
   useEffect(() => heading.current?.focus(), [])
   useEffect(() => {
@@ -117,6 +120,20 @@ export default function HistoryScreen({
   useEffect(() => {
     if (undo !== null) undoButton.current?.focus()
   }, [undo])
+  // Closing the edit form returns focus to that row's Edit button.
+  useEffect(() => {
+    if (editingId !== null) {
+      lastEdited.current = editingId
+      return
+    }
+    const id = lastEdited.current
+    lastEdited.current = null
+    if (id === null) return
+    const button = Array.from(document.querySelectorAll<HTMLElement>('[data-edit-for]')).find(
+      (el) => el.dataset.editFor === id,
+    )
+    ;(button ?? heading.current)?.focus()
+  }, [editingId])
   useEffect(() => {
     const onOnline = () => setReload((n) => n + 1)
     window.addEventListener('online', onOnline)
@@ -162,8 +179,10 @@ export default function HistoryScreen({
         // shows a badge, but the server already has it.
         notUploaded: d.syncState !== 'synced',
       }))
-      const alive = device.filter((d) => !d.archived)
+      const alive = device.filter((d) => !d.archived && !archiving.current.has(d.session.id))
       const archivedIds = new Set(device.filter((d) => d.archived).map((d) => d.session.id))
+      const leaveOut = (data: HistoryData) =>
+        archiving.current.size > 0 ? removeSessions(data, archiving.current) : data
       // Changes the server hasn't confirmed yet: shown now (AC11.1), with their sync badge.
       const changes = new Map<string, SessionChange>()
       for (const d of local) {
@@ -176,7 +195,7 @@ export default function HistoryScreen({
         cache.current.set(queryKey, result.value)
         setLoad({
           kind: 'ready',
-          data: applyChanges(mergeSessions(result.value, unsynced, query.tags), changes),
+          data: applyChanges(leaveOut(mergeSessions(result.value, unsynced, query.tags)), changes),
           offline: false,
         })
         return
@@ -200,7 +219,7 @@ export default function HistoryScreen({
       const extra = alive.map((d) => d.session)
       setLoad({
         kind: 'ready',
-        data: applyChanges(mergeSessions(base, extra, query.tags), changes),
+        data: applyChanges(leaveOut(mergeSessions(base, extra, query.tags)), changes),
         offline: true,
       })
     })()
@@ -229,8 +248,16 @@ export default function HistoryScreen({
 
   function fail(kind: string, action: string) {
     if (kind === 'unauthorized') notifySessionExpired()
-    setProblem(`Couldn’t ${action}. Check your connection and try again.`)
+    if (kind === 'not_found') {
+      setProblem(`Couldn’t ${action}. The session may have been deleted on another device.`)
+    } else if (kind === 'unavailable' || kind === 'unauthorized') {
+      setProblem(`Couldn’t ${action}. Check your connection and try again.`)
+    } else {
+      setProblem(`Couldn’t ${action}.`)
+    }
   }
+
+  const ARCHIVED_ELSEWHERE = 'This session was archived on another device, so it can’t be edited.'
 
   /**
    * AC11.1: a session on this device is edited on the device first and sent as soon as it can
@@ -238,15 +265,26 @@ export default function HistoryScreen({
    */
   async function saveEdit(session: HistorySession, change: SessionEdit) {
     setProblem('')
-    const onDevice =
-      owner !== null && sessions ? (await sessions.get(session.id))?.ownerId === owner : false
-    if (owner !== null && sessions && onDevice) {
-      await sessions.edit(owner, session.id, change)
-      setEditingId(null)
-      setReload((n) => n + 1)
-      void sync?.syncNow().then(() => {
-        if (mounted.current) setReload((n) => n + 1)
-      })
+    try {
+      const onDevice =
+        owner !== null && sessions ? (await sessions.get(session.id))?.ownerId === owner : false
+      if (owner !== null && sessions && onDevice) {
+        await sessions.edit(owner, session.id, change)
+        setEditingId(null)
+        setReload((n) => n + 1)
+        void sync?.syncNow().then(async (report) => {
+          if (!mounted.current) return
+          // Dropped by the server (409) rather than applied: archived on another device.
+          const entry = await sessions.get(session.id)
+          if (report.edited === 0 && entry && entry.editState === null && entry.edit === null) {
+            setProblem(ARCHIVED_ELSEWHERE)
+          }
+          setReload((n) => n + 1)
+        })
+        return
+      }
+    } catch {
+      setProblem('Couldn’t save the change on this device. Try again.')
       return
     }
     const result = await sessionsApi.edit(session.id, change)
@@ -255,7 +293,7 @@ export default function HistoryScreen({
       cache.current.clear()
       setReload((n) => n + 1)
     } else if (result.kind === 'conflict') {
-      setProblem('This session was archived on another device, so it can’t be edited.')
+      setProblem(ARCHIVED_ELSEWHERE)
       setEditingId(null)
       cache.current.clear()
       setReload((n) => n + 1)
@@ -270,26 +308,40 @@ export default function HistoryScreen({
     setProblem('')
     setUndo(null)
     setEditingId(null)
-    const previous = load
     const gone = new Set([session.id])
-    setLoad({ ...previous, data: removeSessions(previous.data, gone) })
+    archiving.current.add(session.id)
+    setLoad({ ...load, data: removeSessions(load.data, gone) })
     for (const [key, data] of cache.current) cache.current.set(key, removeSessions(data, gone))
-    // A queued edit goes first, so restoring later brings the session back as the user left it.
-    if (owner !== null && (await sessions?.get(session.id))?.editState === 'pending') {
-      await sync?.syncNow()
+    const rollBack = (kind: string) => {
+      archiving.current.delete(session.id)
+      cache.current.clear()
+      setReload((n) => n + 1)
+      if (kind === 'unsynced') {
+        setProblem('Couldn’t archive the session: your change hasn’t synced yet. Try again soon.')
+      } else {
+        fail(kind, 'archive the session')
+      }
+    }
+    // A queued edit goes first, so the archive (and a later restore) never loses it: if it
+    // still hasn't reached the server, the archive is refused.
+    try {
+      if (owner !== null && sessions && (await sessions.get(session.id))?.editState === 'pending') {
+        await sync?.syncNow()
+        if ((await sessions.get(session.id))?.editState === 'pending') return rollBack('unsynced')
+      }
+    } catch {
+      return rollBack('unsynced')
     }
     const result = await archiveApi.archive(session.id)
     if (!mounted.current) return
-    if (result.kind !== 'ok') {
-      setLoad(previous)
-      cache.current.clear()
-      fail(result.kind, 'archive the session')
-      return
-    }
+    if (result.kind !== 'ok') return rollBack(result.kind)
     if (owner !== null) {
       await sessions?.setArchived(owner, session.id, result.value).catch(() => undefined)
     }
+    archiving.current.delete(session.id)
+    cache.current.clear()
     setUndo(session.id)
+    setReload((n) => n + 1)
   }
 
   async function undoArchive() {
@@ -596,7 +648,12 @@ function SessionRow({
         <EditForm session={session} label={label} onCancel={onCancel} onSave={onSave} />
       ) : (
         <div className="history-row-actions">
-          <button type="button" aria-label={`Edit session from ${label}`} onClick={onEdit}>
+          <button
+            type="button"
+            data-edit-for={session.id}
+            aria-label={`Edit session from ${label}`}
+            onClick={onEdit}
+          >
             Edit
           </button>
           {session.unsaved ? (

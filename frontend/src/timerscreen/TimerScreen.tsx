@@ -34,8 +34,11 @@ export interface TimerScreenProps {
   onEvents?: (events: TimerEvent[]) => void
   /** The session is over (stopped, completed, or ended in another tab): show the summary. */
   onEnded: (update: TimerUpdate) => void
-  /** Hook for the audio controls (#17, #18): rendered inside the audio region. */
-  audioControls?: ReactNode
+  /**
+   * The audio controls (#17, #18), rendered inside the audio region. A function receives the
+   * timer's paused state, which the audio follows (AC8.2).
+   */
+  audioControls?: ReactNode | ((state: { paused: boolean }) => ReactNode)
 }
 
 function clockText(snapshot: TimerSnapshot): string {
@@ -199,7 +202,9 @@ export default function TimerScreen({
 
       <section className="timer-audio" aria-label="Background audio">
         <p>{AUDIO_LABEL[audio]}</p>
-        {audioControls}
+        {typeof audioControls === 'function'
+          ? audioControls({ paused: snapshot.paused })
+          : audioControls}
       </section>
 
       <div className="timer-awake">

@@ -34,6 +34,8 @@ function errorBody(code: string, message: string) {
 
 export class FakeSessionsServer {
   mode: Mode = 'up'
+  /** Edits (PATCH) answer 503 while everything else works. */
+  failEdits = false
   readonly sessions = new Map<string, StoredItem>()
   /** Ids sent in each sync request, in order. */
   readonly syncRequests: string[][] = []
@@ -145,6 +147,7 @@ export class FakeSessionsServer {
 
   #edit(id: string, body: Record<string, unknown>): Response {
     this.editRequests.push({ id, body })
+    if (this.failEdits) return json(503, errorBody('unavailable', 'Try again later'))
     const stored = this.sessions.get(id)
     if (!stored) return json(404, errorBody('not_found', 'Session not found'))
     if (stored.archivedAt !== null) {

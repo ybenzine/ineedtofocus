@@ -142,6 +142,25 @@ describe('ArchiveScreen', () => {
     expect(await store.get(record.id)).toBeDefined()
   })
 
+  it('Escape closes the confirmation and returns focus to Delete all', async () => {
+    await archived('A')
+    renderScreen()
+    await screen.findByText('A')
+    const button = screen.getByRole('button', { name: 'Delete all archived sessions' })
+    fireEvent.click(button)
+    fireEvent.keyDown(screen.getByRole('alertdialog'), { key: 'Escape' })
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(button).toHaveFocus()
+  })
+
+  it('moves focus to the heading after a restore', async () => {
+    await archived('A')
+    renderScreen()
+    fireEvent.click(await screen.findByRole('button', { name: /^Restore/ }))
+    await screen.findByText('Session restored to History.')
+    expect(screen.getByRole('heading', { name: 'Archive' })).toHaveFocus()
+  })
+
   async function syncedLive() {
     await new HttpSessionsApi({ fetch: server.fetch }).sync([makeRecord()])
   }

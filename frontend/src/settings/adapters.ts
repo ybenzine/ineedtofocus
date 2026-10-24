@@ -1,7 +1,8 @@
 // Backs the setup screen's `PreferencesStore` (#14) and the alert player's `AlertVolumeStore`
-// (#16) with the settings store, so both follow the Settings API and its offline cache.
+// (#16) and the rain player's `BackgroundVolumeStore` (#17) with the settings store, so both follow the Settings API and its offline cache.
 
 import { clampVolume, type AlertVolumeStore } from '../sounds/alerts.ts'
+import { clampBackgroundVolume, type BackgroundVolumeStore } from '../sounds/rain.ts'
 import {
   DEFAULT_PREFERENCES,
   type Preferences,
@@ -70,5 +71,25 @@ export class SettingsAlertVolumeStore implements AlertVolumeStore {
 
   save(volume: number): void {
     this.#settings.update({ alert_volume: clampVolume(volume) })
+  }
+}
+
+export class SettingsBackgroundVolumeStore implements BackgroundVolumeStore {
+  readonly #settings: SettingsStore
+
+  constructor(settings: SettingsStore) {
+    this.#settings = settings
+  }
+
+  load(): number {
+    return this.#settings.values.background_volume
+  }
+
+  save(volume: number): void {
+    this.#settings.update({ background_volume: clampBackgroundVolume(volume) })
+  }
+
+  subscribe(listener: () => void): () => void {
+    return this.#settings.subscribe(listener)
   }
 }

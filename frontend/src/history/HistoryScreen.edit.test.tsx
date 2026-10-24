@@ -182,6 +182,27 @@ describe('editing a session (AC11.1)', () => {
     expect(server.editRequests).toHaveLength(0)
   })
 
+  it('Escape closes the form and returns focus to the Edit button', async () => {
+    await syncedSession({ goal: 'Focus' })
+    renderScreen()
+    await screen.findByText('Focus')
+    fireEvent.click(screen.getByRole('button', { name: /^Edit session/ }))
+    fireEvent.keyDown(screen.getByLabelText('Goal'), { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByLabelText('Tag')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /^Edit session/ })).toHaveFocus()
+  })
+
+  it('tells the user when the server drops a device edit because the session was archived elsewhere', async () => {
+    const record = await syncedSession({ goal: 'Mine' })
+    renderScreen()
+    await screen.findByText('Mine')
+    fireEvent.click(screen.getByRole('button', { name: /^Edit session/ }))
+    server.archive(record.id)
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Late' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/archived on another device/)
+  })
+
   it('edits a session that only the server has, online', async () => {
     const record = await syncedSession({ goal: 'From elsewhere' }, false)
     renderScreen()
@@ -254,7 +275,7 @@ describe('archiving a session (AC11.2)', () => {
     server.mode = 'offline'
     fireEvent.click(screen.getByRole('button', { name: /^Archive session/ }))
     expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn’t archive the session/)
-    expect(screen.getByText('Stays put')).toBeInTheDocument()
+    expect(await screen.findByText('Stays put')).toBeInTheDocument()
     expect(screen.queryByText('Session archived.')).not.toBeInTheDocument()
   })
 
@@ -272,6 +293,60 @@ describe('archiving a session (AC11.2)', () => {
     await screen.findByText('Session archived.')
     expect(server.get(record.id)).toMatchObject({ goal: 'After' })
     expect(server.sessions.get(record.id)?.archivedAt).not.toBeNull()
+  })
+
+  it('refuses to archive while a queued edit has not reached the server, and keeps the edit', async () => {
+    const record = await syncedSession({ goal: 'Before' })
+    server.mode = 'offline'
+    renderScreen()
+    await screen.findByText('Before')
+    fireEvent.click(screen.getByRole('button', { name: /^Edit session/ }))
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'After' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByText('After')
+    server.mode = 'up'
+    server.failEdits = true
+    fireEvent.click(screen.getByRole('button', { name: /^Archive session/ }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/your change hasn’t synced yet/)
+    expect(server.requests.some((r) => r.endsWith('/archive'))).toBe(false)
+    expect(server.sessions.get(record.id)?.archivedAt).toBeNull()
+    expect((await store.get(record.id))?.editState).toBe('pending')
+    expect(await screen.findByText('After')).toBeInTheDocument()
+    expect(screen.queryByText('Session archived.')).not.toBeInTheDocument()
+  })
+
+  it('two archives at once: one failing does not bring the other back', async () => {
+    await syncedSession({ goal: 'First' })
+    await syncedSession({ goal: 'Second', startedAt: '2026-10-21T10:00:00Z' })
+    let calls = 0
+    const flaky: typeof fetch = async (input, init) => {
+      calls += 1
+      if (calls === 1) throw new TypeError('offline')
+      return server.fetch(input, init)
+    }
+    renderScreen({ archiveApi: new HttpArchiveApi({ fetch: flaky }) })
+    await screen.findByText('First')
+    const rows = Array.from(document.querySelectorAll('.history-row'))
+    const archiveButton = (text: string) =>
+      rows
+        .find((r) => r.textContent?.includes(text))
+        ?.querySelector('button[aria-label^="Archive"]')
+    fireEvent.click(archiveButton('Second') as Element) // this request is the one that fails
+    fireEvent.click(archiveButton('First') as Element)
+    await screen.findByText('Session archived.')
+    await screen.findByText('Second')
+    expect(screen.queryByText('First')).not.toBeInTheDocument()
+  })
+
+  it('shows a different message for a session that no longer exists', async () => {
+    const record = await syncedSession({ goal: 'Deleted elsewhere' })
+    renderScreen()
+    await screen.findByText('Deleted elsewhere')
+    server.sessions.delete(record.id)
+    fireEvent.click(screen.getByRole('button', { name: /^Archive session/ }))
+    const alert = await screen.findByRole('alert')
+    expect(alert).toHaveTextContent(/deleted on another device/)
+    expect(alert).not.toHaveTextContent(/Check your connection/)
   })
 
   it('offline, the session archived on this device stays out of the cached view', async () => {
