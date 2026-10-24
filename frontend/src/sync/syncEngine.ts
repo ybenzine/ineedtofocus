@@ -35,6 +35,8 @@ export interface SyncReport {
   rejected: number
   /** Edits the server applied. */
   edited: number
+  /** Ids of sessions whose queued edit the server refused with a 409 (archived elsewhere) and was dropped. */
+  dropped: string[]
 }
 
 export interface Scheduler {
@@ -138,11 +140,14 @@ export class SyncEngine {
     this.#cancelRetry()
     const run = async (): Promise<SyncReport> => {
       let report: SyncReport
+      // Gathered across every pass of the loop: the last pass alone could miss an earlier drop.
+      const dropped: string[] = []
       do {
         this.#again = false
         report = await this.#exclusive(() => this.#pass())
+        dropped.push(...report.dropped)
       } while (this.#again)
-      return report
+      return { ...report, dropped }
     }
     this.#running = run().finally(() => {
       this.#running = null
@@ -230,7 +235,7 @@ export class SyncEngine {
   }
 
   async #pass(): Promise<SyncReport> {
-    const report: SyncReport = { outcome: 'done', synced: 0, rejected: 0, edited: 0 }
+    const report: SyncReport = { outcome: 'done', synced: 0, rejected: 0, edited: 0, dropped: [] }
     if (!this.#isOnline()) return { ...report, outcome: 'offline' }
     const owner = this.#currentOwner()
     if (owner === null) return report
@@ -296,6 +301,7 @@ export class SyncEngine {
         case 'conflict':
           // Archived on the server (AC11.4): the edit can never apply; the session is untouched.
           await this.#io(this.#store.dropEdit(entry.id, version))
+          report.dropped.push(entry.id)
           break
         case 'invalid':
         case 'not_found':

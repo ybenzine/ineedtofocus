@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HttpArchiveApi } from '../archive/api.ts'
 import { HttpSessionsApi } from '../sync/api.ts'
 import { IndexedDbSessionStore } from '../sync/sessionStore.ts'
-import { SyncEngine } from '../sync/syncEngine.ts'
+import { SyncEngine, type SyncReport } from '../sync/syncEngine.ts'
 import { FakeSessionsServer, freshDbName, makeRecord } from '../test/fakeSessionsServer.ts'
 import type { ApiResult } from '../sync/api.ts'
 import type { HistoryApi, HistoryData, HistoryQuery, HistorySession } from './api.ts'
@@ -203,6 +203,79 @@ describe('editing a session (AC11.1)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/archived on another device/)
   })
 
+  describe('the "archived on another device" message (AC11.4)', () => {
+    const report = (dropped: string[]): SyncReport => ({
+      outcome: 'done',
+      synced: 0,
+      rejected: 0,
+      edited: 0,
+      dropped,
+    })
+
+    /** A sync engine whose passes finish when the test says so. */
+    function manualSync() {
+      const pending: ((r: SyncReport) => void)[] = []
+      const stub = {
+        syncNow: vi.fn(() => new Promise<SyncReport>((resolve) => pending.push(resolve))),
+      }
+      return { sync: stub as unknown as SyncEngine, pending }
+    }
+
+    async function saveGoal(goal: string) {
+      fireEvent.click(screen.getByRole('button', { name: /^Edit session/ }))
+      fireEvent.change(screen.getByLabelText('Goal'), { target: { value: goal } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    }
+
+    it('is not shown when the edit was applied in an earlier pass or dropped by another tab', async () => {
+      const record = await syncedSession({ goal: 'Mine' })
+      const { sync, pending } = manualSync()
+      renderScreen({ sync })
+      await screen.findByText('Mine')
+      await saveGoal('Changed')
+      await waitFor(() => expect(pending).toHaveLength(1))
+      // Whoever sent it, this sync dropped nothing: the edit is already gone from the queue.
+      await store.dropEdit(record.id, (await store.get(record.id))?.editVersion ?? 0)
+      pending[0](report([]))
+      await waitFor(() => expect(sync.syncNow).toHaveBeenCalledTimes(1))
+      await screen.findByText('Changed')
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    it('is not shown while an archive of the same session is in flight', async () => {
+      await syncedSession({ goal: 'Mine' })
+      const { sync, pending } = manualSync()
+      renderScreen({ sync })
+      await screen.findByText('Mine')
+      await saveGoal('Changed')
+      await waitFor(() => expect(pending).toHaveLength(1))
+      await screen.findByText('Changed')
+      fireEvent.click(screen.getByRole('button', { name: /^Archive session/ }))
+      await waitFor(() => expect(pending).toHaveLength(2)) // the archive waits for the edit
+      pending[0](report([(await store.list('me'))[0].record.id]))
+      await waitFor(() => expect(screen.queryByText('Changed')).not.toBeInTheDocument())
+      expect(screen.queryByText(/archived on another device/)).not.toBeInTheDocument()
+      pending[1](report([]))
+      await screen.findByRole('alert') // the archive's own refusal, not the 409 message
+      expect(screen.getByRole('alert')).not.toHaveTextContent(/archived on another device/)
+    })
+  })
+
+  it('returns focus to the row’s Edit button after Save, once the list has reloaded', async () => {
+    await syncedSession({ goal: 'Focus' })
+    renderScreen()
+    await screen.findByText('Focus')
+    fireEvent.click(screen.getByRole('button', { name: /^Edit session/ }))
+    fireEvent.change(screen.getByLabelText('Goal'), { target: { value: 'Focus 2' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByText('Focus 2')
+    await waitFor(() => expect(server.editRequests).toHaveLength(1))
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Edit session/ })).toHaveFocus())
+    // And it stays there after the reload that follows the sync.
+    await waitFor(() => expect(screen.queryByText('Not synced yet')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: /^Edit session/ })).toHaveFocus()
+  })
+
   it('edits a session that only the server has, online', async () => {
     const record = await syncedSession({ goal: 'From elsewhere' }, false)
     renderScreen()
@@ -347,6 +420,21 @@ describe('archiving a session (AC11.2)', () => {
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent(/deleted on another device/)
     expect(alert).not.toHaveTextContent(/Check your connection/)
+  })
+
+  it('a failed archive while offline keeps the cached sessions from other devices', async () => {
+    await syncedSession({ goal: 'Here' })
+    await syncedSession({ goal: 'Other device' }, false)
+    renderScreen()
+    await screen.findByText('Other device')
+    history.offline = true
+    server.mode = 'offline'
+    const row = screen.getByText('Here').closest('li') as HTMLElement
+    fireEvent.click(row.querySelector('button[aria-label^="Archive"]') as HTMLElement)
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn’t archive the session/)
+    expect(await screen.findByText(/You’re offline/)).toBeInTheDocument()
+    expect(screen.getByText('Here')).toBeInTheDocument()
+    expect(screen.getByText('Other device')).toBeInTheDocument()
   })
 
   it('offline, the session archived on this device stays out of the cached view', async () => {
