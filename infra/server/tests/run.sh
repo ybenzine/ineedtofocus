@@ -6,8 +6,10 @@
 #                    real SSH logins against the hardened sshd), run it again and check
 #                    that nothing changed.
 #   focus_ci.sh      then, on that bootstrapped server: infra/server/install.sh and the
-#                    forced command focus-ci (#28, #29: dev and prod profiles) behind the real sshd, with a fake
-#                    docker CLI that records every call.
+#                    forced command focus-ci (#28-#30: the dev, prod and rollback-prod
+#                    profiles, the automatic revert with deliberately broken images,
+#                    rollback) behind the real sshd, with a fake docker CLI that records
+#                    every call.
 #
 # A container has no systemd, so bootstrap.sh skips service management there; everything
 # else (packages, Docker's apt repo, users, sshd config, files and permissions) is the

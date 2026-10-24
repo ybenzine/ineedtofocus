@@ -1,6 +1,6 @@
 # Deployment
 
-> **Status: in progress.** Server setup is scripted (#25), the images and production Compose are defined (#27), merges to `main` deploy to dev (#28), and prod deploys are a manual, approved workflow (#29). Automatic revert and rollback are filled in by the DevOps agent with #30. The plan is in [tech_stack.md §2–3](tech_stack.md).
+> **Status: in progress.** Server setup is scripted (#25), the images and production Compose are defined (#27), merges to `main` deploy to dev (#28), prod deploys are a manual, approved workflow (#29), and a deploy that fails its checks reverts by itself, with a `rollback` workflow for dev and prod (#30). The plan is in [tech_stack.md §2–3](tech_stack.md).
 
 ## Environments
 
@@ -81,7 +81,7 @@ Each GitHub environment gets its own key pair. The private key goes into that en
 restrict,command="/opt/focus/bin/focus-ci <profile>" ssh-ed25519 AAAA... focus-ci-<environment>
 ```
 
-`restrict` turns off PTYs and forwarding for that key; `command=` makes sshd run that script whatever the client asks for (the client's request is in `$SSH_ORIGINAL_COMMAND`). The profile is fixed by this root-owned line, so a key can never pick another one. The `dev` profile is #28's ([Deploy to dev](#deploy-to-dev-28)), `prod` is #29's ([Deploy to prod](#deploy-to-prod-29)); #30 (rollback) adds its own.
+`restrict` turns off PTYs and forwarding for that key; `command=` makes sshd run that script whatever the client asks for (the client's request is in `$SSH_ORIGINAL_COMMAND`). The profile is fixed by this root-owned line, so a key can never pick another one. The `dev` profile is #28's ([Deploy to dev](#deploy-to-dev-28)), `prod` is #29's ([Deploy to prod](#deploy-to-prod-29)), and `rollback-prod` is the prod rollback key's (#30, [Rollback](#rollback-rollbackyml)).
 
 ### Upkeep
 
@@ -148,7 +148,7 @@ infra/compose.sh dev run --rm --pull never app alembic upgrade head   # one-shot
 infra/compose.sh dev up -d --wait --pull never                  # app starts with MIGRATE_ON_START=0
 ```
 
-A rollback is the same `up -d --wait` with the previous release and no migration step, because migrations are expand-only (see [App image and migrations](#app-image-and-migrations)). The edge (`compose.edge.yml`) is started and updated by `install.sh`, never by a deploy key, because prod shares it.
+A rollback is the same `up -d --wait` with a known-good release and no migration step, because migrations are expand-only (see [App image and migrations](#app-image-and-migrations) and [Rollback](#rollback-rollbackyml)). The edge (`compose.edge.yml`) is started and updated by `install.sh`, never by a deploy key, because prod shares it.
 
 ### App settings fixed by the Compose file
 
@@ -202,27 +202,27 @@ Every push to `main` runs CI. Once the five required checks and `image` pass, `p
 | Step | Where | What |
 |---|---|---|
 | Gate | runner | Neither `DEPLOY_SSH_KEY` nor `DEPLOY_KNOWN_HOSTS` set in the `dev` environment: skips with a notice, green (not set up yet). Only one of them set: fails red, since the environment is half configured. Both: deploys |
-| Deploy | server, `focus-ci dev` | `ssh deploy@159.223.188.176 "deploy <sha> sha256:<digest>"`: waits for the deploy lock, pulls by digest, checks the image's `org.opencontainers.image.revision` label is `<sha>`, tags it `:<sha>`, migrates (`run --rm`), starts (`up -d --wait`, the `/healthz` healthcheck), checks that the app container runs exactly that image and that `/readyz` answers inside it, then records the release |
+| Deploy | server, `focus-ci dev` | `ssh deploy@159.223.188.176 "deploy <sha> sha256:<digest>"`: waits for the deploy lock, notes the current release, pulls by digest, checks the image's `org.opencontainers.image.revision` label is `<sha>`, tags it `:<sha>`, migrates (`run --rm`), starts (`up -d --wait`, the `/healthz` healthcheck), checks that the app container runs exactly that image and that `/healthz` and `/readyz` answer inside it, then records the release. If the start or a check fails, it starts the release that ran before again and fails ([Automatic revert](#automatic-revert)) |
 | Record | runner | `ssh … status` reads the record back; the job fails if it doesn't show this tag and digest |
 | Smoke | runner | `scripts/smoke_deploy.py https://dev.ineedtofoc.us`: `/healthz` and `/readyz` answer `{"status":"ok"}`, `/` serves the frontend, `http://` redirects to `https://`, the certificate verifies. Retried for up to 90 s |
 | Summary | runner | Tag, image digest, server time of the deploy, rollback target, infra revision, smoke results |
 
-A failed step stops the deploy and exits non-zero, which turns the job red. The record keeps the last successful release, and the attempt is logged with the step that failed. If the failure came after `up`, dev may be running the new image unhealthy; automatic revert to the previous release is #30.
+A failed step stops the deploy and exits non-zero, which turns the job red. The record keeps the last successful release, and the attempt is logged with the step that failed. A failure at the start (after `up`) also puts the previous release back ([Automatic revert](#automatic-revert)). To undo a deploy that passed its checks, run the [rollback workflow](#rollback-rollbackyml).
 
 ### The forced command: `focus-ci`
 
 `/opt/focus/bin/focus-ci <profile>` (source `infra/server/focus-ci.sh`) accepts exactly these requests in `$SSH_ORIGINAL_COMMAND`, matched whole, in the C locale:
 
-| Request | Profile `dev` | Profile `prod` (#29) | Does |
-|---|---|---|---|
-| `deploy <40 lowercase hex> sha256:<64 lowercase hex>` | yes | yes, only a sha and digest dev ran successfully | The deploy above, on that profile's environment |
-| `rollback` | yes | no (#30's own key) | Starts the record's previous release again by digest, no migration, same checks. Rolling back again goes further back, not forward |
-| `status` | yes | yes | Prints that environment's record |
-| `candidate` or `candidate <40 lowercase hex>` | no | yes | Read-only: the tag and digest of dev's current release, or the last digest of that sha dev ran successfully ([Deploy to prod](#deploy-to-prod-29)) |
+| Request | Profile `dev` | Profile `prod` (#29) | Profile `rollback-prod` (#30) | Does |
+|---|---|---|---|---|
+| `deploy <40 lowercase hex> sha256:<64 lowercase hex>` | yes | yes, only a sha and digest dev ran successfully and didn't roll back from | no | The deploy above, on that profile's environment, with the [automatic revert](#automatic-revert) |
+| `rollback` or `rollback <40 lowercase hex>` | yes (dev) | no | yes (prod) | Starts a [known-good release](#known-good-releases) again by its recorded digest, no migration, same checks. Rolling back again goes further back, not forward |
+| `status` | yes | yes | yes (prod) | Prints that environment's record |
+| `candidate` or `candidate <40 lowercase hex>` | no | yes | no | Read-only: the tag and digest of dev's current release, or the last promotable digest of that sha dev ran ([Deploy to prod](#deploy-to-prod-29)) |
 
-Anything else gets exit status 2 and `focus-ci: refused`, before anything runs: another verb, a verb the profile doesn't have, extra or malformed arguments, a shell, scp or sftp, a newline, or an unknown profile. Requests are logged to syslog (`journalctl -t focus-ci`). Every `docker` and `compose.sh` call runs under `env -i` with only `PATH`, `HOME` and `APP_TAG`, so nothing from the SSH session (such as `LC_*`, which sshd accepts) can override `infra/env/<env>.env`. #30 adds the prod rollback profile (restricted to recorded releases) and the automatic revert in the same `case`.
+Anything else gets exit status 2 and `focus-ci: refused`, before anything runs: another verb, a verb the profile doesn't have, extra or malformed arguments, a shell, scp or sftp, a newline, or an unknown profile. Requests are logged to syslog (`journalctl -t focus-ci`). Every `docker` and `compose.sh` call runs under `env -i` with only `PATH`, `HOME` and `APP_TAG`, so nothing from the SSH session (such as `LC_*`, which sshd accepts) can override `infra/env/<env>.env`.
 
-**Serialization.** Every deploy and rollback takes `flock /opt/focus/deploy.lock` (waits up to 15 minutes), across environments, and `install.sh` takes the same lock. The memory budget counts one migration container at a time ([Memory](#memory-dev-cant-starve-prod)). In GitHub, `deploy-dev` has its own concurrency group (`deploy-dev`, no cancelling of the running deploy). Deploys of different environments don't share one group: GitHub cancels a *pending* job when another one joins the group, so a dev deploy queued behind a prod deploy would cancel a pending prod rollback. The server lock is what orders them. When merges queue up, the group keeps only the newest pending deploy: an intermediate commit's `Deploy to dev` shows as cancelled and dev goes straight to the newest commit. That's intended.
+**Serialization.** Every deploy and rollback takes `flock /opt/focus/deploy.lock` (waits up to 15 minutes), across environments, and holds it through an automatic revert. `install.sh` takes the same lock. The memory budget counts one migration container at a time ([Memory](#memory-dev-cant-starve-prod)). In GitHub, `deploy-dev` has its own concurrency group (`deploy-dev`, no cancelling of the running deploy). Deploys of different environments don't share one group: GitHub cancels a *pending* job when another one joins the group, so a dev deploy queued behind a prod deploy would cancel a pending prod rollback. The server lock is what orders them. When merges queue up, the group keeps only the newest pending deploy: an intermediate commit's `Deploy to dev` shows as cancelled and dev goes straight to the newest commit. That's intended.
 
 ### The release record
 
@@ -240,7 +240,7 @@ previous_digest=sha256:<digest>
 infra_revision=<sha>           # /opt/focus/infra/REVISION when it ran
 ```
 
-`/opt/focus/dev/releases.log` has one line per attempt: `time=… env=dev action=deploy|rollback outcome=ok|failed tag=… digest=… previous_tag=… previous_digest=… infra=… [step=…]`.
+`/opt/focus/dev/releases.log` has one line per attempt: `time=… env=dev action=deploy|rollback|revert outcome=ok|failed tag=… digest=… previous_tag=… previous_digest=… infra=… [step=…]`. A rollback's ok line adds the release it left (`from_tag=… from_digest=…`). An automatic revert's line adds what failed (`failed_action=… failed_tag=… failed_digest=…`). The log is what [known-good](#known-good-releases) is computed from, so it's never edited by hand.
 
 ### Credentials
 
@@ -255,7 +255,7 @@ Nothing is stored at repo level. The key can only run the `dev` profile: deploy,
 - The revision label check only proves the image *claims* to be built from `<sha>`. Anyone able to push to that package can set any label, and any workflow run in this repo that asks for `packages: write` can push there, including runs on PR branches. So the checks don't prove an image was built on `main`. That guarantee comes from the workflow: `deploy-dev` deploys only the digest `publish` pushed for a `main` commit that passed CI. The key itself is held only by the `main`-only `dev` environment.
 - An image runs as dev's app, with the root-installed `compose.prod.yml`: no volumes, ports, Docker socket, privileges or host network, on dev's own networks and database. Host disk and process limits come with #117.
 
-**The local `:<sha>` tag is host-wide.** Both environments' Compose projects resolve `ghcr.io/ybenzine/ineedtofocus:<sha>` from the same local image store, and `focus-ci` moves that tag (`docker tag …@<digest> …:<sha>`) on every deploy and rollback. `focus-ci` therefore never trusts an existing local tag. It re-tags from the digest it was given or has recorded, under the lock, and then checks the running container's image. Anything else that starts an app container must do the same. The prod deploy (#29) does, through the same `deploy` code. #30's auto-revert and rollback must, and so must any manual `compose.sh prod up` from a runbook.
+**The local `:<sha>` tag is host-wide.** Both environments' Compose projects resolve `ghcr.io/ybenzine/ineedtofocus:<sha>` from the same local image store, and `focus-ci` moves that tag (`docker tag …@<digest> …:<sha>`) on every deploy and rollback. `focus-ci` therefore never trusts an existing local tag. It re-tags from the digest it was given or has recorded, under the lock, and then checks the running container's image. Anything else that starts an app container must do the same. The prod deploy (#29), the automatic revert and `rollback` (#30) do, through the same code. Any manual `compose.sh … up` must too ([break-glass](#break-glass-on-the-server)).
 
 The `main`-only branch policy keeps workflows on other branches from reading the key. GitHub creates the `dev` environment, with no secrets, the first time the job runs; until the secrets are added the job skips.
 
@@ -282,7 +282,7 @@ The `main`-only branch policy keeps workflows on other branches from reading the
 - **Infra changed in a merge:** run `install.sh` with the merge commit (see above), read the diff, type `yes`; the next deploy records the new `infra_revision`.
 - **Host disk:** nothing prunes old app images yet. Until #117 lands, check `df -h /` and `docker system df` now and then.
 - **Rotate the key:** repeat steps 2–6, then remove the old line from `/etc/ssh/authorized_keys/deploy`.
-- **Roll dev back by hand** until #30's workflow exists: dev's key is only in GitHub, so use the server: `sudo -u deploy env -i SSH_ORIGINAL_COMMAND=rollback /opt/focus/bin/focus-ci dev`. That is what the key would run.
+- **Roll dev back:** `gh workflow run rollback.yml -f env=dev` ([Rollback](#rollback-rollbackyml)).
 
 ## Deploy to prod (#29)
 
@@ -304,7 +304,7 @@ Prod deploys are manual and approved by Yacine. `.github/workflows/deploy-prod.y
 
 **What the rules don't catch.** Like every rule in that file, they match command text, so they prevent mistakes, not determined misuse. A numeric ID after a flag (`gh workflow run --ref main <id>`) or in quotes gets through: a rule such as `gh workflow run * 1*` would also match a rollback tag, which is a commit sha. So does a GraphQL query read from a file (`-F query=@file`), and any command run through an allowed wrapper (`uv run`, `npx`, `python`, `node`, `docker exec`), `bash -c`, `env` or an absolute path to `gh`. Until #127 lands, the approval is a gate against people and leaked tokens other than Yacine's, and against agents' mistakes, but not against an agent set on getting past it.
 
-**Prod gets what dev ran.** Leave `tag` empty to deploy the release dev runs now, or give a full commit sha (40 lowercase hex) that dev ran successfully at some point. "Successfully" means two things. The `plan` job requires a `dev` GitHub deployment of that sha that reached `success`, so `deploy-dev` passed its smoke tests. The server requires an ok line in dev's `releases.log`, so focus-ci's checks passed. An explicit sha lets you deploy, for example, a release dev ran before newer merges reached it. Going back is a rollback, not a deploy (#30): a deploy migrates, and an older image can't run `alembic upgrade head` on a schema a newer one migrated. That deploy stops at the `migrate` step with nothing changed. Either way the workflow deploys a digest, never a registry tag. That digest is read from dev's own records on the server. It's normally the one `publish` pushed and `deploy-dev` deployed; [Credentials](#credentials-1) covers when it might not be. The server checks it again before deploying: `focus-ci prod` refuses a sha and digest that have no successful line in `/opt/focus/dev/releases.log`. So a tag re-pushed to the registry, or a digest nobody deployed to dev, can't reach prod.
+**Prod gets what dev ran.** Leave `tag` empty to deploy the release dev runs now, or give a full commit sha (40 lowercase hex) that dev ran successfully at some point. "Successfully" means two things. The `plan` job requires a `dev` GitHub deployment of that sha that reached `success`, so `deploy-dev` passed its smoke tests. The server requires an ok line in dev's `releases.log`, so focus-ci's checks passed. An explicit sha lets you deploy, for example, a release dev ran before newer merges reached it. Going back is a rollback, not a deploy (#30): a deploy migrates, and an older image can't run `alembic upgrade head` on a schema a newer one migrated. That deploy stops at the `migrate` step with nothing changed. Either way the workflow deploys a digest, never a registry tag. That digest is read from dev's own records on the server. It's normally the one `publish` pushed and `deploy-dev` deployed; [Credentials](#credentials-1) covers when it might not be. The server checks it again before deploying: `focus-ci prod` refuses a sha and digest that have no successful line in `/opt/focus/dev/releases.log`, or that dev rolled back from since ([Known-good releases](#known-good-releases)). So a tag re-pushed to the registry, or a digest nobody deployed to dev, can't reach prod.
 
 | Step | Where | What |
 |---|---|---|
@@ -312,12 +312,12 @@ Prod deploys are manual and approved by Yacine. `.github/workflows/deploy-prod.y
 | Approval | job `deploy`, environment `production` | Waits for Yacine: the run page shows **Review deployments**. Read the plan's summary, then tick `production` → **Approve and deploy**, or **Reject**. The environment's branch rule only lets runs from `main` in |
 | Gate | runner | Neither `DEPLOY_SSH_KEY` nor `DEPLOY_KNOWN_HOSTS` in `production`: skips with a notice, green, nothing changes on prod. Only one of them: fails red. Both: deploys |
 | Resolve | runner, `focus-ci prod`: `candidate` | Empty input: `candidate`, dev's current release. If dev's record doesn't show the planned sha, the job stops and deploys nothing, since that's not what was approved. Either dev moved after the plan (a newer deploy, or a rollback), or dev's latest deploy passed the server checks but failed its smoke tests, so the plan skipped it. A sha: `candidate <sha>`, the last digest of that commit dev ran successfully. Read-only: no docker call, no lock, no write. A dev key put in `production` by mistake can't run it, so the job stops here |
-| Deploy | server, `focus-ci prod`: `deploy <sha> sha256:<digest>` | Under the deploy lock: the `promote` check above, then the same steps as dev on `focus-prod`. It pulls by digest when the host doesn't have it and checks the revision label. It re-tags the host-wide `:<sha>` from the digest, which dev's deploys may have moved. Then it migrates, runs `up -d --wait`, checks that the app container runs exactly that digest and that `/readyz` answers, and records the release |
+| Deploy | server, `focus-ci prod`: `deploy <sha> sha256:<digest>` | Under the deploy lock: the `promote` check above, then the same steps as dev on `focus-prod`. It pulls by digest when the host doesn't have it and checks the revision label. It re-tags the host-wide `:<sha>` from the digest, which dev's deploys may have moved. Then it migrates, runs `up -d --wait`, checks that the app container runs exactly that digest and that `/healthz` and `/readyz` answer, and records the release. If the start or a check fails, it starts prod's previous release again and fails ([Automatic revert](#automatic-revert)) |
 | Record | runner | `status` reads `/opt/focus/prod/release` back; the job fails unless it shows `env=prod` and this tag and digest. Then the key is deleted from the runner, before any repository code runs |
 | Smoke | runner | `scripts/smoke_deploy.py https://ineedtofoc.us`, the same checks as dev's |
 | Summary | runner | Tag, image digest, when dev ran it, when prod got it, rollback target (the previous tag), infra revision, smoke results |
 
-The prod record and log have the same format as dev's ([The release record](#the-release-record)), in `/opt/focus/prod/`. A failed step stops the deploy and turns the job red. The record keeps the last good release, and the attempt is logged with the step that failed (`step=promote` when dev never ran it). If the failure came after `up`, prod may be running the new image unhealthy. The automatic revert is #30; until then, roll back by hand (below).
+The prod record and log have the same format as dev's ([The release record](#the-release-record)), in `/opt/focus/prod/`. A failed step stops the deploy and turns the job red. The record keeps the last good release, and the attempt is logged with the step that failed (`step=promote` when dev never ran it, or rolled back from it). A failure after `up` also puts prod's previous release back ([Automatic revert](#automatic-revert)).
 
 **One prod deploy at a time.** The `deploy` job has its own concurrency group, `deploy-prod`, which never cancels a running deploy. A second run waits; a third one replaces the waiting second one, so the newest request wins. Reject runs you won't approve rather than leaving them waiting, since a waiting run can hold the group. The group isn't shared with `deploy-dev` or #30's `rollback.yml`, because GitHub cancels a *pending* job when another one joins its group. Deploys of both environments are ordered on the server by `/opt/focus/deploy.lock` instead.
 
@@ -334,7 +334,7 @@ The prod key itself sits on the runner's disk only from **Set up the deploy key*
 
 What each key can do:
 
-- **Prod key** (`focus-ci prod`): deploy to prod a release dev ran successfully, read prod's record, and read dev's record and log (`candidate`). It can't deploy or roll back dev, roll prod back (#30's key does that), open a shell or change the compose files. If it leaked, the worst it could do is redeploy to prod a release dev once ran (an older one stops at `migrate` once prod's schema is newer). That's not new code, but only as long as dev runs only `publish`'s images, and the server doesn't enforce that (next point).
+- **Prod key** (`focus-ci prod`): deploy to prod a release dev ran successfully (and didn't roll back from), read prod's record, and read dev's record and log (`candidate`). It can't deploy or roll back dev, roll prod back (the [rollback key](#credentials-2) does that), open a shell or change the compose files. If it leaked, the worst it could do is redeploy to prod a release dev once ran (an older one stops at `migrate` once prod's schema is newer). That's not new code, but only as long as dev runs only `publish`'s images, and the server doesn't enforce that (next point).
 - **What the approval binds: a commit, not bytes.** Yacine approves a commit. The digest comes from dev's `releases.log`, which records whatever the dev key asked for. The dev key is usable without a reviewer by any `dev`-environment job on `main`. Any run that asks for `packages: write` can push an image labelled with any commit, PR-branch runs included. So an agent-merged workflow change could deploy to dev an image built outside `publish` and labelled with commit X. Approving X for prod would then deploy those bytes. Build provenance attestations from `publish`, verified before the prod deploy, close this: #128.
 - **Dev key** (`focus-ci dev`): can't do anything on prod. `candidate` is refused, and its `deploy`, `rollback` and `status` act only on `focus-dev` and `/opt/focus/dev/`.
 
@@ -369,11 +369,151 @@ Dev must be deployed first ([Deploy to dev → One-time setup](#one-time-setup-y
 ### Upkeep
 
 - **Rotate the key:** repeat steps 2–6, then remove the old `focus-ci-prod` line from `/etc/ssh/authorized_keys/deploy`.
-- **Roll prod back by hand** until #30's workflow exists. The prod profile has no `rollback` (#30 adds a separate key for it), and a `deploy` of an older release fails at `migrate`. So on the server, take `previous_tag` and `previous_digest` from `sudo cat /opt/focus/prod/release`, re-tag from the digest (dev may have moved the tag) and start it without migrating:
-  `sudo -u deploy env -i PATH=/usr/bin:/bin HOME=/home/deploy sh -c 'docker tag ghcr.io/ybenzine/ineedtofocus@<previous_digest> ghcr.io/ybenzine/ineedtofocus:<previous_tag> && APP_TAG=<previous_tag> /opt/focus/infra/compose.sh prod up -d --wait --pull never'`
-  The record isn't updated by this, so note it on the incident; #30's rollback does all of it and records it.
+- **Roll prod back:** `gh workflow run rollback.yml -f env=prod`, no approval needed ([Rollback](#rollback-rollbackyml)). A `deploy` of an older release isn't a rollback: it fails at `migrate` once prod's schema is newer.
 
-## Sections to write
+## Health checks and automatic revert (#30)
 
-- Health checks, auto-revert and rollback — #30
-- Credential separation for the rollback key — #30 (dev's is in [Deploy to dev → Credentials](#credentials), prod's in [Deploy to prod → Credentials](#credentials-1))
+### What a deploy checks
+
+`focus-ci`'s `deploy`, the same code for dev and prod, under the deploy lock:
+
+1. **Note the current release** (the record's `tag` and `digest`): the one to go back to. Work out the next rollback target from the log ([Known-good releases](#known-good-releases)).
+2. **Pull** the new image by digest, check its revision label, re-tag `:<sha>` from the digest.
+3. **Migrate** as a one-shot container (`run --rm … alembic upgrade head`).
+4. **Start** with `up -d --wait`, which waits for the `/healthz` healthcheck (`--wait-timeout 180`). Then check that the app container runs exactly that digest, and that `GET /healthz` (the process) and `GET /readyz` (the database) answer inside it, three tries each, 2 s apart.
+5. **Record** the release (`release`, plus an ok line in `releases.log`).
+
+### Automatic revert
+
+A failure before the start (`promote`, `pull`, `migrate`) leaves the running app alone. The old container is never stopped, and a failed migration rolls back in its transaction, so there's nothing to revert. The deploy fails, the record is unchanged, and the attempt is logged with its step.
+
+A failure at the start (not healthy within the timeout, the wrong image, `/healthz` or `/readyz` not answering) means the app may now run the new release unhealthy. So, still under the lock, `focus-ci` starts **the release that ran before** again:
+
+- by its recorded digest, re-tagged `:<sha>` from it (dev or prod may have moved that tag), pulled if the host no longer has it;
+- without migrating: the older release runs on the newer schema ([Schema compatibility](#schema-compatibility));
+- with the same checks (running image, `/healthz`, `/readyz`).
+
+Then the deploy **fails anyway** (exit 1), so the `Deploy to dev` or `Deploy to prod` job goes red. Its summary says the server started the previous release again. The record is unchanged, since it still names the release that runs. The log has two lines: `action=deploy outcome=failed step=start` for the new release, then `action=revert outcome=ok` (or `failed`) for the one restored, with `failed_tag` and `failed_digest`. A failed release has no ok line, so it never becomes a rollback target and prod never takes it from dev.
+
+If the revert fails too (for example the database is down, so no release passes `/readyz`), the deploy says `reverting to <tag> failed too`: the environment may be down ([runbook](runbooks/rollback.md)). The first deploy of an environment has nothing to revert to. A redeploy of the current digest that fails has nothing *else* to go back to: roll back instead.
+
+The smoke tests that run afterwards from the runner (`scripts/smoke_deploy.py`, through Caddy) don't trigger a revert. When they fail after the server's own checks passed, the cause is usually the edge (Caddy, DNS, the certificate), and undoing the release wouldn't fix it. A release that failed its smoke tests on dev is never offered to prod (deploy-prod's plan requires a dev deployment that reached `success`). To undo it anyway, run the [rollback workflow](#rollback-rollbackyml).
+
+`make test-server` runs this with deliberately broken images: one never turns healthy, one has no `/readyz`, and one is broken on prod only. Each deploy fails, the release before it runs again by its own digest without migrating, and a probe checks the lock is held through both starts.
+
+### Known-good releases
+
+Every `outcome=ok` line in an environment's `releases.log` is a release that ran there and passed every check: a deploy, a rollback or an automatic revert. A rollback's ok line also names the release it **left** (`from_digest`). That release is then *rolled back from* until a later ok line for the same digest, for example when someone deploys it again on purpose.
+
+A **known-good release** of an environment is a release (tag and digest) with an ok line there that isn't rolled back from. Concretely:
+
+- `rollback` restores the newest known-good release other than the current one. A rollback revokes the release it left, so rolling back again goes one further back, never forward to it.
+- `rollback <sha>` restores the newest known-good release of that commit, by the digest recorded for it. The server refuses a sha with no known-good release there: one that never passed the checks, failed and was reverted, only ran on the other environment, was rolled back from, or is the current release.
+- After every deploy or rollback, the record's `previous_tag`/`previous_digest` is the next rollback target, worked out the same way. The workflow summaries show it.
+
+**Not promotable once dev rolled back from it** (#125 review). Prod takes only releases dev ran, and a release dev rolled back from is one we decided was bad. `focus-ci prod` refuses it in `candidate` (read-only) and in `promote` (under the lock, before any docker call) with `dev rolled back from <sha> <digest>, so it is not promotable`. It becomes promotable again only when dev runs that digest again with an ok line. deploy-prod's `plan` job can't see this (it reads GitHub deployments, which a rollback doesn't change), so a run that picked such a release stops at `Resolve` or `Deploy`, after the approval but before anything changes on prod.
+
+### Schema compatibility
+
+Neither a rollback nor a revert runs a migration, and nothing ever undoes one. That's safe because migrations are **expand-only** ([AGENTS.md](../AGENTS.md#conventions), `backend/tests/unit/test_migration_safety.py`). A known-good release migrated this database or ran on it. Every later migration only added to the schema (new tables, new nullable or defaulted columns), and removals wait for a later contract release, once no release that needs the old shape is a rollback target. So the older code runs on today's schema. The app container doesn't migrate on start (`MIGRATE_ON_START=0`), so an older image doesn't fail with `Can't locate revision …`. A migration that breaks this rule breaks rollback, which is why the migration safety test exists. A bad migration isn't something a rollback fixes: fix forward.
+
+## Rollback (`rollback.yml`)
+
+`.github/workflows/rollback.yml` (workflow `rollback`) restores a known-good release on dev or prod. It needs **no approval**, so the on-call agent can run it at any hour ([process.md → Human gates](process.md#human-gates)). It can't deploy anything new: the key it uses can only start a release that already passed the checks on that environment. The step-by-step procedure, for people and the on-call agent, is the [rollback runbook](runbooks/rollback.md).
+
+```bash
+gh workflow run rollback.yml -f env=prod                 # the last known-good release
+gh workflow run rollback.yml -f env=prod -f tag=<sha>    # a known-good release of <sha>
+```
+
+Or **Actions** → **rollback** → **Run workflow** → branch `main`, then choose `env` and, optionally, a `tag`.
+
+**Inputs:** `env`, a choice of `dev` or `prod`, and `tag`, empty or a full commit sha. There's no free-text input. The permission rules match the whole command text, so a reason such as `-f reason="deploy-prod broke saves"` would hit #126's deny rule (`gh workflow run *deploy-prod*`) and stall an unattended run. Keep `rollback.yml` straight after `gh workflow run`. `gh workflow run --ref main rollback.yml …` matches no allow rule and prompts. `gh workflow run` dispatches on the default branch, `main`, already. `scripts/tests/test_claude_settings.py` checks the on-call agent's exact commands against the rules.
+
+| Step | Where | What |
+|---|---|---|
+| Check the request | runner, no secret | Run from `main`; `env` is `dev` or `prod`; `tag` is empty or 40 lowercase hex |
+| Environment | job | `env=dev` → environment `dev` (its deploy key, `focus-ci dev`). `env=prod` → environment `rollback` (the prod rollback key, `focus-ci rollback-prod`). Never `production`. `deployment: false`: the job reads the environment's secrets, and its branch rule still applies, but no GitHub deployment is created. deploy-prod's plan reads dev's deployments as "what dev runs", and a rollback run's deployment would carry main's head, not the release it restored |
+| Gate | runner | Both `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS` set, or the job **fails red**. Unlike a deploy, a rollback that can't run never skips green, so it can't be mistaken for one that happened |
+| Read what runs now | server: `status` | The record must name that environment (a key in the wrong environment stops here, before anything changes). Its tag and digest are the release being left |
+| Roll back | server: `rollback` or `rollback <sha>` | Under the deploy lock: the [known-good](#known-good-releases) target, pulled by its recorded digest if the host lacks it, label checked, re-tagged `:<sha>`, `up -d --wait`, running image, `/healthz`, `/readyz`. No migration. If the target fails its checks, the release it left starts again ([Automatic revert](#automatic-revert)) and the job fails |
+| Record | runner: `status` | The record must show `action=rollback`, another digest than before, and `tag` when one was given. Then the key is deleted, before any repository code runs |
+| Smoke | runner | `scripts/smoke_deploy.py` against https://ineedtofoc.us or https://dev.ineedtofoc.us |
+| Summary | runner | From (the release left), To (what runs now), the next rollback target, infra revision, smoke results. For dev: the release left is no longer promotable |
+
+**Concurrency:** one rollback per environment at a time (`rollback-dev`, `rollback-prod`), never cancelled. The groups are separate from `deploy-dev` and `deploy-prod`, for the reason under [Serialization](#the-forced-command-focus-ci): the server lock orders them.
+
+**After a prod rollback**, prod runs an older release and dev may still run the bad one. The fix goes through the usual path: a PR, a merge that deploys it to dev, then an approved prod deploy. Roll dev back too if the bad release blocks work there.
+
+### Credentials
+
+| Where | What | Who sets it |
+|---|---|---|
+| GitHub environment `rollback` (no required reviewer; deployment branches: `main` only) | `DEPLOY_SSH_KEY`: the private half of the `focus-ci-rollback` key. `DEPLOY_KNOWN_HOSTS`: the Droplet's host key line (the same line as dev's and prod's) | Yacine |
+| `/etc/ssh/authorized_keys/deploy` | `restrict,command="/opt/focus/bin/focus-ci rollback-prod" ssh-ed25519 … focus-ci-rollback` | Yacine (sudo) |
+| GitHub environment `dev` | Nothing new: the dev key's profile already has `rollback` ([Deploy to dev → Credentials](#credentials)) | |
+
+Nothing is stored at repo level. The environment has no reviewer on purpose, so rolling prod back works at any hour without Yacine. The key is what limits it:
+
+| Key (profile) | deploy | rollback | status | candidate | Environment it acts on |
+|---|---|---|---|---|---|
+| dev (`dev`) | yes | yes | yes | no | dev only |
+| prod (`prod`) | yes, a release dev ran and didn't roll back from | no | yes | yes (reads dev) | prod |
+| prod rollback (`rollback-prod`) | no | yes, prod's own known-good releases | yes | no | prod only |
+
+- **Prod rollback key** (`focus-ci rollback-prod`): `rollback`, `rollback <sha>` and `status` on prod, nothing else. The client never names a digest: the target comes from prod's own `releases.log`, so the key can only start bytes prod already ran and checked. It can't deploy, migrate, read or change dev, open a shell or change the compose files. If it leaked, the worst it could do is roll prod back to an older known-good release, or step back through several. That's an outage-sized nuisance, fixed by an approved deploy, but never new code.
+- An agent-merged edit of `rollback.yml` can't do more: the key's limits hold whatever the workflow says, and the `rollback` environment accepts only `main`.
+
+`make test-server` checks all three keys behind the real sshd. The rollback key gets the hostile requests plus `deploy` and `candidate`. It's checked to restore only prod's known-good releases (not dev's, not a failed one, not one rolled back from, not the current one) and to leave dev's record, log and container alone. The dev key's rollback touches no prod file, and the prod key still can't roll back.
+
+### One-time setup (Yacine)
+
+Dev's rollback needs only step 1 (once dev is set up, [Deploy to dev → One-time setup](#one-time-setup-yacine)). Prod's needs all of them. Agents can't do these: they're secrets, environments and the server.
+
+1. **Install `infra/` at the merge commit of #30**, which changes `focus-ci` (the revert, `rollback <sha>`, the `rollback-prod` profile): `ssh -t yacine@159.223.188.176 'sudo /opt/focus/infra/server/install.sh <merge sha>'`. The diff shows `server/focus-ci.sh`, `server/install.sh` and `server/tests/`. Read it, then type `yes`. (Not installed yet? Use the first-time form in [install.sh](#infra-on-the-server-installsh).)
+2. **Create the key pair** on your machine, for CI only: `ssh-keygen -t ed25519 -N '' -C focus-ci-rollback -f /tmp/focus-ci-rollback`
+3. **Authorize it**, pinned to the rollback profile:
+   `ssh -t yacine@159.223.188.176 "echo 'restrict,command=\"/opt/focus/bin/focus-ci rollback-prod\" $(cat /tmp/focus-ci-rollback.pub)' | sudo tee -a /etc/ssh/authorized_keys/deploy > /dev/null"`
+   Then `ssh yacine@159.223.188.176 "sudo stat -c '%a %U:%G' /etc/ssh/authorized_keys/deploy; sudo grep -c 'focus-ci rollback-prod' /etc/ssh/authorized_keys/deploy"` should print `640 root:deploy` and `1`.
+4. **Try the key, read-only**, before it goes to GitHub:
+   `ssh -i /tmp/focus-ci-rollback -o IdentitiesOnly=yes deploy@159.223.188.176 status` prints prod's record (or says none is recorded yet), and
+   `ssh -i /tmp/focus-ci-rollback -o IdentitiesOnly=yes deploy@159.223.188.176 candidate` answers `focus-ci: refused: candidate isn't allowed for profile rollback-prod`. Don't run `rollback` to try it: that would roll prod back.
+5. **Get the host key line** as for dev: `ssh yacine@159.223.188.176 'printf "159.223.188.176 %s\n" "$(cut -d" " -f1,2 /etc/ssh/ssh_host_ed25519_key.pub)"'`
+6. **Create the `rollback` environment**: repo **Settings** → **Environments** → **New environment** → name `rollback` → **Configure environment**.
+   - **Required reviewers**: leave unticked. On-call must be able to roll back without anyone.
+   - **Wait timer**: off.
+   - **Deployment branches and tags** → **Selected branches and tags** → **Add deployment branch or tag rule** → Ref type **Branch** (not Tag) → name pattern `main` → **Add rule**.
+   - **Environment secrets** → **Add environment secret**, twice: `DEPLOY_SSH_KEY`, the whole of `/tmp/focus-ci-rollback` (`-----BEGIN OPENSSH PRIVATE KEY-----` to `-----END …-----`), and `DEPLOY_KNOWN_HOSTS`, the line from step 5. Not as repository secrets, and not in `production`.
+7. **Delete the local key files**: `rm /tmp/focus-ci-rollback /tmp/focus-ci-rollback.pub`.
+8. **Check**, read-only:
+   `gh api repos/ybenzine/ineedtofocus/environments/rollback --jq '{reviewers: [.protection_rules[]? | select(.type == "required_reviewers")], branches: .deployment_branch_policy}'` should print `{"branches":{"custom_branch_policies":true,"protected_branches":false},"reviewers":[]}`.
+   `gh api repos/ybenzine/ineedtofocus/environments/rollback/deployment-branch-policies --jq '.branch_policies[] | {name, type}'` should print only `{"name":"main","type":"branch"}`. `gh secret list` (repository secrets) should list no `DEPLOY_*`.
+
+The first real prod rollback is the check of the whole path. Until then, the workflow fails red for `env=prod` with "the rollback environment has no DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS".
+
+### Break-glass on the server
+
+If GitHub Actions is down, Yacine can run on the server exactly what a key would run, with the same checks, lock and record:
+
+```bash
+sudo -u deploy env -i SSH_ORIGINAL_COMMAND=status /opt/focus/bin/focus-ci rollback-prod
+sudo -u deploy env -i SSH_ORIGINAL_COMMAND=rollback /opt/focus/bin/focus-ci rollback-prod      # prod
+sudo -u deploy env -i SSH_ORIGINAL_COMMAND=rollback /opt/focus/bin/focus-ci dev                # dev
+```
+
+Don't start an app container with `compose.sh … up` by hand: the local `:<sha>` tag may point at other bytes, nothing would check the result, and the record wouldn't know. Use the forced command.
+
+### Demonstration
+
+AC: "Rollback demonstrated once with a deliberately broken build". **Status: not yet run.** It needs dev's one-time setup ([Deploy to dev](#one-time-setup-yacine), #28) and step 1 above. The lead runs it then and records it on #30 (links to the runs and the before and after state).
+
+**Automatic revert.** Tested in `make test-server` with deliberately broken images (above). It can't be shown on dev through a merge, and that's by design. CI's `image` job runs the same health and readiness checks on the image (`make test-prod-stack`: migrate, `up --wait`, `/healthz`, `/readyz`), and `publish` needs it. So a build that fails them is never published and never reaches the server. On the server it guards against what CI can't reproduce: dev's or prod's own data and history, and the host.
+
+**The rollback workflow, with a deliberately broken build on dev.** A build that reaches dev passed every check, so the breakage has to be one no check looks at. The demo uses a visible one:
+
+1. Note what dev runs: the `Deploy to dev` summary of the latest CI run on `main` (tag `G`, and its rollback target). Dev must have run at least two releases, so that `G` has a known-good release before it.
+2. Open a PR **`demo(#30): deliberately broken build for the rollback demo`** (`Refs #30`, not `Closes`) whose only change makes every page show a banner reading "Deliberately broken build (#30 rollback demo)". It passes CI, gets reviewed as a demo and is merged. `deploy-dev` deploys it as `B`, and its summary shows `B` with rollback target `G`. https://dev.ineedtofoc.us shows the banner.
+3. Roll dev back exactly as on-call would: `gh workflow run rollback.yml -f env=dev`. Then `gh run list --workflow rollback.yml --limit 1 --json databaseId,createdAt,status,conclusion,url` and `gh run watch <databaseId> --exit-status`.
+4. Check: the run is green, and its summary shows From `B`, To `G`, smoke tests passed, and "`B` is marked as rolled back from on dev". https://dev.ineedtofoc.us no longer shows the banner. Optionally Yacine confirms on the server: `sudo tail -n 2 /opt/focus/dev/releases.log` ends with `action=rollback outcome=ok tag=G … from_tag=B …`.
+5. Revert the demo on `main` with a PR (`git revert` of the demo commit, `Refs #30`). Merging it deploys the next release to dev as usual.
+6. Record it on #30: the demo PR, the `Deploy to dev` run of `B`, the rollback run and its summary, the revert PR, and dev's release before and after.

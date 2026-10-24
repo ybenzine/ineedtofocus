@@ -1,0 +1,213 @@
+# Roll dev or prod back to a known-good release (#30). No approval: on-call uses it at any
+# hour (_docs/process.md, Human gates). It can't deploy anything new.
+#
+# Started by hand or by the on-call agent, from main, with two inputs: a choice and a
+# commit sha. There's no free text, so a command never carries words that a permission
+# rule in .claude/settings.json matches (#136 review):
+#
+#   gh workflow run rollback.yml -f env=prod                 # the last known-good release
+#   gh workflow run rollback.yml -f env=prod -f tag=<sha>    # a known-good release of <sha>
+#
+# Keep `rollback.yml` straight after `gh workflow run`: that's the form the allow rule
+# matches. A flag before it (`gh workflow run --ref main rollback.yml`) prompts and
+# stalls an unattended run.
+#
+# One job, in the environment that holds that environment's rollback credential:
+#   env=dev   environment `dev`, its deploy key (forced command `focus-ci dev`)
+#   env=prod  environment `rollback` (no reviewer, main only), the prod rollback key
+#             (forced command `focus-ci rollback-prod`: rollback and status only)
+# The key decides what the server does, whatever this file says. The server picks the
+# release (infra/server/focus-ci.sh, "Known-good"): the newest one that passed the
+# checks on that environment and wasn't rolled back from, or with `tag`, the newest
+# such release of that commit. It restores that release by its recorded digest,
+# re-tagged under the host's deploy lock, with no migration, and checks it like a deploy.
+# A dev rollback also makes the release it left unpromotable to prod.
+#
+# `deployment: false`: the job reads the environment's secrets (its branch rule still
+# applies) without creating a GitHub deployment. deploy-prod's plan reads dev's
+# deployments as "what dev runs", and a rollback run's deployment would carry this run's
+# commit (main's head), not the release it restored. What each environment runs is in the
+# server's release record, which the summary shows.
+#
+# Until the environment's secrets are set, the job fails red: unlike a deploy, a rollback
+# that didn't happen must never look green.
+
+name: rollback
+run-name: "Roll back ${{ inputs.env }} to ${{ inputs.tag || 'the last known-good release' }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Environment to roll back"
+        type: choice
+        options: [dev, prod]
+        required: true
+        default: dev
+      tag:
+        description: "Optional commit sha (40 lowercase hex) of a known-good release on that environment. Empty: the last known-good release."
+        type: string
+        required: false
+        default: ""
+
+permissions: {}
+
+jobs:
+  rollback:
+    name: Roll back ${{ inputs.env }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: ${{ inputs.env == 'prod' && 'rollback' || 'dev' }}
+      deployment: false
+    # One rollback per environment at a time, never cancelled. Not shared with deploy-dev
+    # or deploy-prod: GitHub cancels a pending job when another joins its group. The
+    # server's deploy lock orders rollbacks and deploys across environments.
+    concurrency:
+      group: rollback-${{ inputs.env }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    env:
+      DEPLOY_HOST: 159.223.188.176
+      TARGET_ENV: ${{ inputs.env }}
+      TAG: ${{ inputs.tag }}
+      URL: ${{ inputs.env == 'prod' && 'https://ineedtofoc.us' || 'https://dev.ineedtofoc.us' }}
+    steps:
+      - name: Check the request
+        run: |
+          die() { echo "::error title=$1::$2"; exit 1; }
+          [[ $GITHUB_REF == refs/heads/main ]] ||
+            die "Not main" "run this workflow from main; the dev and rollback environments accept only main."
+          [[ $TARGET_ENV == dev || $TARGET_ENV == prod ]] ||
+            die "Bad env" "env must be dev or prod."
+          [[ -z $TAG || $TAG =~ ^[0-9a-f]{40}$ ]] ||
+            die "Bad tag" "tag must be empty (the last known-good release) or a full 40-character lowercase commit sha."
+      - name: Check the environment is set up
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        # A rollback that can't run fails red: never a green skip.
+        run: |
+          [[ -n $DEPLOY_SSH_KEY && -n $DEPLOY_KNOWN_HOSTS ]] && exit 0
+          environment=dev
+          [[ $TARGET_ENV == prod ]] && environment=rollback
+          missing=""
+          [[ -n $DEPLOY_SSH_KEY ]] || missing="DEPLOY_SSH_KEY"
+          [[ -n $DEPLOY_KNOWN_HOSTS ]] || missing="${missing:+$missing and }DEPLOY_KNOWN_HOSTS"
+          echo "::error title=Not rolled back::the $environment environment has no $missing. Nothing changed on $TARGET_ENV. See _docs/deployment.md (Rollback, one-time setup)."
+          printf '### Roll back %s: not set up\n\nThe %s environment has no %s. Nothing changed.\n' \
+            "$TARGET_ENV" "$environment" "$missing" >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up the key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          dir=$RUNNER_TEMP/deploy-ssh
+          install -d -m 700 "$dir"
+          (umask 077 && printf '%s\n' "$DEPLOY_SSH_KEY" > "$dir/key")
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$dir/known_hosts"
+          cat > "$dir/config" << EOF
+          Host focus
+            HostName $DEPLOY_HOST
+            User deploy
+            IdentityFile $dir/key
+            IdentitiesOnly yes
+            UserKnownHostsFile $dir/known_hosts
+            StrictHostKeyChecking yes
+            BatchMode yes
+            ConnectTimeout 20
+            ServerAliveInterval 30
+            ServerAliveCountMax 4
+          EOF
+          echo "SSH_CONFIG=$dir/config" >> "$GITHUB_ENV"
+      - name: Read what runs now
+        id: before
+        # Also checks the key belongs to that environment: a dev key in `rollback` (or a
+        # prod one in `dev`) stops here, before anything changes.
+        run: |
+          ssh -F "$SSH_CONFIG" focus status > "$RUNNER_TEMP/before"
+          cat "$RUNNER_TEMP/before"
+          get() { sed -n "s/^$1=//p" "$RUNNER_TEMP/before"; }
+          [[ -s $RUNNER_TEMP/before ]] ||
+            { echo "::error title=Nothing to roll back::$TARGET_ENV has no release recorded. Nothing changed."; exit 1; }
+          [[ $(get env) == "$TARGET_ENV" ]] ||
+            { echo "::error title=Wrong key::the key answers for '$(get env)', not $TARGET_ENV. Nothing changed."; exit 1; }
+          [[ $(get tag) =~ ^[0-9a-f]{40}$ && $(get digest) =~ ^sha256:[0-9a-f]{64}$ ]] ||
+            { echo "::error::$TARGET_ENV's release record is malformed"; exit 1; }
+          echo "tag=$(get tag)" >> "$GITHUB_OUTPUT"
+          echo "digest=$(get digest)" >> "$GITHUB_OUTPUT"
+      - name: Roll back over SSH (known-good release by digest, no migration, checks, record)
+        id: rollback
+        run: |
+          request=rollback
+          [[ -n $TAG ]] && request="rollback $TAG"
+          ssh -F "$SSH_CONFIG" focus "$request"
+      - name: Read the server's release record
+        id: record
+        env:
+          FROM_TAG: ${{ steps.before.outputs.tag }}
+          FROM_DIGEST: ${{ steps.before.outputs.digest }}
+        run: |
+          ssh -F "$SSH_CONFIG" focus status > "$RUNNER_TEMP/release"
+          cat "$RUNNER_TEMP/release"
+          get() { sed -n "s/^$1=//p" "$RUNNER_TEMP/release"; }
+          [[ $(get env) == "$TARGET_ENV" && $(get action) == rollback ]] ||
+            { echo "::error::$TARGET_ENV's record doesn't show a rollback"; exit 1; }
+          [[ $(get digest) =~ ^sha256:[0-9a-f]{64}$ && $(get digest) != "$FROM_DIGEST" ]] ||
+            { echo "::error::$TARGET_ENV still runs $FROM_TAG ($FROM_DIGEST)"; exit 1; }
+          [[ -z $TAG || $(get tag) == "$TAG" ]] ||
+            { echo "::error::$TARGET_ENV runs $(get tag), not $TAG"; exit 1; }
+          for key in tag digest deployed_at previous_tag infra_revision; do
+            echo "$key=$(get "$key")" >> "$GITHUB_OUTPUT"
+          done
+      - name: Remove the key before running repository code
+        if: always()
+        # The smoke test runs scripts/ from the checkout: it must never see the key.
+        run: rm -rf "$RUNNER_TEMP/deploy-ssh"
+      - name: Smoke-test the environment
+        id: smoke
+        run: python3 scripts/smoke_deploy.py "$URL" --summary "$RUNNER_TEMP/smoke.md"
+      - name: Summary
+        if: ${{ !cancelled() && steps.before.outcome == 'success' }}
+        env:
+          FROM_TAG: ${{ steps.before.outputs.tag }}
+          FROM_DIGEST: ${{ steps.before.outputs.digest }}
+          TO_TAG: ${{ steps.record.outputs.tag }}
+          TO_DIGEST: ${{ steps.record.outputs.digest }}
+          DEPLOYED_AT: ${{ steps.record.outputs.deployed_at }}
+          PREVIOUS_TAG: ${{ steps.record.outputs.previous_tag }}
+          INFRA_REVISION: ${{ steps.record.outputs.infra_revision }}
+          ROLLBACK_OUTCOME: ${{ steps.rollback.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          {
+            echo "### Roll back $TARGET_ENV: ${ROLLBACK_OUTCOME/success/rolled back}, smoke tests: ${SMOKE_OUTCOME/success/passed}"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| URL | $URL |"
+            echo "| Requested | \`${TAG:-the last known-good release}\` |"
+            echo "| From (rolled back from) | \`$FROM_TAG\` (\`$FROM_DIGEST\`) |"
+            echo "| To (runs now) | \`${TO_TAG:-unchanged}\` (\`${TO_DIGEST:-}\`) |"
+            echo "| Rolled back at (server, UTC) | ${DEPLOYED_AT:-not recorded} |"
+            echo "| Next rollback target | \`${PREVIOUS_TAG:-none}\` |"
+            echo "| Infra revision on the server | \`${INFRA_REVISION:-unknown}\` |"
+            echo ""
+            if [[ $ROLLBACK_OUTCOME == success && $TARGET_ENV == dev ]]; then
+              echo "\`$FROM_TAG\` is marked as rolled back from on dev: prod won't take it until dev runs it again."
+              echo ""
+            fi
+            if [[ $ROLLBACK_OUTCOME != success ]]; then
+              echo "The rollback failed. If its target failed the checks, the server started \`$FROM_TAG\` again; see the step's log and _docs/runbooks/rollback.md."
+              echo ""
+            fi
+            cat "$RUNNER_TEMP/smoke.md" 2> /dev/null || true
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove the key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/deploy-ssh"

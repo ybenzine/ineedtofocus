@@ -20,7 +20,10 @@
 #               https://dev.ineedtofoc.us. `needs: publish`, so a red main never reaches
 #               dev. Runs in the `dev` environment, whose SSH key the server pins to the
 #               forced command /opt/focus/bin/focus-ci dev (infra/server/focus-ci.sh).
-#               Skips with a notice while that environment's secrets aren't set.
+#               Skips with a notice while that environment's secrets aren't set. If the
+#               new release fails its checks after starting, the server starts the
+#               previous one again and the job fails (#30). Rolling dev back by hand is
+#               .github/workflows/rollback.yml.
 
 name: CI
 
@@ -449,6 +452,10 @@ jobs:
             echo "| Previous tag (rollback target) | \`${PREVIOUS_TAG:-none}\` |"
             echo "| Infra revision on the server | \`${INFRA_REVISION:-unknown}\` |"
             echo ""
+            if [[ $DEPLOY_OUTCOME == failure ]]; then
+              echo "The deploy failed and the record is unchanged. If the new release failed its checks after starting, the server started the previous release again (automatic revert, #30): see the deploy step's log."
+              echo ""
+            fi
             cat "$RUNNER_TEMP/smoke.md" 2> /dev/null || true
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Remove the deploy key

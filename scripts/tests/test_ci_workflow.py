@@ -538,3 +538,318 @@ def test_deploy_prod_resolves_the_digest_dev_ran(
         assert output.read_text() == "dev_time=T\n"
     else:
         assert github_env.read_text() == ""
+
+
+# --- rollback.yml (#30) ---------------------------------------------------------------
+
+ROLLBACK = WORKFLOWS / "rollback.yml"
+ROLLBACK_ENVIRONMENT = "${{ inputs.env == 'prod' && 'rollback' || 'dev' }}"
+
+
+@pytest.fixture(scope="module")
+def rollback_workflow() -> dict[Any, Any]:
+    data: dict[Any, Any] = yaml.safe_load(ROLLBACK.read_text())
+    return data
+
+
+@pytest.fixture(scope="module")
+def rollback_job(rollback_workflow: dict[Any, Any]) -> dict[str, Any]:
+    job: dict[str, Any] = rollback_workflow["jobs"]["rollback"]
+    return job
+
+
+def test_rollback_file_is_the_one_the_allow_rule_names(rollback_workflow: dict[Any, Any]) -> None:
+    """`gh workflow run rollback.yml …` is pre-approved, so on-call never stalls (#53)."""
+    assert ROLLBACK in all_workflows()
+    assert rollback_workflow["name"] == "rollback"
+    settings = json.loads((REPO / ".claude" / "settings.json").read_text())
+    assert "Bash(gh workflow run rollback.yml *)" in settings["permissions"]["allow"]
+
+
+def test_rollback_is_started_by_hand_with_a_choice_and_a_sha(
+    rollback_workflow: dict[Any, Any],
+) -> None:
+    """workflow_dispatch only, and no free-text input: a value the agent types could
+    otherwise contain words a deny rule matches, such as deploy-prod (#136 review)."""
+    triggers: dict[str, Any] = rollback_workflow.get("on", rollback_workflow.get(True)) or {}
+    assert list(triggers) == ["workflow_dispatch"]
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert list(inputs) == ["env", "tag"]
+    assert inputs["env"]["type"] == "choice"
+    assert inputs["env"]["options"] == ["dev", "prod"]
+    assert inputs["env"]["required"] is True
+    assert inputs["env"]["default"] == "dev"
+    assert inputs["tag"]["type"] == "string"
+    assert inputs["tag"]["required"] is False
+    assert inputs["tag"]["default"] == ""
+    assert "deploy-prod" not in yaml.safe_dump(inputs)
+
+
+def test_rollback_permissions_are_minimal(
+    rollback_workflow: dict[Any, Any], rollback_job: dict[str, Any]
+) -> None:
+    assert rollback_workflow["permissions"] == {}
+    assert list(rollback_workflow["jobs"]) == ["rollback"]
+    assert rollback_job["permissions"] == {"contents": "read"}
+
+
+def test_rollback_runs_in_the_environment_holding_that_key(rollback_job: dict[str, Any]) -> None:
+    """prod → `rollback` (the prod rollback key, no reviewer), anything else → `dev` (the dev
+    key), never `production`. No GitHub deployment: deploy-prod's plan reads dev's."""
+    assert rollback_job["environment"] == {"name": ROLLBACK_ENVIRONMENT, "deployment": False}
+    assert "production" not in yaml.safe_dump(rollback_job)
+    env = rollback_job["env"]
+    assert env["URL"] == (
+        "${{ inputs.env == 'prod' && 'https://ineedtofoc.us' || 'https://dev.ineedtofoc.us' }}"
+    )
+    assert env["TARGET_ENV"] == "${{ inputs.env }}"
+    assert env["TAG"] == "${{ inputs.tag }}"
+
+
+def test_rollback_has_its_own_group_and_never_cancels(
+    rollback_workflow: dict[Any, Any],
+    rollback_job: dict[str, Any],
+    jobs: dict[str, Any],
+    prod_jobs: dict[str, Any],
+) -> None:
+    assert "concurrency" not in rollback_workflow
+    assert rollback_job["concurrency"] == {
+        "group": "rollback-${{ inputs.env }}",
+        "cancel-in-progress": False,
+    }
+    others = {
+        jobs["deploy-dev"]["concurrency"]["group"],
+        prod_jobs["deploy"]["concurrency"]["group"],
+    }
+    assert others == {"deploy-dev", "deploy-prod"}
+
+
+def test_rollback_reads_the_key_only_to_check_and_set_it_up(rollback_job: dict[str, Any]) -> None:
+    readers = {
+        step["name"]: set(re.findall(r"secrets\.([A-Za-z_]+)", yaml.safe_dump(step)))
+        for step in rollback_job["steps"]
+        if "secrets." in yaml.safe_dump(step)
+    }
+    assert readers == {
+        "Check the environment is set up": {"DEPLOY_SSH_KEY", "DEPLOY_KNOWN_HOSTS"},
+        "Set up the key": {"DEPLOY_SSH_KEY", "DEPLOY_KNOWN_HOSTS"},
+    }
+    names = [str(step.get("name", step.get("uses"))) for step in rollback_job["steps"]]
+    assert names.index("Check the request") < names.index("Check the environment is set up")
+
+
+@pytest.mark.parametrize(
+    ("overrides", "status", "says"),
+    [
+        ({}, 0, ""),
+        ({"TARGET_ENV": "prod", "TAG": SHA}, 0, ""),
+        ({"GITHUB_REF": "refs/heads/topic"}, 1, "title=Not main"),
+        ({"TARGET_ENV": "staging"}, 1, "title=Bad env"),
+        ({"TARGET_ENV": "prod;id"}, 1, "title=Bad env"),
+        ({"TAG": SHA[:12]}, 1, "title=Bad tag"),
+        ({"TAG": SHA.upper()}, 1, "title=Bad tag"),
+        ({"TAG": f"{SHA};id"}, 1, "title=Bad tag"),
+        ({"TAG": f"{SHA}\nid"}, 1, "title=Bad tag"),
+        ({"TAG": "deploy-prod"}, 1, "title=Bad tag"),
+    ],
+)
+def test_rollback_checks_the_request_before_any_secret(
+    rollback_job: dict[str, Any],
+    tmp_path: Path,
+    overrides: dict[str, str],
+    status: int,
+    says: str,
+) -> None:
+    step = step_named(rollback_job, "Check the request")
+    env = {"GITHUB_REF": "refs/heads/main", "TARGET_ENV": "dev", "TAG": "", **overrides}
+    result, _, _ = run_step(step, tmp_path, env, "", "unused")
+    assert result.returncode == status, result
+    assert says in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("target", "key", "known_hosts", "status", "says"),
+    [
+        ("dev", "KEY", "HOSTS", 0, ""),
+        ("prod", "KEY", "HOSTS", 0, ""),
+        ("dev", "", "", 1, "the dev environment has no DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS"),
+        (
+            "prod",
+            "",
+            "",
+            1,
+            "the rollback environment has no DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS",
+        ),
+        ("prod", "KEY", "", 1, "the rollback environment has no DEPLOY_KNOWN_HOSTS."),
+        ("dev", "", "HOSTS", 1, "the dev environment has no DEPLOY_SSH_KEY."),
+    ],
+)
+def test_rollback_never_skips_green(
+    rollback_job: dict[str, Any],
+    tmp_path: Path,
+    target: str,
+    key: str,
+    known_hosts: str,
+    status: int,
+    says: str,
+) -> None:
+    """Unlike a deploy, a rollback that can't run fails red: on-call must not read a green
+    run as "rolled back"."""
+    step = step_named(rollback_job, "Check the environment is set up")
+    env = {"TARGET_ENV": target, "DEPLOY_SSH_KEY": key, "DEPLOY_KNOWN_HOSTS": known_hosts}
+    result, _, summary = run_step(step, tmp_path, env, "", "unused")
+    assert result.returncode == status, result
+    assert says in result.stdout
+    if status:
+        assert "::error title=Not rolled back::" in result.stdout
+        assert "Nothing changed" in summary.read_text()
+
+
+def test_rollback_sends_requests_the_profiles_accept(rollback_job: dict[str, Any]) -> None:
+    text = steps_text(rollback_job)
+    assert "request=rollback\n" in text and '[[ -n $TAG ]] && request="rollback $TAG"' in text
+    assert 'focus "$request"' in text
+    assert "focus status" in text
+    assert "StrictHostKeyChecking yes" in text and "BatchMode yes" in text
+    script = FOCUS_CI.read_text()
+    rollback_re = re.search(r"readonly ROLLBACK_RE='(.+)'", script)
+    assert rollback_re
+    assert re.fullmatch(rollback_re.group(1).strip("^$"), "rollback")
+    assert re.fullmatch(rollback_re.group(1).strip("^$"), f"rollback {SHA}")
+    assert not re.fullmatch(rollback_re.group(1).strip("^$"), f"rollback {SHA} {DIGEST}")
+    profiles = dict(
+        re.findall(r"\n  ([a-z-]+)\)\n    env_name=\w+\n    allowed=\(([^)]*)\)", script)
+    )
+    assert profiles == {
+        "dev": "deploy rollback status",
+        "prod": "deploy status candidate",
+        "rollback-prod": "rollback status",
+    }
+
+
+@pytest.mark.parametrize(
+    ("tag", "sent"),
+    [("", "rollback"), (SHA, f"rollback {SHA}")],
+)
+def test_rollback_step_sends_the_request(
+    rollback_job: dict[str, Any], tmp_path: Path, tag: str, sent: str
+) -> None:
+    step = step_named(rollback_job, "Roll back over SSH")
+    env = {
+        "TAG": tag,
+        "SSH_CONFIG": "/dev/null",
+        "SSH_LOG": str(tmp_path / "ssh.log"),
+        "ANSWER": "",
+    }
+    result, _, _ = run_step(step, tmp_path, env, FAKE_SSH, "ssh")
+    assert result.returncode == 0, result
+    assert (tmp_path / "ssh.log").read_text() == f"{sent}\n"
+
+
+def record(env: str = "dev", tag: str = SHA, digest: str = DIGEST, action: str = "deploy") -> str:
+    return (
+        f"env={env}\ntag={tag}\ndigest={digest}\naction={action}\ndeployed_at=T\n"
+        f"previous_tag={THIRD_SHA}\ninfra_revision={OTHER_SHA}\n"
+    )
+
+
+OTHER_DIGEST = "sha256:" + "e" * 64
+
+
+@pytest.mark.parametrize(
+    ("answer", "status", "says"),
+    [
+        (record(), 0, ""),
+        (record(env="prod"), 1, "title=Wrong key::the key answers for 'prod', not dev"),
+        ("", 1, "title=Nothing to roll back"),
+        (record(digest="sha256:short"), 1, "release record is malformed"),
+    ],
+)
+def test_rollback_checks_the_key_answers_for_that_environment_first(
+    rollback_job: dict[str, Any], tmp_path: Path, answer: str, status: int, says: str
+) -> None:
+    """A dev key put in `rollback` (or the other way round) stops before the rollback."""
+    step = step_named(rollback_job, "Read what runs now")
+    env = {
+        "TARGET_ENV": "dev",
+        "SSH_CONFIG": "/dev/null",
+        "SSH_LOG": str(tmp_path / "ssh.log"),
+        "RUNNER_TEMP": str(tmp_path),
+        "ANSWER": answer,
+    }
+    result, output, _ = run_step(step, tmp_path, env, FAKE_SSH, "ssh")
+    assert result.returncode == status, result
+    assert (tmp_path / "ssh.log").read_text() == "status\n"
+    assert says in result.stdout
+    if status == 0:
+        assert output.read_text() == f"tag={SHA}\ndigest={DIGEST}\n"
+
+
+@pytest.mark.parametrize(
+    ("answer", "tag", "status", "says"),
+    [
+        (record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"), "", 0, ""),
+        (record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"), OTHER_SHA, 0, ""),
+        (
+            record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="deploy"),
+            "",
+            1,
+            "doesn't show a rollback",
+        ),
+        (
+            record(env="prod", tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"),
+            "",
+            1,
+            "doesn't show a rollback",
+        ),
+        (record(action="rollback"), "", 1, "still runs"),
+        (
+            record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"),
+            THIRD_SHA,
+            1,
+            f"not {THIRD_SHA}",
+        ),
+    ],
+)
+def test_rollback_reads_the_record_back(
+    rollback_job: dict[str, Any], tmp_path: Path, answer: str, tag: str, status: int, says: str
+) -> None:
+    step = step_named(rollback_job, "Read the server's release record")
+    env = {
+        "TARGET_ENV": "dev",
+        "TAG": tag,
+        "FROM_TAG": SHA,
+        "FROM_DIGEST": DIGEST,
+        "SSH_CONFIG": "/dev/null",
+        "SSH_LOG": str(tmp_path / "ssh.log"),
+        "RUNNER_TEMP": str(tmp_path),
+        "ANSWER": answer,
+    }
+    result, output, _ = run_step(step, tmp_path, env, FAKE_SSH, "ssh")
+    assert result.returncode == status, result
+    assert says in result.stdout
+    if status == 0:
+        assert f"tag={OTHER_SHA}\ndigest={OTHER_DIGEST}\n" in output.read_text()
+
+
+def test_rollback_deletes_the_key_before_running_repo_code(rollback_job: dict[str, Any]) -> None:
+    steps = rollback_job["steps"]
+    names = [str(step.get("name", step.get("uses"))) for step in steps]
+    early = step_named(rollback_job, "Remove the key before")
+    assert early["run"] == 'rm -rf "$RUNNER_TEMP/deploy-ssh"'
+    assert early["if"] == "always()"
+    position = names.index(early["name"])
+    ssh_steps = [i for i, step in enumerate(steps) if "ssh " in str(step.get("run", ""))]
+    assert ssh_steps and max(ssh_steps) < position
+    assert position < names.index(step_named(rollback_job, "Smoke-test")["name"])
+    assert steps[-1]["if"] == "always()"
+    assert steps[-1]["run"] == 'rm -rf "$RUNNER_TEMP/deploy-ssh"'
+
+
+def test_rollback_smoke_tests_the_environment(rollback_job: dict[str, Any]) -> None:
+    smoke = step_named(rollback_job, "Smoke-test")
+    assert smoke["run"].startswith('python3 scripts/smoke_deploy.py "$URL"')
+    names = [step.get("name", step.get("uses")) for step in rollback_job["steps"]]
+    assert names.index(smoke["name"]) > names.index(
+        step_named(rollback_job, "Roll back over SSH")["name"]
+    )
