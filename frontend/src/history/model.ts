@@ -324,3 +324,28 @@ export function applyChanges(
   })
   return { ...base, sessions, tags: sortedTags(tagTotals) }
 }
+
+/**
+ * Ids of the device's synced sessions that the server's answer should list but doesn't: they
+ * were archived or deleted on another device (#133). Left out, to be safe: sessions the server
+ * may not have, ones already archived here or in `skip`, and any view with a tag filter (the
+ * device's tag could be stale, and then a session would look gone when it is only filtered out).
+ */
+export function missingFromServer(
+  base: HistoryData,
+  device: readonly { id: string; startedAt: string; synced: boolean; archived: boolean }[],
+  tags: readonly Tag[],
+  skip: ReadonlySet<string>,
+): string[] {
+  if (tags.length > 0) return []
+  const known = new Set(base.sessions.map((s) => s.id))
+  return device
+    .filter((d) => {
+      if (!d.synced || d.archived || known.has(d.id) || skip.has(d.id)) return false
+      if (base.view === 'all') return true
+      if (base.start === null || base.end === null) return false
+      const day = localDate(d.startedAt, base.timeZone)
+      return day >= base.start && day <= base.end
+    })
+    .map((d) => d.id)
+}

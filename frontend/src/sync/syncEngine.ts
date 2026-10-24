@@ -8,7 +8,9 @@
 // - 401 means the sign-in expired: keep everything, stop until the next trigger (sign-in, back
 //   online, app visible again).
 // - Tag/goal edits to a synced session go as `PATCH`; a 409 (archived elsewhere) drops the edit,
-//   a 404 or 422 keeps it marked "Couldn't sync" (AC11.4).
+//   and the device copy is marked archived; a 404 or 422 keeps it marked "Couldn't sync"
+//   (AC11.4). A 404 means the session was deleted elsewhere: the next online History load sees
+//   it is gone and removes the device copy with its stuck edit (#133).
 // - Only the signed-in user's items are sent; other accounts' stay quarantined on the device.
 
 import { SYNC_BATCH_LIMIT, type SessionsApi } from './api.ts'
@@ -90,6 +92,10 @@ export function backoffDelay(attempt: number, random: () => number = Math.random
   return Math.round(ceiling * (0.5 + random() / 2))
 }
 
+function copyReport(report: SyncReport): SyncReport {
+  return { ...report, dropped: [...report.dropped] }
+}
+
 export class SyncEngine {
   readonly #store: SessionStore
   readonly #api: SessionsApi
@@ -130,12 +136,15 @@ export class SyncEngine {
 
   /**
    * Runs a sync pass now. If one is already running, another runs right after it (so nothing
-   * saved meanwhile waits for the next trigger) and the returned report is the later one's.
+   * saved meanwhile waits for the next trigger) and the returned report is the later one's,
+   * except `dropped`, which covers every pass of the loop (without duplicates), whereas
+   * `synced`, `rejected`, `edited` and `outcome` come from the last pass. Every caller gets its
+   * own copy of the report.
    */
   syncNow(): Promise<SyncReport> {
     if (this.#running !== null) {
       this.#again = true
-      return this.#running
+      return this.#running.then(copyReport)
     }
     this.#cancelRetry()
     const run = async (): Promise<SyncReport> => {
@@ -145,7 +154,7 @@ export class SyncEngine {
       do {
         this.#again = false
         report = await this.#exclusive(() => this.#pass())
-        dropped.push(...report.dropped)
+        for (const id of report.dropped) if (!dropped.includes(id)) dropped.push(id)
       } while (this.#again)
       return { ...report, dropped }
     }
@@ -154,7 +163,7 @@ export class SyncEngine {
     })
     return this.#running.then((report) => {
       this.#afterPass(report)
-      return report
+      return copyReport(report)
     })
   }
 
@@ -301,7 +310,10 @@ export class SyncEngine {
         case 'conflict':
           // Archived on the server (AC11.4): the edit can never apply; the session is untouched.
           await this.#io(this.#store.dropEdit(entry.id, version))
-          report.dropped.push(entry.id)
+          // The device copy follows, so offline History stops showing it. The real time comes
+          // with the next online History or Archive load.
+          await this.#io(this.#store.setArchived(owner, entry.id, new Date().toISOString()))
+          if (!report.dropped.includes(entry.id)) report.dropped.push(entry.id)
           break
         case 'invalid':
         case 'not_found':

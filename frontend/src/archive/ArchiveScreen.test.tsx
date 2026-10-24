@@ -127,6 +127,43 @@ describe('ArchiveScreen', () => {
     await waitFor(async () => expect(await store.get(record.id)).toBeUndefined())
   })
 
+  it('#133 loading marks a session archived on another device as archived on the device', async () => {
+    const record = makeRecord({ goal: 'Elsewhere' })
+    await new HttpSessionsApi({ fetch: server.fetch }).sync([record])
+    await store.save(record, 'me')
+    await store.markSynced(record.id, {
+      id: record.id,
+      tag: 'work',
+      goal: 'Elsewhere',
+      archivedAt: null,
+    })
+    server.archive(record.id)
+    renderScreen()
+    await screen.findByText('Elsewhere')
+    await waitFor(async () => expect((await store.get(record.id))?.archivedAt).not.toBeNull())
+  })
+
+  it('#133 delete all also removes device copies of sessions archived on other devices', async () => {
+    const record = makeRecord({ goal: 'Elsewhere' })
+    await new HttpSessionsApi({ fetch: server.fetch }).sync([record])
+    await store.save(record, 'me')
+    await store.markSynced(record.id, {
+      id: record.id,
+      tag: 'work',
+      goal: 'Elsewhere',
+      archivedAt: null,
+    })
+    server.archive(record.id)
+    // The load is slow to mark it (or failed to): delete-all still takes it, as it was listed.
+    vi.spyOn(store, 'setArchived').mockResolvedValue(undefined)
+    renderScreen()
+    await screen.findByText('Elsewhere')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete all archived sessions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 1 session' }))
+    await screen.findByText('Deleted 1 archived session.')
+    await waitFor(async () => expect(await store.get(record.id)).toBeUndefined())
+  })
+
   it('says so if the delete does not go through, and deletes nothing locally', async () => {
     const record = await archived('A')
     await store.setArchived('me', record.id, '2026-10-20T10:00:00Z')

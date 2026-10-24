@@ -6,6 +6,7 @@ import { HttpArchiveApi, type ArchiveApi } from '../archive/api.ts'
 import { useSettingsState } from '../settings/SettingsContext.ts'
 import { GOAL_MAX_LENGTH } from '../setup/options.ts'
 import { HttpSessionsApi, type SessionEdit, type SessionsApi } from '../sync/api.ts'
+import { reconcileMissing } from '../sync/reconcile.ts'
 import type { SessionStore } from '../sync/sessionStore.ts'
 import type { SyncEngine } from '../sync/syncEngine.ts'
 import { TAGS, type Tag } from '../timer/config.ts'
@@ -29,6 +30,7 @@ import {
   formatTime,
   localDate,
   mergeSessions,
+  missingFromServer,
   oneLine,
   periodFor,
   periodLabel,
@@ -108,6 +110,11 @@ export default function HistoryScreen({
   const mounted = useRef(true)
   // Sessions being archived: left out of every answer until the server has confirmed or refused.
   const archiving = useRef(new Set<string>())
+  // Read by the load effect without re-running it when a caller passes a fresh object.
+  const archiveApiRef = useRef(archiveApi)
+  useEffect(() => {
+    archiveApiRef.current = archiveApi
+  }, [archiveApi])
   const lastEdited = useRef<string | null>(null)
   // After Save the list reloads and its rows are rebuilt: focus goes back to that row's Edit
   // button once the new list is on screen.
@@ -199,6 +206,23 @@ export default function HistoryScreen({
       const unsynced = alive.filter((d) => d.notUploaded).map((d) => d.session)
       if (result.kind === 'ok') {
         cache.current.set(queryKey, result.value)
+        // Sessions archived or deleted on another device: the device copy follows (#133).
+        if (owner !== null && sessions) {
+          const missing = missingFromServer(
+            result.value,
+            local.map((d) => ({
+              id: d.record.id,
+              startedAt: d.record.startedAt,
+              synced: d.syncState === 'synced',
+              archived: d.archivedAt !== null,
+            })),
+            query.tags,
+            archiving.current,
+          )
+          void reconcileMissing(sessions, archiveApiRef.current, owner, missing).catch(
+            () => undefined,
+          )
+        }
         setLoad({
           kind: 'ready',
           data: applyChanges(leaveOut(mergeSessions(result.value, unsynced, query.tags)), changes),
