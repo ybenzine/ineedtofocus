@@ -60,7 +60,7 @@ The prod deploy is its own workflow, `.github/workflows/deploy-prod.yml` (#29, [
 | Backend integration | pytest + real Postgres | `backend/tests/integration/` | API endpoints end to end against the database; user isolation; idempotent sync |
 | Frontend unit | Vitest + Testing Library | `frontend/src/**/*.test.ts(x)` | Timer engine with a fake clock, components, sync queue |
 | End-to-end | Playwright | `frontend/e2e/` | The key user journey through the real stack (Compose): `journey.spec.ts` (sign up, countdown, Pomodoro, archive, restore, delete), `sync.spec.ts` (offline finish then sync, AC1.4 two devices, tag filter, week start), `layout.spec.ts` (no sideways scroll at 360 px, centred at 1280 px), `privacy.spec.ts` (no goal, email or password in backend logs) |
-| Accessibility | axe in Playwright | `frontend/e2e/` | No serious violations on main screens |
+| Accessibility | axe in Playwright | `frontend/e2e/a11y.spec.ts` (#24) | No serious axe violations (WCAG 2.2 AA + best practice) on every screen and state; every tap target 44×44 px at 360 px; keyboard order, accessible names, focus ring, reduced motion. Tests for open bugs are `test.fixme` with the issue number and become normal tests when the bug is fixed |
 
 ## Rules
 
