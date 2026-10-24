@@ -268,6 +268,17 @@ refused=(
   "rollback prod"
   "rollback"$'\n'"id"
   "rollback $S1"$'\n'"id"
+  "rollback expect"
+  "rollback expect ${D1#sha256:}"
+  "rollback expect ${D1^^}"
+  "rollback expect $S1"
+  "rollback $S1 expect"
+  "rollback expect $D1 extra"
+  "rollback expect $D1 $S1"
+  "rollback  expect $D1"
+  "rollback expect  $D1"
+  "rollback EXPECT $D1"
+  "rollback expect $D1;id"
   "scp -t /tmp"
   "/usr/lib/openssh/sftp-server"
   "deploy $S1 $D1 $(printf 'x%.0s' {1..200})"
@@ -704,6 +715,28 @@ broken_deploy "no /readyz" "$D8" "/readyz doesn't answer inside the app containe
 check "no /readyz: /healthz passed on the broken build, /readyz retried 3 times" \
   eq "$(new_calls | grep "app_tag=$S4 " | grep -c "8000/readyz")" 3
 
+echo "--- A dropped SSH session doesn't stop the revert (#30 review)"
+before_record=$(cat "$RECORD")
+echo 2 >"$FAKE/sleep-up" # each start takes 2 s
+mark
+hmark
+ssh "${ssh_opts[@]}" -i "$keys/dev" deploy@127.0.0.1 "deploy $S4 $D7" >/tmp/dropped.out 2>&1 &
+client=$!
+for _ in $(seq 100); do # until the broken build's start has begun
+  grep -q "app_tag=$S4 :: $compose_args up" <<<"$(new_calls)" && break
+  sleep 0.1
+done
+kill "$client"
+wait "$client" || true
+flock -w 60 /opt/focus/deploy.lock true # focus-ci is done once the lock is free
+rm "$FAKE/sleep-up"
+check "dropped session: the client was gone before the revert began" not_contains "$(cat /tmp/dropped.out)" "revert:"
+check "dropped session: the failed deploy is logged" contains "$(new_history | sed -n 1p)" "action=deploy outcome=failed tag=$S4 digest=$D7"
+check "dropped session: the revert still ran and is logged" contains "$(new_history | sed -n 2p)" "action=revert outcome=ok tag=$S1 digest=$D5"
+check "dropped session: dev runs D5 again" eq "$(cat "$FAKE/running-dev")" "$D5"
+check "dropped session: record unchanged" eq "$(cat "$RECORD")" "$before_record"
+check "dropped session: the revert checked /readyz" contains "$(after "$(new_calls)" "app_tag=$S1 :: $compose_args up")" "8000/readyz"
+
 echo "--- Automatic revert on prod: a build broken only there (#30)"
 S5=$(sha 0xa5) D9=$(digest 0xd9)
 echo "$S5" >"$FAKE/labels/$D9"
@@ -746,10 +779,19 @@ done
 check "record: S8, rollback target S7" eq "$(value tag) $(value previous_tag)" "$S8 $S7"
 put "$FAKE/tags/$S7" "$D10" # the host-wide :S7 moved
 rm "$FAKE/local/$D11"         # and S7's image was pruned from the host
+before_record=$(cat "$RECORD")
 mark
-ci rollback
+hmark
+ci "rollback expect $D11"
+check "rollback expect <not the current digest>: fails (status 1)" eq "$rc" 1
+check "rollback expect: says a deploy or rollback ran in between" contains "$out" "not the expected $D11"
+check "rollback expect: no docker call" no_new_calls
+check "rollback expect: record unchanged, nothing logged" eq "$(cat "$RECORD")$(new_history)" "$before_record"
+mark
+ci "rollback expect $D12"
 calls=$(new_calls)
 check "rollback succeeds" eq "$rc" 0
+check "rollback prints what it left and what runs now" contains "$out" "result from_tag=$S8 from_digest=$D12 tag=$S7 digest=$D11"
 check "rollback: to S7, the release before S8" eq "$(value tag) $(value digest) $(value action)" "$S7 $D11 rollback"
 check "rollback: pulls S7 by its recorded digest" contains "$calls" ":: pull --quiet $REPO@$D11"
 check "rollback: checks its revision label" contains "$calls" "org.opencontainers.image.revision\" }} $REPO@$D11"
@@ -885,11 +927,12 @@ flock /opt/focus/deploy.lock bash -c 'sleep 3; date +%s.%N > /tmp/released' &
 holder=$!
 sleep 0.5
 mark
-ci_as rollback -o 'SetEnv=LC_FOCUS=leak LANG=C.UTF-8' -- rollback
+ci_as rollback -o 'SetEnv=LC_FOCUS=leak LANG=C.UTF-8' -- "rollback expect $D1"
 wait "$holder"
 printf '%s\n' "$out" | sed 's/^/     | /'
 calls=$(new_calls)
 check "rollback key: rollback succeeds once the lock is free" eq "$rc" 0
+check "rollback key: prints the result" contains "$out" "result from_tag=$S1 from_digest=$D1 tag=$S2 digest=$D2"
 check "rollback key: said it was waiting" contains "$out" "waiting up to 900s"
 first=$(new_calls | head -n1 | cut -d' ' -f1)
 check "rollback key: no docker call while another holder had the lock" \
@@ -917,6 +960,43 @@ rb "rollback $S2"
 check "rollback key: rollback <sha> to a known-good prod release succeeds" eq "$rc" 0
 check "rollback key: prod runs S2 D2" eq "$(pvalue tag) $(pvalue digest) $(cat "$FAKE/running-prod")" "$S2 $D2 $D2"
 check "rollback key: rollback <sha>: no migration" not_contains "$(new_calls)" "alembic"
+
+echo "--- releases.log is read strictly, and fails closed (#30 review)"
+cp -p "$HISTORY" /tmp/dev-history.bak
+log_refused() { # <description> <bad line> <reason shown>
+  local n
+  cp /tmp/dev-history.bak "$HISTORY"
+  printf '%s\n' "$2" >>"$HISTORY"
+  n=$(wc -l <"$HISTORY")
+  mark
+  ci rollback
+  check "$1: rollback fails (status 1)" eq "$rc" 1
+  check "$1: names the line and why" contains "$out" "/opt/focus/dev/releases.log line $n is malformed ($3)"
+  ci "deploy $S2 $D2"
+  check "$1: a deploy fails the same way, loudly" contains "$out" "line $n is malformed"
+  check "$1: no docker call" no_new_calls
+  prod "candidate $S2"
+  check "$1: prod's candidate fails too" eq "$rc" 1
+  check "$1: and says why" contains "$out" "line $n is malformed"
+}
+ok_line="time=2026-01-01T00:00:00Z env=dev action=deploy outcome=ok tag=$S2 digest=$D2 previous_tag=- previous_digest=- infra=$D"
+log_refused "an empty key" "$ok_line =x" "=x isn't key=value"
+log_refused "a repeated key" "${ok_line/outcome=ok/outcome=failed} outcome=ok" "outcome appears twice"
+log_refused "an uppercase key" "${ok_line/outcome=ok/Outcome=ok}" "Outcome=ok isn't key=value"
+log_refused "a word without =" "$ok_line garbage" "garbage isn't key=value"
+cp /tmp/dev-history.bak "$HISTORY"
+printf '\n' >>"$HISTORY" # an empty line carries no claim: skipped
+S10=$(sha 0xaa) D14=$(digest 0xe4)
+echo "$S10" >"$FAKE/labels/$D14"
+hand_line="time=2026-01-01T00:00:00Z env=dev action=deploy outcome=ok tag=$S10 digest=$D14 previous_tag=- previous_digest=- infra=$D"
+printf '%s' "$hand_line" >>"$HISTORY" # no final newline
+prod "candidate $S10"
+check "a last line without a newline still counts" eq "$rc" 0
+check "it's that line's digest" contains "$out" "digest=$D14"
+ci "deploy $S10 $D14"
+check "the next deploy succeeds" eq "$rc" 0
+check "and doesn't glue its line onto the last one" eq "$(tail -n 2 "$HISTORY" | head -n 1)" "$hand_line"
+check "its own line is whole" contains "$(last_history)" "action=deploy outcome=ok tag=$S10 digest=$D14"
 
 pkill -f "sshd -p $SSH_PORT" || true
 finish

@@ -21,7 +21,10 @@
 # checks on that environment and wasn't rolled back from, or with `tag`, the newest
 # such release of that commit. It restores that release by its recorded digest,
 # re-tagged under the host's deploy lock, with no migration, and checks it like a deploy.
-# A dev rollback also makes the release it left unpromotable to prod.
+# A dev rollback also makes the release it left unpromotable to prod. The request carries
+# `expect <digest>`, the digest read just before: if a deploy or another rollback ran in
+# between, the server refuses under its lock and nothing changes. The summary's From and
+# To come from the server's own `result` line, written under the lock.
 #
 # `deployment: false`: the job reads the environment's secrets (its branch rule still
 # applies) without creating a GitHub deployment. deploy-prod's plan reads dev's
@@ -60,7 +63,8 @@ jobs:
     environment:
       name: ${{ inputs.env == 'prod' && 'rollback' || 'dev' }}
       deployment: false
-    # One rollback per environment at a time, never cancelled. Not shared with deploy-dev
+    # One rollback per environment at a time; a running one is never cancelled, and a
+    # newer dispatch replaces a waiting one (one pending run per group). Not shared with deploy-dev
     # or deploy-prod: GitHub cancels a pending job when another joins its group. The
     # server's deploy lock orders rollbacks and deploys across environments.
     concurrency:
@@ -128,7 +132,9 @@ jobs:
       - name: Read what runs now
         id: before
         # Also checks the key belongs to that environment: a dev key in `rollback` (or a
-        # prod one in `dev`) stops here, before anything changes.
+        # prod one in `dev`) stops here, before anything changes. For prod, the key must
+        # also be refused `candidate` (exit 2), which only the rollback profile does: a
+        # prod deploy key put in `rollback` by mistake fails red here.
         run: |
           ssh -F "$SSH_CONFIG" focus status > "$RUNNER_TEMP/before"
           cat "$RUNNER_TEMP/before"
@@ -139,27 +145,44 @@ jobs:
             { echo "::error title=Wrong key::the key answers for '$(get env)', not $TARGET_ENV. Nothing changed."; exit 1; }
           [[ $(get tag) =~ ^[0-9a-f]{40}$ && $(get digest) =~ ^sha256:[0-9a-f]{64}$ ]] ||
             { echo "::error::$TARGET_ENV's release record is malformed"; exit 1; }
+          if [[ $TARGET_ENV == prod ]]; then
+            rc=0
+            ssh -F "$SSH_CONFIG" focus candidate > /dev/null 2>&1 || rc=$?
+            [[ $rc == 2 ]] ||
+              { echo "::error title=Wrong key::the rollback environment's key isn't the prod rollback key: candidate should be refused (exit 2), got exit $rc. Nothing changed. Put the focus-ci-rollback key in the rollback environment (_docs/deployment.md, Rollback)."; exit 1; }
+          fi
           echo "tag=$(get tag)" >> "$GITHUB_OUTPUT"
           echo "digest=$(get digest)" >> "$GITHUB_OUTPUT"
       - name: Roll back over SSH (known-good release by digest, no migration, checks, record)
         id: rollback
+        env:
+          EXPECT: ${{ steps.before.outputs.digest }}
         run: |
           request=rollback
           [[ -n $TAG ]] && request="rollback $TAG"
-          ssh -F "$SSH_CONFIG" focus "$request"
+          ssh -F "$SSH_CONFIG" focus "$request expect $EXPECT" | tee "$RUNNER_TEMP/rollback.out"
+          result=$(grep '^result ' "$RUNNER_TEMP/rollback.out" | tail -n 1 || true)
+          for word in $result; do
+            case $word in
+              from_tag=* | from_digest=* | tag=* | digest=*) echo "$word" >> "$GITHUB_OUTPUT" ;;
+            esac
+          done
       - name: Read the server's release record
         id: record
         env:
-          FROM_TAG: ${{ steps.before.outputs.tag }}
-          FROM_DIGEST: ${{ steps.before.outputs.digest }}
+          FROM_TAG: ${{ steps.rollback.outputs.from_tag }}
+          FROM_DIGEST: ${{ steps.rollback.outputs.from_digest }}
+          TO_DIGEST: ${{ steps.rollback.outputs.digest }}
         run: |
+          [[ $FROM_DIGEST =~ ^sha256:[0-9a-f]{64}$ && $TO_DIGEST =~ ^sha256:[0-9a-f]{64}$ ]] ||
+            { echo "::error::the server's rollback printed no result line"; exit 1; }
           ssh -F "$SSH_CONFIG" focus status > "$RUNNER_TEMP/release"
           cat "$RUNNER_TEMP/release"
           get() { sed -n "s/^$1=//p" "$RUNNER_TEMP/release"; }
           [[ $(get env) == "$TARGET_ENV" && $(get action) == rollback ]] ||
             { echo "::error::$TARGET_ENV's record doesn't show a rollback"; exit 1; }
-          [[ $(get digest) =~ ^sha256:[0-9a-f]{64}$ && $(get digest) != "$FROM_DIGEST" ]] ||
-            { echo "::error::$TARGET_ENV still runs $FROM_TAG ($FROM_DIGEST)"; exit 1; }
+          [[ $(get digest) == "$TO_DIGEST" && $(get digest) != "$FROM_DIGEST" ]] ||
+            { echo "::error::$TARGET_ENV's record shows $(get digest), not $TO_DIGEST (rolled back from $FROM_TAG, $FROM_DIGEST)"; exit 1; }
           [[ -z $TAG || $(get tag) == "$TAG" ]] ||
             { echo "::error::$TARGET_ENV runs $(get tag), not $TAG"; exit 1; }
           for key in tag digest deployed_at previous_tag infra_revision; do
@@ -175,10 +198,12 @@ jobs:
       - name: Summary
         if: ${{ !cancelled() && steps.before.outcome == 'success' }}
         env:
-          FROM_TAG: ${{ steps.before.outputs.tag }}
-          FROM_DIGEST: ${{ steps.before.outputs.digest }}
-          TO_TAG: ${{ steps.record.outputs.tag }}
-          TO_DIGEST: ${{ steps.record.outputs.digest }}
+          # The server's result line (under its lock); what ran before the request when it
+          # printed none (the rollback was refused or failed).
+          FROM_TAG: ${{ steps.rollback.outputs.from_tag || steps.before.outputs.tag }}
+          FROM_DIGEST: ${{ steps.rollback.outputs.from_digest || steps.before.outputs.digest }}
+          TO_TAG: ${{ steps.rollback.outputs.tag }}
+          TO_DIGEST: ${{ steps.rollback.outputs.digest }}
           DEPLOYED_AT: ${{ steps.record.outputs.deployed_at }}
           PREVIOUS_TAG: ${{ steps.record.outputs.previous_tag }}
           INFRA_REVISION: ${{ steps.record.outputs.infra_revision }}

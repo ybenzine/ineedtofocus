@@ -20,12 +20,15 @@
 #       release. If the start or a check fails, it starts the release that ran before
 #       again (the automatic revert: by its recorded digest, no migration) and still
 #       fails, so the workflow goes red.
-#   rollback [<commit sha>]
+#   rollback [<commit sha>] [expect sha256:<digest>]
 #       Start a known-good release again, by its recorded digest, without migrating
 #       (migrations are expand-only). With no sha: the newest known-good release other
 #       than the current one. With a sha: the newest known-good release of that commit.
-#       Then check it like a deploy and record it. The release it leaves is marked as
-#       rolled back from (revoked). On dev, that also makes it not promotable to prod.
+#       With `expect`: only if the current release is that digest, checked under the
+#       lock (a guard against a deploy that ran in between; never a target). Then check
+#       it like a deploy and record it, and print a `result` line with what it left and
+#       what runs now. The release it leaves is marked as rolled back from (revoked). On
+#       dev, that also makes it not promotable to prod.
 #   status
 #       Print the current release record.
 #   candidate [<commit sha>]
@@ -74,12 +77,20 @@
 #     (#110 review).
 #   - The compose files it runs are the root-owned copy in /opt/focus/infra (install.sh).
 #     The deploy user can't change them, or this script.
+#   - A deploy or rollback finishes even if the SSH client goes away (a cancelled job, a
+#     lost runner): HUP and PIPE are ignored, and its output reaches the client through
+#     forwarders that drop it once the client is gone, so no write can stop it between
+#     `up` and the revert.
+#   - releases.log is parsed strictly: a line with an empty, odd or repeated key stops
+#     everything that reads the log with the line's number, rather than being read
+#     loosely. A last line without a newline still counts.
 #
 # Records, in /opt/focus/<env>/ (owned by the deploy user, written only by this script):
 #   release        the current release: key=value lines (what `status` prints)
 #   releases.log   one line per deploy, rollback or revert attempt, with its outcome
 set -euo pipefail
 set -f # no globbing anywhere: nothing here expands a pattern
+trap '' HUP PIPE # outlive the SSH session (see Safety)
 export LC_ALL=C
 umask 027
 
@@ -97,7 +108,7 @@ export PATH=$CLEAN_PATH
 readonly SHA_RE='^[0-9a-f]{40}$'
 readonly DIGEST_RE='^sha256:[0-9a-f]{64}$'
 readonly DEPLOY_RE='^deploy ([0-9a-f]{40}) (sha256:[0-9a-f]{64})$'
-readonly ROLLBACK_RE='^rollback( ([0-9a-f]{40}))?$'
+readonly ROLLBACK_RE='^rollback( ([0-9a-f]{40}))?( expect (sha256:[0-9a-f]{64}))?$'
 readonly CANDIDATE_RE='^candidate( ([0-9a-f]{40}))?$'
 
 profile=${1:-}
@@ -142,7 +153,7 @@ esac
 
 shown=$(printf '%q' "${request:0:80}")
 ((${#request} <= MAX_REQUEST_LENGTH)) || refuse "request too long: $shown..."
-tag="" digest=""
+tag="" digest="" expect=""
 if [[ $request =~ $DEPLOY_RE ]]; then
   verb=deploy
   tag=${BASH_REMATCH[1]}
@@ -150,6 +161,7 @@ if [[ $request =~ $DEPLOY_RE ]]; then
 elif [[ $request =~ $ROLLBACK_RE ]]; then
   verb=rollback
   tag=${BASH_REMATCH[2]}
+  expect=${BASH_REMATCH[4]}
 elif [[ $request =~ $CANDIDATE_RE ]]; then
   verb=candidate
   tag=${BASH_REMATCH[2]}
@@ -167,9 +179,26 @@ record=$state_dir/release
 history=$state_dir/releases.log
 home=$(getent passwd "$(id -u)" | cut -d: -f6)
 
-# clean <command...>: run with nothing from this session's environment but PATH and HOME.
-# The lock's descriptor isn't passed on, so no child can outlive the lock holding it.
-clean() { env -i PATH="$CLEAN_PATH" HOME="$home" "$@" 9<&-; }
+# clean <command...>: run with nothing from this session's environment but PATH and HOME,
+# and no stdin from the session. The lock's descriptor isn't passed on, so no child can
+# outlive the lock holding it.
+clean() { env -i PATH="$CLEAN_PATH" HOME="$home" "$@" </dev/null 9<&-; }
+
+# forward <fd>: copy lines to <fd> (the SSH client's stdout or stderr), and keep reading
+# when the client is gone, so writers never see a closed pipe.
+forward() {
+  local line
+  while IFS= read -r line || [[ -n $line ]]; do
+    { printf '%s\n' "$line" >&"$1"; } 2>/dev/null || true
+  done
+}
+# detach_output: from here on, stdout and stderr go through forwarders. Called before
+# the lock is taken, so they don't hold it.
+detach_output() {
+  exec 3>&1 4>&2
+  exec 1> >(forward 3) 2> >(forward 4)
+  exec 3>&- 4>&-
+}
 # compose <tag> <compose args...>: infra/compose.sh for this environment, APP_TAG only.
 compose() {
   local app_tag=$1
@@ -191,12 +220,24 @@ record_get() {
 }
 
 # parse_line <releases.log line>: its key=value words, into the associative array `f`.
+# Returns 1, with the reason in $bad, for a word that isn't <lowercase key>=<value> or a
+# key that appears twice: focus-ci never writes either, so such a line isn't trusted.
 declare -A f=()
+bad=""
 parse_line() {
-  local word
-  f=()
+  local word key
+  f=() bad=""
   for word in $1; do
-    [[ $word == *=* ]] && f[${word%%=*}]=${word#*=}
+    if [[ ! $word =~ ^[a-z_]+= ]]; then
+      bad="$(printf '%q' "${word:0:40}") isn't key=value"
+      return 1
+    fi
+    key=${word%%=*}
+    if [[ -n ${f[$key]+set} ]]; then
+      bad="$key appears twice"
+      return 1
+    fi
+    f[$key]=${word#*=}
   done
   return 0
 }
@@ -207,11 +248,14 @@ parse_line() {
 declare -A revoked=()
 ok_tags=() ok_digests=() ok_lines=()
 load_history() {
-  local line
+  local line number=0
   ok_tags=() ok_digests=() ok_lines=() revoked=()
   [[ -f $1 ]] || return 0
-  while IFS= read -r line; do
-    parse_line "$line"
+  while IFS= read -r line || [[ -n $line ]]; do
+    number=$((number + 1))
+    [[ -n $line ]] || continue
+    parse_line "$line" ||
+      fail "$1 line $number is malformed ($bad): nothing that reads that log runs until it's fixed (see _docs/deployment.md, The release record)"
     [[ ${f[outcome]-} == ok && ${f[tag]-} =~ $SHA_RE && ${f[digest]-} =~ $DIGEST_RE ]] || continue
     if [[ ${f[action]-} == rollback && ${f[from_digest]-} =~ $DIGEST_RE ]]; then
       revoked[${f[from_digest]}]=1
@@ -369,9 +413,17 @@ start_app() {
 history_line() {
   local action=$1 outcome=$2
   shift 2
+  end_history_line
   printf 'time=%s env=%s action=%s outcome=%s tag=%s digest=%s previous_tag=%s previous_digest=%s infra=%s%s\n' \
     "$(now)" "$env_name" "$action" "$outcome" "$tag" "$digest" "${previous_tag:--}" \
     "${previous_digest:--}" "${infra_revision:--}" "${*:+ $*}" >>"$history"
+}
+# A log whose last line has no newline (edited by hand) gets one first, so the next line
+# isn't glued onto it.
+end_history_line() {
+  if [[ -s $history && -n $(tail -c 1 "$history") ]]; then
+    echo >>"$history"
+  fi
 }
 
 # step <action> <name> <function> <args...>
@@ -476,6 +528,7 @@ do_candidate() {
 }
 
 do_deploy() {
+  detach_output
   take_lock
   check_install
   local current_tag current_digest
@@ -502,6 +555,7 @@ do_deploy() {
 }
 
 do_rollback() {
+  detach_output
   take_lock
   check_install
   local from_tag from_digest found want=$tag
@@ -509,6 +563,9 @@ do_rollback() {
   from_digest=$(record_get digest)
   [[ -n $from_tag ]] || fail "nothing to roll back to: $env_name has no release recorded"
   [[ $from_tag =~ $SHA_RE && $from_digest =~ $DIGEST_RE ]] || fail "the release record $record is malformed"
+  if [[ -n $expect && $expect != "$from_digest" ]]; then
+    fail "$env_name runs $from_tag ($from_digest) now, not the expected $expect: a deploy or rollback ran in between. Nothing changed; check what runs and start again"
+  fi
   load_history "$history"
   found=$(known_good "$want" "$from_digest")
   if [[ -z $found && -n $want ]]; then
@@ -524,6 +581,7 @@ do_rollback() {
   step rollback pull pull_image "$tag" "$digest"
   start_or_revert rollback "$from_tag" "$from_digest"
   write_record rollback "from_tag=$from_tag" "from_digest=$from_digest"
+  echo "result from_tag=$from_tag from_digest=$from_digest tag=$tag digest=$digest"
   if [[ $env_name == dev ]]; then
     log "$from_tag ($from_digest) is marked as rolled back from: prod won't take it from dev"
   fi

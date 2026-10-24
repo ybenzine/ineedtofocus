@@ -27,6 +27,11 @@ START_DENIES = ["Bash(gh workflow run deploy-prod*)", "Bash(gh workflow run *dep
 SHA = "0123456789abcdef0123456789abcdef01234567"
 RUN = "repos/ybenzine/ineedtofocus/actions/runs/18234567890"
 
+# The one-time check that the `dev` environment's branch rule still holds with
+# `deployment: false` (_docs/deployment.md, Rollback, one-time setup): `--ref` after the
+# file name is fine for the allow rule.
+BRANCH_RULE_CHECK = "gh workflow run rollback.yml --ref check/rollback-branch-rule -f env=dev"
+
 # What the on-call agent and the lead run to roll back (rollback.yml, #30). Tags are commit
 # shas, so they may start with a digit.
 ROLLBACK_COMMANDS = [
@@ -35,6 +40,7 @@ ROLLBACK_COMMANDS = [
     f"gh workflow run rollback.yml --ref main -f env=prod -f tag={SHA}",
     "gh workflow run rollback.yml -f env=dev",
     "gh workflow run rollback.yml -f env=prod --repo ybenzine/ineedtofocus",
+    BRANCH_RULE_CHECK,
 ]
 
 # Ordinary CI work the new rules must not block.
@@ -202,3 +208,10 @@ def test_free_text_mentioning_deploy_prod_would_be_denied() -> None:
     deny rule. tests/test_ci_workflow.py checks the inputs are a choice and a sha."""
     command = 'gh workflow run rollback.yml -f env=prod -f reason="deploy-prod broke saves"'
     assert "Bash(gh workflow run *deploy-prod*)" in matching("deny", command)
+
+
+def test_the_branch_rule_check_is_documented_as_run() -> None:
+    """The setup doc gives exactly the command checked above, with `--ref` after the file."""
+    deployment = (REPO / "_docs" / "deployment.md").read_text()
+    assert f"`{BRANCH_RULE_CHECK}`" in deployment
+    assert matching("allow", BRANCH_RULE_CHECK) and not matching("ask", BRANCH_RULE_CHECK)

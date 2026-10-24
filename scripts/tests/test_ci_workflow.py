@@ -708,15 +708,23 @@ def test_rollback_never_skips_green(
 def test_rollback_sends_requests_the_profiles_accept(rollback_job: dict[str, Any]) -> None:
     text = steps_text(rollback_job)
     assert "request=rollback\n" in text and '[[ -n $TAG ]] && request="rollback $TAG"' in text
-    assert 'focus "$request"' in text
-    assert "focus status" in text
+    assert 'focus "$request expect $EXPECT"' in text
+    assert "focus status" in text and "focus candidate" in text
     assert "StrictHostKeyChecking yes" in text and "BatchMode yes" in text
     script = FOCUS_CI.read_text()
     rollback_re = re.search(r"readonly ROLLBACK_RE='(.+)'", script)
     assert rollback_re
-    assert re.fullmatch(rollback_re.group(1).strip("^$"), "rollback")
-    assert re.fullmatch(rollback_re.group(1).strip("^$"), f"rollback {SHA}")
-    assert not re.fullmatch(rollback_re.group(1).strip("^$"), f"rollback {SHA} {DIGEST}")
+    pattern = rollback_re.group(1).strip("^$")
+    for ok in ["rollback", f"rollback {SHA}", f"rollback expect {DIGEST}"]:
+        assert re.fullmatch(pattern, ok), ok
+    assert re.fullmatch(pattern, f"rollback {SHA} expect {DIGEST}")
+    for bad in [
+        f"rollback {SHA} {DIGEST}",
+        f"rollback expect {SHA}",
+        f"rollback expect {DIGEST} {SHA}",
+    ]:
+        assert not re.fullmatch(pattern, bad), bad
+    assert len(f"rollback {SHA} expect {DIGEST}") <= 160  # MAX_REQUEST_LENGTH
     profiles = dict(
         re.findall(r"\n  ([a-z-]+)\)\n    env_name=\w+\n    allowed=\(([^)]*)\)", script)
     )
@@ -727,23 +735,39 @@ def test_rollback_sends_requests_the_profiles_accept(rollback_job: dict[str, Any
     }
 
 
+RESULT = f"result from_tag={SHA} from_digest={DIGEST} tag={THIRD_SHA} digest=sha256:{'e' * 64}"
+
+
 @pytest.mark.parametrize(
-    ("tag", "sent"),
-    [("", "rollback"), (SHA, f"rollback {SHA}")],
+    ("tag", "answer", "sent", "outputs"),
+    [
+        (
+            "",
+            f"==> rolling back\n{RESULT}\n",
+            f"rollback expect {DIGEST}",
+            f"from_tag={SHA}\nfrom_digest={DIGEST}\ntag={THIRD_SHA}\ndigest=sha256:{'e' * 64}\n",
+        ),
+        (SHA, "no result line\n", f"rollback {SHA} expect {DIGEST}", ""),
+    ],
 )
-def test_rollback_step_sends_the_request(
-    rollback_job: dict[str, Any], tmp_path: Path, tag: str, sent: str
+def test_rollback_step_sends_the_guarded_request_and_reads_the_result(
+    rollback_job: dict[str, Any], tmp_path: Path, tag: str, answer: str, sent: str, outputs: str
 ) -> None:
+    """The request carries the digest read just before (`expect`), and From/To come from
+    the server's own result line, written under its lock."""
     step = step_named(rollback_job, "Roll back over SSH")
     env = {
         "TAG": tag,
+        "EXPECT": DIGEST,
         "SSH_CONFIG": "/dev/null",
         "SSH_LOG": str(tmp_path / "ssh.log"),
-        "ANSWER": "",
+        "RUNNER_TEMP": str(tmp_path),
+        "ANSWER": answer,
     }
-    result, _, _ = run_step(step, tmp_path, env, FAKE_SSH, "ssh")
+    result, output, _ = run_step(step, tmp_path, env, FAKE_SSH, "ssh")
     assert result.returncode == 0, result
     assert (tmp_path / "ssh.log").read_text() == f"{sent}\n"
+    assert output.read_text() == outputs
 
 
 def record(env: str = "dev", tag: str = SHA, digest: str = DIGEST, action: str = "deploy") -> str:
@@ -755,71 +779,136 @@ def record(env: str = "dev", tag: str = SHA, digest: str = DIGEST, action: str =
 
 OTHER_DIGEST = "sha256:" + "e" * 64
 
+FAKE_SSH_BY_REQUEST = r"""#!/usr/bin/env bash
+# Fake ssh: `status` prints $ANSWER, `candidate` exits $CANDIDATE_RC.
+request=${*: -1}
+echo "$request" >> "$SSH_LOG"
+case $request in
+  status) printf '%b' "$ANSWER" ;;
+  candidate) exit "$CANDIDATE_RC" ;;
+  *) exit 99 ;;
+esac
+"""
+
 
 @pytest.mark.parametrize(
-    ("answer", "status", "says"),
+    ("target", "answer", "candidate_rc", "status", "sent", "says"),
     [
-        (record(), 0, ""),
-        (record(env="prod"), 1, "title=Wrong key::the key answers for 'prod', not dev"),
-        ("", 1, "title=Nothing to roll back"),
-        (record(digest="sha256:short"), 1, "release record is malformed"),
+        ("dev", record(), 0, 0, "status\n", ""),
+        ("prod", record(env="prod"), 2, 0, "status\ncandidate\n", ""),
+        (
+            "dev",
+            record(env="prod"),
+            0,
+            1,
+            "status\n",
+            "title=Wrong key::the key answers for 'prod'",
+        ),
+        ("prod", record(), 2, 1, "status\n", "title=Wrong key::the key answers for 'dev'"),
+        # The prod deploy key in `rollback`: it answers for prod but runs candidate.
+        ("prod", record(env="prod"), 0, 1, "status\ncandidate\n", "isn't the prod rollback key"),
+        ("prod", record(env="prod"), 1, 1, "status\ncandidate\n", "got exit 1"),
+        ("prod", record(env="prod"), 255, 1, "status\ncandidate\n", "got exit 255"),
+        ("dev", "", 0, 1, "status\n", "title=Nothing to roll back"),
+        ("dev", record(digest="sha256:short"), 0, 1, "status\n", "release record is malformed"),
     ],
 )
-def test_rollback_checks_the_key_answers_for_that_environment_first(
-    rollback_job: dict[str, Any], tmp_path: Path, answer: str, status: int, says: str
+def test_rollback_checks_the_key_belongs_there_first(
+    rollback_job: dict[str, Any],
+    tmp_path: Path,
+    target: str,
+    answer: str,
+    candidate_rc: int,
+    status: int,
+    sent: str,
+    says: str,
 ) -> None:
-    """A dev key put in `rollback` (or the other way round) stops before the rollback."""
+    """A key in the wrong environment stops before the rollback: the record must name the
+    environment, and for prod only the rollback profile refuses `candidate` (exit 2)."""
     step = step_named(rollback_job, "Read what runs now")
     env = {
-        "TARGET_ENV": "dev",
+        "TARGET_ENV": target,
         "SSH_CONFIG": "/dev/null",
         "SSH_LOG": str(tmp_path / "ssh.log"),
         "RUNNER_TEMP": str(tmp_path),
         "ANSWER": answer,
+        "CANDIDATE_RC": str(candidate_rc),
     }
-    result, output, _ = run_step(step, tmp_path, env, FAKE_SSH, "ssh")
+    result, output, _ = run_step(step, tmp_path, env, FAKE_SSH_BY_REQUEST, "ssh")
     assert result.returncode == status, result
-    assert (tmp_path / "ssh.log").read_text() == "status\n"
+    assert (tmp_path / "ssh.log").read_text() == sent
     assert says in result.stdout
     if status == 0:
         assert output.read_text() == f"tag={SHA}\ndigest={DIGEST}\n"
 
 
 @pytest.mark.parametrize(
-    ("answer", "tag", "status", "says"),
+    ("answer", "tag", "to_digest", "status", "says"),
     [
-        (record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"), "", 0, ""),
-        (record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"), OTHER_SHA, 0, ""),
+        (record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"), "", OTHER_DIGEST, 0, ""),
+        (
+            record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"),
+            OTHER_SHA,
+            OTHER_DIGEST,
+            0,
+            "",
+        ),
         (
             record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="deploy"),
             "",
+            OTHER_DIGEST,
             1,
             "doesn't show a rollback",
         ),
         (
             record(env="prod", tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"),
             "",
+            OTHER_DIGEST,
             1,
             "doesn't show a rollback",
         ),
-        (record(action="rollback"), "", 1, "still runs"),
+        (record(action="rollback"), "", DIGEST, 1, "rolled back from"),
+        (
+            record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"),
+            "",
+            "sha256:" + "f" * 64,
+            1,
+            "not sha256:fff",
+        ),
         (
             record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"),
             THIRD_SHA,
+            OTHER_DIGEST,
             1,
             f"not {THIRD_SHA}",
+        ),
+        (
+            record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"),
+            "",
+            "",
+            1,
+            "printed no result line",
         ),
     ],
 )
 def test_rollback_reads_the_record_back(
-    rollback_job: dict[str, Any], tmp_path: Path, answer: str, tag: str, status: int, says: str
+    rollback_job: dict[str, Any],
+    tmp_path: Path,
+    answer: str,
+    tag: str,
+    to_digest: str,
+    status: int,
+    says: str,
 ) -> None:
+    """The record must show the rollback the server reported: that environment, action
+    rollback, the result's digest (not the one left), and the tag when one was asked for."""
     step = step_named(rollback_job, "Read the server's release record")
     env = {
         "TARGET_ENV": "dev",
         "TAG": tag,
         "FROM_TAG": SHA,
         "FROM_DIGEST": DIGEST,
+        "TO_DIGEST": to_digest,
         "SSH_CONFIG": "/dev/null",
         "SSH_LOG": str(tmp_path / "ssh.log"),
         "RUNNER_TEMP": str(tmp_path),
@@ -830,6 +919,16 @@ def test_rollback_reads_the_record_back(
     assert says in result.stdout
     if status == 0:
         assert f"tag={OTHER_SHA}\ndigest={OTHER_DIGEST}\n" in output.read_text()
+
+
+def test_rollback_summary_takes_from_and_to_from_the_server(rollback_job: dict[str, Any]) -> None:
+    env = step_named(rollback_job, "Summary")["env"]
+    assert env["FROM_TAG"] == "${{ steps.rollback.outputs.from_tag || steps.before.outputs.tag }}"
+    assert env["FROM_DIGEST"] == (
+        "${{ steps.rollback.outputs.from_digest || steps.before.outputs.digest }}"
+    )
+    assert env["TO_TAG"] == "${{ steps.rollback.outputs.tag }}"
+    assert env["TO_DIGEST"] == "${{ steps.rollback.outputs.digest }}"
 
 
 def test_rollback_deletes_the_key_before_running_repo_code(rollback_job: dict[str, Any]) -> None:

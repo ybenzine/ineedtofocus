@@ -4,7 +4,7 @@ The procedure behind every alert runbook's "roll back" decision, and for anyone 
 
 ## Impact
 
-Rolling back swaps the app container only: a few seconds of `502` from Caddy while the older release starts. The database isn't touched: no migration runs and none is undone. Data written since the deploy stays, and the older release runs on today's schema, because migrations only ever add ([AGENTS.md](../../AGENTS.md#conventions)).
+Rolling back swaps the app container only: a few seconds of `502` from Caddy while the older release starts. The database isn't touched: no migration runs and none is undone. Data written since the deploy stays. The older release runs on today's schema because migrations are expand-first ([AGENTS.md](../../AGENTS.md#conventions)): a migration only adds, until a deliberate contract migration removes something. Rolling back past a contract migration isn't safe, and until #165 adds a rollback floor nothing stops it, so check `backend/migrations/versions/` for a `# contract-migration:` step between the two releases first.
 
 ## Check
 
@@ -40,7 +40,7 @@ gh run list --workflow rollback.yml --limit 1 --json databaseId,createdAt,status
 gh run watch <databaseId> --exit-status
 ```
 
-**Don't re-run a rollback that succeeded:** each one goes one release further back. If it failed, read its log and the table below first.
+**Don't re-run a rollback that succeeded:** each one goes one release further back. If it failed, read its log and the table below first. A run that's still waiting (another rollback of that environment is running) is replaced by a newer dispatch: GitHub keeps one pending run per group, so a duplicate dispatch drops the waiting one rather than going back twice.
 
 ## Verify
 
@@ -53,6 +53,9 @@ gh run watch <databaseId> --exit-status
 | `Not rolled back: the dev/rollback environment has no DEPLOY_SSH_KEY …` | The environment isn't set up yet (#28, #30 setup) | `⛔ Needs Yacine:` the one-time setup in [deployment.md → Rollback](../deployment.md#one-time-setup-yacine-2) |
 | `Wrong key` | The environment holds another environment's key; nothing changed | `⛔ Needs Yacine:` fix that environment's secret |
 | `nothing to roll back to` | No known-good release other than the current one | Fix forward |
+| `… runs <tag> (<digest>) now, not the expected …` | A deploy or another rollback ran between the run's read and its request; nothing changed | Check what runs now (the latest deploy summary), then decide again |
+| `Wrong key: the rollback environment's key isn't the prod rollback key` | The `rollback` environment holds a key that can do more than roll back | `⛔ Needs Yacine:` replace it with the `focus-ci-rollback` key |
+| `releases.log line <n> is malformed` | The log was edited by hand; nothing that reads it runs | `⛔ Needs Yacine:` move that line out of `/opt/focus/<env>/releases.log` |
 | `no known-good release of <sha> is recorded` | That sha never passed the checks there, is current, or was rolled back from | Leave `tag` out, or pick another sha from the deploy summaries |
 | `rollback of <sha> failed at 'start' … reverted to <tag>` | The target didn't pass its checks either; the server started the release it left again | The cause is probably not the release: investigate, don't retry blindly |
 | `… and reverting to <tag> failed too` | The environment may be down | `⛔ Needs Yacine:` server access ([deployment.md → Rollback](../deployment.md#rollback-rollbackyml), break-glass) |
