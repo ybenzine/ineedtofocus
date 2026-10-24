@@ -7,14 +7,16 @@ import { LocalAudioSourceStore, MemoryYoutubeLinkStore, YOUTUBE_LINK_KEY } from 
 import { MemoryBackgroundVolumeStore, RainPlayer } from './rain.ts'
 import { httpYoutubeLinksApi } from './youtubeLinksApi.ts'
 import {
+  API_TIMEOUT_MS,
   PLAYER_ERROR_MESSAGE,
   PLAYER_LOAD_MESSAGE,
   YT_ENDED,
+  loadYoutubeApi,
   type YtNamespace,
   type YtPlayer,
   type YtPlayerOptions,
 } from './ytApi.ts'
-import { INVALID_LINK_MESSAGE } from './YoutubeControls.tsx'
+import { INVALID_LINK_MESSAGE, NO_ID_MESSAGE } from './YoutubeControls.tsx'
 
 const LINK_LABEL = /^(Another )?YouTube link$/
 const ID = 'dQw4w9WgXcQ'
@@ -50,6 +52,7 @@ function setup(
   options: {
     paused?: boolean
     links?: string[]
+    list?: () => Promise<string[]>
     linkStore?: MemoryYoutubeLinkStore
     loadApi?: () => Promise<YtNamespace>
     settings?: SettingsStore
@@ -57,7 +60,7 @@ function setup(
 ) {
   const fake = fakeYoutube()
   const api = {
-    list: vi.fn(async () => options.links ?? []),
+    list: vi.fn(options.list ?? (async () => options.links ?? [])),
     use: vi.fn(async (url: string) => [url, ...(options.links ?? [])]),
   }
   const settings = options.settings ?? new SettingsStore()
@@ -124,6 +127,16 @@ describe('YouTube background audio (AC8.4)', () => {
     expect(t.players[0].options.videoId).toBeUndefined()
     await t.ready()
     expect(t.players[0].setLoop).toHaveBeenCalledWith(true)
+  })
+
+  it('lets a playlist move on by itself when an item ends', async () => {
+    const t = setup()
+    await paste(`https://www.youtube.com/playlist?list=${LIST}`)
+    await waitFor(() => expect(t.players).toHaveLength(1))
+    await t.ready()
+    t.players[0].options.events.onStateChange({ data: YT_ENDED })
+    expect(t.players[0].seekTo).not.toHaveBeenCalled()
+    expect(t.players[0].playVideo).toHaveBeenCalledTimes(1)
   })
 
   it('starts the video over when it ends while the timer runs', async () => {
@@ -220,6 +233,26 @@ describe('problems leave the session alone (AC8.5)', () => {
     },
   )
 
+  it('stops and removes a player that failed, so nothing plays unseen', async () => {
+    const t = setup()
+    await paste(`https://youtu.be/${ID}`)
+    await waitFor(() => expect(t.players).toHaveLength(1))
+    await t.ready()
+    await act(async () => t.players[0].options.events.onError({ data: 150 }))
+    expect(t.players[0].stopVideo).toHaveBeenCalled()
+    expect(t.players[0].destroy).toHaveBeenCalled()
+    t.setPaused(true)
+    t.setPaused(false)
+    expect(t.players[0].playVideo).toHaveBeenCalledTimes(1)
+  })
+
+  it('says so when a YouTube link has no video or playlist', async () => {
+    const t = setup()
+    await paste('https://www.youtube.com/@channel')
+    expect(screen.getByRole('alert')).toHaveTextContent(NO_ID_MESSAGE)
+    expect(t.api.use).not.toHaveBeenCalled()
+  })
+
   it('explains a player that cannot load', async () => {
     setup({ loadApi: () => Promise.reject(new Error('blocked')) })
     await paste(`https://youtu.be/${ID}`)
@@ -256,10 +289,36 @@ describe('recent links (AC8.6)', () => {
   })
 
   it('works with no list when the API is unreachable', async () => {
-    const t = setup()
-    t.api.list.mockRejectedValue(new Error('offline'))
+    const t = setup({ list: () => Promise.reject(new Error('offline')) })
+    await waitFor(() => expect(t.api.list).toHaveBeenCalled())
+    await act(async () => undefined)
     expect(screen.queryByRole('list')).not.toBeInTheDocument()
     expect(screen.getByLabelText(LINK_LABEL)).toBeInTheDocument()
+  })
+})
+
+describe('a slow first fetch', () => {
+  it('keeps a newer list when the first fetch finishes late', async () => {
+    let finish: (urls: string[]) => void = () => undefined
+    const t = setup({ list: () => new Promise<string[]>((resolve) => (finish = resolve)) })
+    await paste(`https://youtu.be/${ID}`)
+    await screen.findByRole('button', { name: `Video ${ID}` })
+    await act(async () => finish([`https://youtu.be/${ID2}`]))
+    expect(screen.queryByRole('button', { name: `Video ${ID2}` })).not.toBeInTheDocument()
+    expect(t.api.use).toHaveBeenCalled()
+  })
+})
+
+describe('loading the API', () => {
+  it('gives up when the ready callback never fires', async () => {
+    vi.useFakeTimers()
+    delete window.YT
+    const pending = loadYoutubeApi()
+    const failure = expect(pending).rejects.toThrow('timed out')
+    await vi.advanceTimersByTimeAsync(API_TIMEOUT_MS)
+    await failure
+    vi.useRealTimers()
+    document.head.querySelector('script')?.remove()
   })
 })
 

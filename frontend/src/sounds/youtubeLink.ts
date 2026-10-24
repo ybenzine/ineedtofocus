@@ -30,11 +30,11 @@ const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/
 const PLAYLIST_ID = /^[A-Za-z0-9_-]{12,64}$/
 const PATH_VIDEO = /^\/(?:embed|shorts|live|v)\/([^/]+)/
 
-/** Whitespace, control and invisible characters (the server refuses anything not printable). */
-const FORBIDDEN = new RegExp(
-  // eslint-disable-next-line no-control-regex
-  '[\\s\\u0000-\\u001f\\u007f-\\u009f\\u200b-\\u200f\\u2028-\\u202f\\u2060\\ufeff]',
-)
+/**
+ * Whitespace and every control, format, private-use and unassigned character: the server refuses
+ * anything Python's `isspace()` or `not isprintable()` flags, which is Unicode categories C and Z.
+ */
+const FORBIDDEN = /[\p{C}\p{Z}]/u
 
 /** The link as the server will check it: trimmed, with `https://` added when no scheme was typed. */
 export function normaliseYoutubeUrl(raw: string): string {
@@ -42,40 +42,57 @@ export function normaliseYoutubeUrl(raw: string): string {
   return value.includes('://') ? value : `https://${value}`
 }
 
-/** Null when the server would refuse the link, or when it holds no video or playlist id. */
-export function parseYoutubeLink(raw: string): YoutubeLink | null {
+export type YoutubeCheck =
+  | { ok: true; link: YoutubeLink }
+  /** `invalid`: the server would refuse it. `no-id`: a YouTube link with nothing to play. */
+  | { ok: false; reason: 'invalid' | 'no-id' }
+
+const INVALID = { ok: false, reason: 'invalid' } as const
+
+export function checkYoutubeLink(raw: string): YoutubeCheck {
   const url = normaliseYoutubeUrl(raw)
   if (url.length > YOUTUBE_URL_MAX_LENGTH || url.includes('\\') || FORBIDDEN.test(url)) {
-    return null
+    return INVALID
   }
   const authority = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/([^/?#]*)/.exec(url)?.[1]
   if (authority === undefined || authority.includes('@') || !/^[\x21-\x7e]+$/.test(authority)) {
-    return null
+    return INVALID
   }
+  // The host is read from the raw text: `URL` percent-decodes it, the server doesn't.
+  const [rawHost = '', ...rest] = authority.split(':')
+  if (rest.length > 1 || !YOUTUBE_HOSTS.has(rawHost.toLowerCase())) return INVALID
   let parsed: URL
   try {
     parsed = new URL(url)
   } catch {
-    return null
+    return INVALID
   }
   const defaultPort =
     parsed.protocol === 'https:' ? '443' : parsed.protocol === 'http:' ? '80' : null
-  if (defaultPort === null || !YOUTUBE_HOSTS.has(parsed.hostname.toLowerCase())) return null
+  if (defaultPort === null) return INVALID
   // `URL` drops a default port, so any port left over is not the default one.
-  if (parsed.port !== '' && parsed.port !== defaultPort) return null
-  if (parsed.username !== '' || parsed.password !== '') return null
+  if (parsed.port !== '' && parsed.port !== defaultPort) return INVALID
+  if (parsed.username !== '' || parsed.password !== '') return INVALID
 
-  const target = findTarget(parsed)
-  return target ? { url, target } : null
+  const target = findTarget(parsed, rawHost.toLowerCase())
+  return target ? { ok: true, link: { url, target } } : { ok: false, reason: 'no-id' }
 }
 
-function findTarget(parsed: URL): YoutubeTarget | null {
+/** Null when the server would refuse the link, or when it holds no video or playlist id. */
+export function parseYoutubeLink(raw: string): YoutubeLink | null {
+  const result = checkYoutubeLink(raw)
+  return result.ok ? result.link : null
+}
+
+function findTarget(parsed: URL, host: string): YoutubeTarget | null {
   const path = parsed.pathname
   const video =
-    parsed.hostname.toLowerCase() === 'youtu.be'
+    host === 'youtu.be'
       ? (path.split('/')[1] ?? null)
       : (parsed.searchParams.get('v') ?? PATH_VIDEO.exec(path)?.[1] ?? null)
-  if (video !== null && VIDEO_ID.test(video)) return { kind: 'video', id: video }
+  // `/embed/videoseries?list=...` is YouTube's own playlist embed.
+  if (video !== null && video !== 'videoseries' && VIDEO_ID.test(video))
+    return { kind: 'video', id: video }
   const list = parsed.searchParams.get('list')
   if (list !== null && PLAYLIST_ID.test(list)) return { kind: 'playlist', id: list }
   return null

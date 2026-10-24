@@ -85,12 +85,32 @@ export default function YoutubePlayer({
             },
             onStateChange: (event) => {
               // Backs up `loop` for a single video: start over while the timer runs.
-              if (event.data === YT_ENDED && wantPlaying.current && !cancelled) {
+              // A playlist moves on by itself (`setLoop`); restarting here would repeat an item.
+              if (
+                kind === 'video' &&
+                event.data === YT_ENDED &&
+                wantPlaying.current &&
+                !cancelled
+              ) {
                 created?.seekTo(0, true)
                 created?.playVideo()
               }
             },
-            onError: () => fail(PLAYER_ERROR_MESSAGE),
+            onError: () => {
+              // Nothing may play from a player the user can't see: stop and remove it.
+              ready.current = false
+              player.current = null
+              const failed = created
+              created = null
+              try {
+                failed?.stopVideo()
+                failed?.destroy()
+              } catch {
+                // Already gone.
+              }
+              host?.replaceChildren()
+              fail(PLAYER_ERROR_MESSAGE)
+            },
           },
         })
       },

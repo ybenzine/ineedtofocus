@@ -2,16 +2,24 @@
 // and the video plays in a small visible player, looping while the timer runs (AC8.2). A link or
 // video that doesn't work only shows a message; the session is unaffected (AC8.5).
 
-import { useEffect, useId, useState, type FormEvent } from 'react'
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { useSettingsStore, useSettingsState } from '../settings/SettingsContext.ts'
 import { LocalYoutubeLinkStore, type YoutubeLinkStore } from './audioSource.ts'
 import YoutubePlayer from './youtubePlayer.tsx'
 import { loadYoutubeApi, type LoadYoutubeApi } from './ytApi.ts'
-import { describeYoutubeLink, parseYoutubeLink, type YoutubeLink } from './youtubeLink.ts'
+import {
+  checkYoutubeLink,
+  describeYoutubeLink,
+  parseYoutubeLink,
+  type YoutubeLink,
+} from './youtubeLink.ts'
 import { httpYoutubeLinksApi, type YoutubeLinksApi } from './youtubeLinksApi.ts'
 
 export const INVALID_LINK_MESSAGE =
   "That doesn't look like a YouTube link. Paste a link from youtube.com or youtu.be."
+
+export const NO_ID_MESSAGE =
+  "This link doesn't point to a video or playlist. Paste the link to a video, short or playlist."
 
 export interface YoutubeControlsProps {
   /** The timer is paused. */
@@ -21,14 +29,21 @@ export interface YoutubeControlsProps {
   loadApi?: LoadYoutubeApi
 }
 
-const defaultLinkStore = new LocalYoutubeLinkStore()
+let defaultLinkStore: YoutubeLinkStore | null = null
+
+/** Created on first use, so importing this module doesn't touch localStorage. */
+function getDefaultLinkStore(): YoutubeLinkStore {
+  defaultLinkStore ??= new LocalYoutubeLinkStore()
+  return defaultLinkStore
+}
 
 export default function YoutubeControls({
   paused,
-  linkStore = defaultLinkStore,
+  linkStore: givenLinkStore,
   api = httpYoutubeLinksApi,
   loadApi = loadYoutubeApi,
 }: YoutubeControlsProps) {
+  const linkStore = givenLinkStore ?? getDefaultLinkStore()
   const inputId = useId()
   const errorId = useId()
   const volumeId = useId()
@@ -42,6 +57,9 @@ export default function YoutubeControls({
   const [error, setError] = useState<string | null>(null)
   const [recent, setRecent] = useState<YoutubeLink[]>([])
 
+  // Set once a link has been used: a slower first fetch must not overwrite that newer list.
+  const usedSinceMount = useRef(false)
+
   function showRecent(urls: string[]) {
     setRecent(
       urls
@@ -53,7 +71,12 @@ export default function YoutubeControls({
 
   useEffect(() => {
     const abort = new AbortController()
-    api.list(abort.signal).then(showRecent, () => undefined)
+    api.list(abort.signal).then(
+      (urls) => {
+        if (!usedSinceMount.current) showRecent(urls)
+      },
+      () => undefined,
+    )
     return () => abort.abort()
   }, [api])
 
@@ -63,14 +86,20 @@ export default function YoutubeControls({
     setLink(chosen)
     linkStore.save(chosen.url)
     // Remembering the link is best effort: playback never waits for it.
-    api.use(chosen.url).then(showRecent, () => undefined)
+    api.use(chosen.url).then(
+      (urls) => {
+        usedSinceMount.current = true
+        showRecent(urls)
+      },
+      () => undefined,
+    )
   }
 
   function submit(event: FormEvent) {
     event.preventDefault()
-    const parsed = parseYoutubeLink(text)
-    if (parsed === null) setError(INVALID_LINK_MESSAGE)
-    else choose(parsed)
+    const result = checkYoutubeLink(text)
+    if (result.ok) choose(result.link)
+    else setError(result.reason === 'no-id' ? NO_ID_MESSAGE : INVALID_LINK_MESSAGE)
   }
 
   return (
