@@ -4,7 +4,13 @@
 // control characters, an ASCII host and only the default port. The server doesn't check the path;
 // the client additionally needs a video or playlist id in it, or there is nothing to play.
 //
+// Unicode versions differ between browsers (ICU) and the server's Python, so a character one calls
+// assigned the other may call unassigned. The client therefore percent-encodes every non-ASCII
+// character before the link is saved or POSTed; the server only ever sees ASCII past the
+// forbidden-character check, and a link that plays is a link that is saved.
+//
 // The player is always built from the parsed id, never from the pasted string.
+// Test cases shared with the server live in `_docs/api/fixtures/youtube-links.json`.
 
 export const YOUTUBE_HOSTS: ReadonlySet<string> = new Set([
   'youtube.com',
@@ -36,6 +42,11 @@ const PATH_VIDEO = /^\/(?:embed|shorts|live|v)\/([^/]+)/
  */
 const FORBIDDEN = /[\p{C}\p{Z}]/u
 
+/** Percent-encodes (UTF-8) every non-ASCII character, as `encodeURI` would for those characters. */
+function encodeNonAscii(value: string): string {
+  return value.replace(/\P{ASCII}/gu, (char) => encodeURIComponent(char))
+}
+
 /** The link as the server will check it: trimmed, with `https://` added when no scheme was typed. */
 export function normaliseYoutubeUrl(raw: string): string {
   const value = raw.trim()
@@ -50,10 +61,14 @@ export type YoutubeCheck =
 const INVALID = { ok: false, reason: 'invalid' } as const
 
 export function checkYoutubeLink(raw: string): YoutubeCheck {
-  const url = normaliseYoutubeUrl(raw)
-  if (url.length > YOUTUBE_URL_MAX_LENGTH || url.includes('\\') || FORBIDDEN.test(url)) {
-    return INVALID
-  }
+  const normalised = normaliseYoutubeUrl(raw)
+  if (normalised.includes('\\') || FORBIDDEN.test(normalised)) return INVALID
+  // Non-ASCII is only left in the authority, where the ASCII check below refuses it.
+  const pathStart = normalised.indexOf('://') + 3
+  const authorityEnd = normalised.slice(pathStart).search(/[/?#]/u)
+  const split = authorityEnd === -1 ? normalised.length : pathStart + authorityEnd
+  const url = normalised.slice(0, split) + encodeNonAscii(normalised.slice(split))
+  if (url.length > YOUTUBE_URL_MAX_LENGTH) return INVALID
   const authority = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/([^/?#]*)/.exec(url)?.[1]
   if (authority === undefined || authority.includes('@') || !/^[\x21-\x7e]+$/.test(authority)) {
     return INVALID

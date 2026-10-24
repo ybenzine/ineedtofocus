@@ -318,6 +318,24 @@ describe('loading the API', () => {
     await vi.advanceTimersByTimeAsync(API_TIMEOUT_MS)
     await failure
     vi.useRealTimers()
+    expect(document.head.querySelector('script')).toBeNull()
+    expect(window.onYouTubeIframeAPIReady).toBeUndefined()
+  })
+
+  it('adds one script, not two, when it is retried after a timeout', async () => {
+    vi.useFakeTimers()
+    delete window.YT
+    const first = expect(loadYoutubeApi()).rejects.toThrow('timed out')
+    await vi.advanceTimersByTimeAsync(API_TIMEOUT_MS)
+    await first
+    const retry = loadYoutubeApi()
+    expect(document.head.querySelectorAll('script[src*="iframe_api"]')).toHaveLength(1)
+    const ready = window.onYouTubeIframeAPIReady
+    window.YT = { Player: vi.fn() as never }
+    ready?.()
+    await expect(retry).resolves.toBe(window.YT)
+    delete window.YT
+    vi.useRealTimers()
     document.head.querySelector('script')?.remove()
   })
 })

@@ -1,9 +1,11 @@
 """Settings API and recent YouTube links (#12) against a real, migrated Postgres."""
 
 import asyncio
+import json
 import logging
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -347,6 +349,35 @@ def test_ac8_6_rejects_other_links_without_echoing_them(client: TestClient, url:
     assert r.json()["error"]["code"] == "validation_error"
     assert not url or url not in r.text
     assert urls(client) == []
+
+
+# One list of cases shared with the client check (frontend/src/sounds/youtubeLink.test.ts).
+# `server_ok` is what the server says about `url` as written (null: depends on the Unicode version
+# of the Python in use, so not asserted); `sent` is what the client posts when it accepts the link.
+_FIXTURE = json.loads(
+    (Path(__file__).resolve().parents[3] / "_docs/api/fixtures/youtube-links.json").read_text()
+)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [pytest.param(c, id=c["reason"]) for c in _FIXTURE if c["server_ok"] is not None],
+)
+def test_ac8_6_shared_fixture_server_verdict(client: TestClient, case: dict[str, Any]) -> None:
+    assert use(client, case["url"]).status_code == (200 if case["server_ok"] else 422)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [pytest.param(c, id=c["reason"]) for c in _FIXTURE if c["client_ok"]],
+)
+def test_ac8_6_server_saves_every_link_the_client_plays(
+    client: TestClient, case: dict[str, Any]
+) -> None:
+    # Includes the characters Python's older Unicode tables call unassigned: sent encoded.
+    assert case["sent"].isascii()
+    assert use(client, case["sent"]).status_code == 200
+    assert urls(client) == [case["sent"]]
 
 
 def test_ac8_6_missing_or_extra_fields_are_422(client: TestClient) -> None:
