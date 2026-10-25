@@ -124,7 +124,7 @@ Independent issues (e.g. a backend API and an unrelated DevOps task) can run in 
 - `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=4` (Claude Code v2.1.217 or later): with 4 subagents running, spawning another with the Agent tool fails with `Concurrent subagent limit reached`. The spawn is refused, not queued. When that happens the lead **waits for a running agent to finish** and spawns then; it doesn't retry in a loop.
 - `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS=4` (Claude Code v2.1.269 or later): a [workflow](https://code.claude.com/docs/en/workflows) run executes at most 4 agents at once and queues the rest. This cap is per workflow run, not per session, and the Claude Code docs say workflow agents follow their own limit rather than the subagent one.
 - Older Claude Code versions don't support these variables, so they don't apply the cap. Check `claude --version`.
-- The cap is per session: two sessions in parallel (e.g. one per milestone worktree) mean at most 8 subagents in total.
+- The cap is per session: two sessions in parallel (one per milestone worktree, [process.md → Parallel sessions](process.md#parallel-sessions-one-worktree-each)) mean at most 8 subagents in total.
 - Restart a session that started before the change. The docs don't guarantee that a running session picks up the new value.
 
 Documented exceptions ([Claude Code docs → Concurrent subagent limit](https://code.claude.com/docs/en/sub-agents#concurrent-subagent-limit)):

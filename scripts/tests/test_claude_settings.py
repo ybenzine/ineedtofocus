@@ -388,3 +388,75 @@ def test_git_credential_fill_is_documented_as_human_only() -> None:
     readme = (REPO / "infra" / "github" / "README.md").read_text()
     line = next(line for line in readme.splitlines() if "| git credential fill | grep" in line)
     assert "own terminal" in line
+
+
+# --- Local curl for a second parallel worktree's stack (#83) ------------------------------
+# Each parallel session runs in its own worktree with its own stack: the main checkout on the
+# default ports, a second worktree on each port + 10 (_docs/process.md, Parallel sessions).
+
+PROCESS = REPO / "_docs" / "process.md"
+DEFAULT_PORTS = {"app": 8000, "vite": 5173, "grafana": 3000, "otlp_http": 4318}
+SECOND_PORTS = {name: port + 10 for name, port in DEFAULT_PORTS.items()}
+THIRD_PORTS = {name: port + 20 for name, port in DEFAULT_PORTS.items()}
+HOSTS = ["localhost", "127.0.0.1"]
+CURL_URL = re.compile(r"^Bash\(curl (?:\* )?(https?://[^/]+)/\*\)$")
+EXPLICIT_LOCAL = re.compile(r"^http://(?:localhost|127\.0\.0\.1)(?::\d+)?$")
+
+
+def curl_rules(port: int) -> list[str]:
+    return [
+        rule
+        for host in HOSTS
+        for rule in (f"Bash(curl http://{host}:{port}/*)", f"Bash(curl * http://{host}:{port}/*)")
+    ]
+
+
+@pytest.mark.parametrize("port", sorted(SECOND_PORTS.values()))
+def test_second_worktree_ports_are_allowed(port: int) -> None:
+    for rule in curl_rules(port):
+        assert rule in PERMISSIONS["allow"], rule
+
+
+@pytest.mark.parametrize("port", sorted(SECOND_PORTS.values()))
+@pytest.mark.parametrize("host", HOSTS)
+def test_curl_to_the_second_worktree_runs_without_a_prompt(host: str, port: int) -> None:
+    for command in (
+        f"curl http://{host}:{port}/healthz",
+        f"curl -fsS --max-time 3 http://{host}:{port}/healthz",
+    ):
+        assert matching("allow", command), command
+        assert matching("deny", command) == [], command
+        assert matching("ask", command) == [], command
+
+
+def test_curl_rules_name_explicit_ports() -> None:
+    """No `*` inside a URL (CLAUDE.md): `localhost:*` would also match `localhost:x@evil`."""
+    for rule in PERMISSIONS["allow"]:
+        if not rule.startswith("Bash(curl"):
+            continue
+        match = CURL_URL.match(rule)
+        assert match, rule
+        url = match[1]
+        assert "*" not in url, rule
+        assert EXPLICIT_LOCAL.match(url) or url.startswith("https://"), rule
+
+
+def test_a_port_outside_the_documented_ones_still_prompts() -> None:
+    assert matching("allow", "curl http://localhost:8020/healthz") == []
+    assert matching("allow", "curl http://localhost:8010@evil.example/healthz") == []
+
+
+def test_third_worktree_snippet_is_valid_and_explicit() -> None:
+    """process.md gives the exact settings.local.json for a third worktree (ports + 20)."""
+    block = re.search(r"```json\n(.*?)```", PROCESS.read_text(), re.DOTALL)
+    assert block, "process.md has no json block"
+    rules = json.loads(block[1])["permissions"]["allow"]
+    expected = [rule for port in sorted(THIRD_PORTS.values()) for rule in curl_rules(port)]
+    assert sorted(rules) == sorted(expected)
+    assert not set(rules) & set(PERMISSIONS["allow"])
+
+
+def test_docs_list_the_allowed_second_worktree_ports() -> None:
+    listed = ", ".join(str(port) for port in SECOND_PORTS.values())
+    assert f"({listed}, on `localhost` and `127.0.0.1`)" in PROCESS.read_text()
+    assert f"({listed}; " in (REPO / "CLAUDE.md").read_text()

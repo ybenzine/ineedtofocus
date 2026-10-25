@@ -53,10 +53,9 @@ frontend/node_modules: frontend/package.json frontend/package-lock.json
 
 # --- Local stack --------------------------------------------------------------
 
-up: ## Build and start the local stack, wait until it is healthy (compose.yaml)
+up: ## Build and start the local stack, wait until it is healthy, print its URLs (compose.yaml)
 	$(COMPOSE) up -d --build --wait
-	@echo "App:     http://localhost:8000 (or the APP_PORT set in .env)"
-	@echo "Grafana: http://localhost:3000 (or the GRAFANA_PORT set in .env)"
+	@scripts/stack-urls.sh
 
 down: ## Stop the local stack (keeps the database volume)
 	$(COMPOSE) down
@@ -102,23 +101,26 @@ test-prod-stack: ## Smoke-test the production stack: Caddy + prod + dev (#27; ne
 	infra/tests/prod_stack.sh
 
 # Inside `make test`: run e2e when a stack answers on the base URL, otherwise skip loudly
-# (fail when CI is set). `make test-e2e` itself is always strict.
+# (fail when CI is set). `make test-e2e` itself is always strict. The base URL defaults to
+# this checkout's own app (scripts/stack-urls.sh app), so a second worktree (#83) never
+# tests another checkout's stack.
 test-e2e-if-up:
-	@url="$${PLAYWRIGHT_BASE_URL:-http://localhost:8000}"; \
+	@url="$${PLAYWRIGHT_BASE_URL:-$$(scripts/stack-urls.sh app)}"; \
 	if curl -fsS --max-time 3 "$$url/healthz" > /dev/null 2>&1; then \
-		$(MAKE) test-e2e; \
+		PLAYWRIGHT_BASE_URL="$$url" $(MAKE) test-e2e; \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAILED e2e: no stack at $$url (CI is set). Run make up first." >&2; exit 1; \
 	else \
 		echo "SKIPPED e2e: no stack at $$url. Run make up, then make test-e2e." >&2; \
 	fi
 
-test-e2e: frontend/node_modules ## Playwright end-to-end tests against the running stack (`make up` first)
+test-e2e: frontend/node_modules ## Playwright end-to-end tests against this checkout's running stack (`make up` first)
 	@if ! compgen -G 'frontend/playwright.config.*' > /dev/null; then \
 		echo 'frontend/playwright.config.* is missing.' >&2; \
 		exit 1; \
 	fi
-	$(NPM) exec --no -- playwright test --config frontend/playwright.config.ts
+	PLAYWRIGHT_BASE_URL="$${PLAYWRIGHT_BASE_URL:-$$(scripts/stack-urls.sh app)}" \
+		$(NPM) exec --no -- playwright test --config frontend/playwright.config.ts
 
 # --- Lint and format ----------------------------------------------------------
 

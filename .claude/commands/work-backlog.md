@@ -7,6 +7,8 @@ You are the **lead** working through the backlog of ybenzine/ineedtofocus. Follo
 
 **Scope:** issues whose milestone title starts with `$ARGUMENTS` (e.g. `M2` matches `M2 · MVP app`); if no argument, every milestone `M1`–`M5` in order. Never touch `post-mvp` issues or the `Post-MVP` milestone.
 
+**Parallel milestones need separate worktrees** (#83): two `/work-backlog` sessions never run in the same folder. Each runs in its own git worktree with its own `.env` (Compose project name and host ports), set up as in `_docs/process.md` → Parallel sessions.
+
 ## Collect
 1. Open issues: `gh issue list --state open --limit 500 --json number,title,labels,milestone` (REST fallback: `gh api --paginate "repos/ybenzine/ineedtofocus/issues?state=open&per_page=100"`, then drop entries that have a `pull_request` key — those are PRs).
 2. **Closed but not accepted:** closed issues in scope, closed as completed, without the `accepted` label: `gh issue list --state closed --limit 500 --json number,labels,milestone,stateReason` (REST fallback: `gh api --paginate "repos/ybenzine/ineedtofocus/issues?state=closed&per_page=100"`, drop entries with a `pull_request` key, keep `state_reason == "completed"`). They still need acceptance.
