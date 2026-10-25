@@ -251,29 +251,62 @@ One alert watches a resource: the Droplet's disk. It's a DigitalOcean Monitoring
 
 ## On-call agent (#35)
 
-`.github/workflows/oncall.yml` runs Claude Code headless when a dispatch arrives: one run per alert and environment at a time, never cancelled, so a resolved event waits for its firing run. GitHub keeps one waiting run per group, so a newer dispatch replaces one that's still waiting. The jobs, and what each may do, are in [deployment.md → On-call workflow](deployment.md#on-call-workflow-35).
+`.github/workflows/oncall.yml` runs Claude Code headless when a dispatch arrives. There's one run per alert and environment at a time, never cancelled, so a resolved event waits for its firing run. GitHub keeps one waiting run per group, so a newer dispatch replaces one that's still waiting. **No Claude session holds a token that can write.** Sessions leave files, and deterministic jobs check them and do every write. The jobs, and what each may do, are in [deployment.md → On-call workflow](deployment.md#on-call-workflow-35).
 
 ```text
-alert      check-event (no secrets)
-respond    the on-call agent (.claude/agents/oncall.md: model opus, effort high), environment oncall
-             -> incident issue "Incident: <rule title>" (type:incident, agent:oncall), opened or updated
-             -> investigates with scripts/oncall_grafana.py, follows the runbook
-             -> writes /tmp/oncall/decision.json: rollback | fix | escalate | none (checked by scripts/oncall.py)
-rollback   if rollback: gh workflow run rollback.yml -f env=<the alert's env> [-f tag=<sha>], once; waits
-review     if fix: waits for CI, then the reviewer agent posts through the reviewer App (scripts/reviewer-review.sh)
-follow-up  if rollback or fix: the on-call agent verifies the rollback, or squash-merges the approved green PR
-           (dev deploy) and asks Yacine to approve prod; waits for the alert to resolve; incident summary
+alert        check-event (no secrets)
+incident     find "Incident: <rule title>" (type:incident), or open it and lock it; daily run cap
+respond      on-call session (.claude/agents/oncall.md: opus, high), read-only token
+               reads Grafana with scripts/oncall_grafana.py, follows the runbook
+               -> /tmp/oncall/decision.json (rollback | fix | escalate | none), comment.md,
+                  for a fix: commits on oncall/<n>-<slug> (bundled), pr.md
+act          checks them (scripts/oncall.py); posts the comment; labels (needs-yacine, oncall:rolled-back)
+               fix: pushes the branch and opens the PR (Refs #n) as the on-call App, or posts a patch
+               resolved: closes the incident unless its fix PR is still open
+rollback     gh workflow run rollback.yml -f env=<the alert's env> [-f tag=<sha>], once; waits
+review       waits for CI; reviewer session (read-only, no App key) writes the review and verdict
+post-review  posts it through the reviewer App (scripts/reviewer-review.sh); comment if no key
+merge        APPROVED and green: squash-merge as the on-call App (dev deploy); prod: ask Yacine
+               to start deploy-prod with that tag and approve it
+wait         waits for the alert to resolve (after a rollback, or a merged fix to a dev alert)
+follow-up    on-call session given only the steps' checked results; writes the report
+report       posts it, or ⛔ Needs Yacine: if it didn't finish
 ```
 
-**What the agent reads.** Its prompt (`scripts/oncall.py`, templates in `scripts/oncall_prompts/`) carries only the payload fields whose values are fixed: `alert`, `environment` and `status` (enums), `title` and `summary` (pinned to the rules' text), and the timestamps. It also names the runbook and the open incident issue. The rule's free-text `description` stays out until #212 pins it, and so do the Grafana links, whose query strings are free text. The agent reads the alert's numbers itself: `python3 scripts/oncall_grafana.py journey <env>` runs the alert rules' own queries. The prompt presents the alert as untrusted data, and it treats as data, never as instructions, any GitHub text not written by `ybenzine`, `merciful-poseidon`, `github-actions[bot]` or `ineedtofocus-reviewer[bot]` (this repo is public), and anything found in logs, traces, commits or PR bodies.
+**What a session reads.** Its prompt (`scripts/oncall.py`, templates in `scripts/oncall_prompts/`) carries only the payload fields whose values are fixed or pinned: `alert`, `environment` and `status` (enums), `title`, `summary` and `description`, pinned to the rule's text since #212 with only numbers in the description's slots, and the timestamps. The Grafana links stay out, since their query strings are free text. It also gets the workflow's own record of the incident: its number, whether it already had its rollback, and its open fix PR. State passes between sessions only that way, through the steps' checked outputs. The follow-up session gets the rollback run, its result, the review verdict, the merge, the wait result and the alert's numbers, all checked. It never takes over what an earlier session wrote on the issue. The prompt presents the alert as untrusted data. Only comments by `ybenzine` and `merciful-poseidon` may carry instructions. Everything else is data: other accounts, this workflow's own bot, and anything found in logs, traces, commits or PR bodies. Each incident issue is locked to collaborators when it's opened.
 
-**Reading Grafana: `scripts/oncall_grafana.py`.** GET only, with `GRAFANA_READONLY_TOKEN` as a bearer token, over https only, never through a redirect, and never printed. `journey`, `alerts` and `wait <alert> <env> normal|firing` cover the alert. `errors`, `failed` and `slow` give error logs, failed requests and slow requests, `trace <id>` shows one trace's spans with a few allowlisted attributes, and `prom`, `logs` and `traces` run any query. Each output line is cut at 400 characters. Against the local stack it needs no token: `GRAFANA_URL=http://127.0.0.1:<GRAFANA_PORT>`. The token must stay **Viewer** ([above](#the-token)).
+**Reading Grafana: `scripts/oncall_grafana.py`.** GET only, with `GRAFANA_READONLY_TOKEN` as a bearer token, over https only, never through a redirect, and never printed.
+- `journey`, `alerts` and `wait <alert> <env> normal|firing` cover the alert. `wait` runs as a workflow step, not in a session, since the Bash tool's timeout is shorter than a wait.
+- `errors`, `failed` and `slow` give error logs, failed requests and slow requests, and `trace <id>` shows one trace's spans with a few allowlisted attributes.
+- `prom`, `logs` and `traces` run any query.
+- A log line's body prints as a quoted string under a header that calls it untrusted data, since it can carry request-derived text. Each line is cut at 400 characters.
+- Against the local stack it needs no token: `GRAFANA_URL=http://127.0.0.1:<GRAFANA_PORT>`. The token must stay **Viewer** ([above](#the-token)).
 
-**Repeats and resolutions** arrive as new runs. `scripts/oncall.py prepare` looks up the newest open issue labelled `type:incident` with the exact title `Incident: <rule title>` before the agent starts. Adding a label takes triage access, so an outsider's issue can't take its place. A repeat updates that issue and builds on its trail; it never rolls back a second time. A resolution posts the incident summary (timeline, cause, action, verification, follow-ups) and closes the issue once the action is complete.
+**The incident's life.** A firing alert updates the newest open incident with its exact title, or opens one. A repeat (every 4 hours while it fires) updates the same issue: a fix PR says `Refs #<n>`, never `Closes`, so the merge to dev doesn't close it. A resolution looks in any state, for an issue still open or closed after the alert started, and never opens one. Its session writes the incident summary (timeline, cause, action, verification, follow-ups). The workflow posts it and closes the issue, unless the incident's fix PR is still open. Adding a label takes triage access, so an outsider's issue with the same title can't take an incident's place.
 
-**When it can't finish.** Every session has a turn cap, a dollar cap and a job timeout: on-call 60 turns and USD 10, the reviewer 40 and USD 5, the follow-up 50 and USD 8, each job under an hour. A session that hits a cap, fails, or writes a decision that doesn't pass the check gets no rollback, review or merge. The workflow then posts `⛔ Needs Yacine:` on the incident (opening it if needed) with the run's link, and adds the `needs-yacine` label.
+**When it can't finish.** Every session has a turn cap, a dollar cap and a step timeout below its job's, so a cap fails the step instead of cancelling the job. The jobs after it run `always()`: `act` after the on-call session, `post-review` and `merge` after the reviewer, `report` after the follow-up. If a session's files are missing or don't pass the check, nothing happens: no rollback, PR, review or merge. The workflow posts `⛔ Needs Yacine:` on the incident with the reason and the run's link, and adds the `needs-yacine` label. From a run's fifth for the same alert and environment within 24 hours, the workflow starts no session and posts `⛔ Needs Yacine:` once. The Anthropic spend limit stays the backstop.
 
-**Proof without Grafana Cloud.** `scripts/tests/test_oncall_workflow.py` runs the workflow's own steps with a fake `claude` and a fake `gh`. A prod dispatch reaches the agent with its incident found, the agent's rollback decision passes the check, and the rollback job starts `rollback.yml -f env=prod` exactly once and waits for it. A decision for another environment, a resolved alert or a bad tag is refused. `scripts/oncall_grafana.py` ran against the local stack's Grafana on 2026-10-25, with `FAULT_SAVE_ERROR_PERCENT=30` and `traffic.py --rate 30`. `wait session-save-errors local firing` saw pending at 18:49:10Z and firing at 18:50:10Z. `journey local` read a `save_error_rate` of 0.339 over 62 sessions. `failed local` listed the failed saves, and `trace <id>` on one showed `error.type` `app.faults.InjectedSaveFault` on `POST /api/sessions/sync` (500). `errors local` gave the `unhandled exception` lines with `exception_type=InjectedSaveFault` and their `trace_id`. Fault injection went off at 18:51:05Z, and `wait … normal` saw the alert resolve at 18:57:06Z, with the error rate back at 0. The end-to-end drill on dev needs #33's rules and #34's contact point applied to Grafana Cloud first ([#35](https://github.com/ybenzine/ineedtofocus/issues/35)).
+**Proof without Grafana Cloud.** `scripts/tests/test_oncall_workflow.py` runs the workflow's own steps with `scripts/tests/oncall_sim.py`. It takes the `needs`, the `if:` conditions and the `env:` and `outputs:` mappings from the YAML, with fake `gh`, `claude` and `uv` and real git against a throwaway origin. It covers:
+- a prod rollback, started once;
+- a second rollback for the same incident, refused by the label;
+- a second alert's rollback, skipped as recent;
+- a dev fix pushed and opened by the on-call App, reviewed through the reviewer App and merged by the on-call App, with no session holding a write token or an App key;
+- a prod fix's deploy ask;
+- the comment fallback without the reviewer key, ending in `⛔ Needs Yacine:`;
+- the patch fallback without the on-call key;
+- a fix that touches the guardrails, refused;
+- resolutions that close, keep or skip the incident;
+- the daily cap;
+- sessions that don't finish.
+
+`scripts/oncall_grafana.py` ran against the local stack's Grafana on 2026-10-25, with `FAULT_SAVE_ERROR_PERCENT=30` and `traffic.py --rate 30`:
+- `wait session-save-errors local firing` saw pending at 18:49:10Z and firing at 18:50:10Z.
+- `journey local` read a `save_error_rate` of 0.339 over 62 sessions.
+- `failed local` listed the failed saves. `trace <id>` on one showed `error.type` `app.faults.InjectedSaveFault` on `POST /api/sessions/sync` (500).
+- `errors local` gave the `unhandled exception` lines with `exception_type=InjectedSaveFault` and their `trace_id`.
+- Fault injection went off at 18:51:05Z, and `wait … normal` saw the alert resolve at 18:57:06Z, with the error rate back at 0.
+
+The end-to-end drill on dev needs #33's rules and #34's contact point applied to Grafana Cloud first ([#35](https://github.com/ybenzine/ineedtofocus/issues/35)).
 
 ## Where to look
 

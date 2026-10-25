@@ -37,8 +37,8 @@ python3 scripts/oncall_grafana.py journey <env>   # history_p95_seconds, history
 
 ## Act
 
-- **Roll back:** [rollback.md → Act](rollback.md#act). In the on-call workflow the agent writes the decision, and the workflow's rollback job runs `gh workflow run rollback.yml -f env=<env>`. Outside it, run that command once.
-- **Fix:** branch `oncall/<incident>-<slug>` from `main`. Add a failing regression test first, then the fix, and open a PR with `Closes #<incident>`. The reviewer reviews it, and the on-call agent merges on Approve and green CI, which deploys it to dev. Prod needs Yacine's approval.
+- **Roll back:** [rollback.md → Act](rollback.md#act). In the on-call workflow, the agent writes the decision and the workflow's rollback job runs `gh workflow run rollback.yml -f env=<env>`, at most once per incident. Outside it, run that command once.
+- **Fix:** branch `oncall/<incident>-<slug>` from `main`. Add a failing regression test first, then the fix, and open the PR with `Refs #<incident>`, not `Closes`: the incident closes when the alert resolves. In the on-call workflow, the agent commits, and the workflow pushes the branch and opens the PR as the on-call App. The reviewer reviews it, and the workflow merges it on Approve and green CI, which deploys it to dev. For a prod alert, Yacine starts **deploy-prod** with the merge commit as `tag` and approves it.
 - **Escalate:** `⛔ Needs Yacine:` on the incident issue with the evidence and the exact ask, plus the `needs-yacine` label.
 
 ## Verify
