@@ -4,6 +4,7 @@
 
 import type { Tag, TimerConfig } from '../timer/config.ts'
 import type { SessionRecord } from '../timer/engine.ts'
+import { tracedFetch } from '../telemetry/tracedFetch.ts'
 
 /** The server's limit for one `POST /api/sessions/sync` request. */
 export const SYNC_BATCH_LIMIT = 100
@@ -153,7 +154,7 @@ export class HttpSessionsApi implements SessionsApi {
   readonly #timeoutMs: number
 
   constructor(options: HttpSessionsApiOptions = {}) {
-    this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init))
+    this.#fetch = options.fetch ?? tracedFetch
     this.#baseUrl = options.baseUrl ?? ''
     this.#timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS
   }
