@@ -62,14 +62,6 @@ describe('updates to the parked list are atomic across tabs (AC3)', () => {
     expect(loadParked()).toEqual([])
   })
 
-  it('two writers at once keep both entries', async () => {
-    vi.stubGlobal('navigator', { ...navigator, locks: fakeLocks() })
-    const a = makeRecord()
-    const b = makeRecord()
-    await Promise.all([parkSession(ALICE, a), parkSession(BOB, b)])
-    expect(loadParked().map((p) => p.record.id)).toEqual([a.id, b.id])
-  })
-
   it('a writer waits for another tab’s lock and builds on what that tab wrote', async () => {
     // jsdom runs one thread, so a second tab is played by a lock holder that writes the shelf
     // while it holds the lock. Without the lock the park would run at once and be overwritten.

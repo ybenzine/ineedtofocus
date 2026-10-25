@@ -147,7 +147,8 @@ describe('a foreign session that cannot be saved yet (AC3)', () => {
   it('is retried in the background and the new user is told', async () => {
     await alicesUnsavedSession()
     const services = createAppServices(() => BOB)
-    const sessions = services.sessions!
+    const sessions = services.sessions
+    if (!sessions) throw new Error('no store')
     const save = sessions.save.bind(sessions)
     let failing = true
     vi.spyOn(sessions, 'save').mockImplementation((record, owner) =>
@@ -174,7 +175,8 @@ describe('a foreign session that cannot be saved yet (AC3)', () => {
   it('Start explains why it waits instead of the bare "has not been saved yet"', async () => {
     await alicesUnsavedSession()
     const services = createAppServices(() => BOB)
-    vi.spyOn(services.sessions!, 'save').mockRejectedValue(new Error('IndexedDB down'))
+    if (!services.sessions) throw new Error('no store')
+    vi.spyOn(services.sessions, 'save').mockRejectedValue(new Error('IndexedDB down'))
     renderApp(services)
     fireEvent.click(await screen.findByRole('button', { name: 'Start' }))
     expect(await screen.findByRole('alert')).toHaveTextContent(/still being saved on this device/)
