@@ -175,7 +175,28 @@ test.describe('the Appearance setting', () => {
       'content',
       '#11112a',
     )
+    // Record when data-theme is first set on a reload: it must happen while the <head> is still
+    // being parsed (#root not in the page yet), i.e. by theme-init.js, not by React afterwards.
+    await page.addInitScript(() => {
+      const w = window as unknown as {
+        __firstTheme?: { theme: string | null; rootExists: boolean }
+      }
+      new MutationObserver(() => {
+        const theme = document.documentElement.getAttribute('data-theme')
+        if (theme && !w.__firstTheme) {
+          w.__firstTheme = { theme, rootExists: !!document.getElementById('root') }
+        }
+      }).observe(document, {
+        attributes: true,
+        subtree: true,
+        attributeFilter: ['data-theme'],
+      })
+    })
     await page.reload()
+    const first = await page.evaluate(
+      () => (window as unknown as { __firstTheme?: unknown }).__firstTheme,
+    )
+    expect(first).toEqual({ theme: 'dark', rootExists: false })
     expect(await html.getAttribute('data-theme')).toBe('dark')
     expect(await bg()).toBe(DARK.bg)
 
@@ -198,6 +219,25 @@ test.describe('the Appearance setting', () => {
       LIGHT.bg,
     )
     await fresh.close()
+  })
+})
+
+test.describe('signing out', () => {
+  test.use({ colorScheme: 'dark' })
+
+  test('the sign-in screen follows the device, not the last user choice, even after a reload', async ({
+    page,
+  }) => {
+    await signUp(page, newEmail())
+    await openScreen(page, 'Settings')
+    await page.getByRole('radio', { name: 'Light' }).check()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+    await page.getByRole('button', { name: 'Sign out' }).click()
+    await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible()
+    await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/)
+    expect(await page.evaluate(() => getComputedStyle(document.body).backgroundColor)).toBe(DARK.bg)
+    await page.reload()
+    await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/)
   })
 })
 

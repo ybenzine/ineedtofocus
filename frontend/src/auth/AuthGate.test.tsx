@@ -268,6 +268,15 @@ describe('sign out', () => {
     expect(sessionStorage.getItem('anything')).toBe('x')
   })
 
+  it('goes back to the System theme, so sign-in does not keep the last user choice (#214)', async () => {
+    const api = makeApi({ me: vi.fn().mockResolvedValue(user) })
+    document.documentElement.setAttribute('data-theme', 'light')
+    await signedIn(api)
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+    expect(document.documentElement).not.toHaveAttribute('data-theme')
+  })
+
   it('runs registered hooks: try to sync, count, then clear', async () => {
     const hook: LocalDataHook = {
       trySync: vi.fn().mockResolvedValue(undefined),
