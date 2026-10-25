@@ -40,6 +40,8 @@ Write every issue comment, PR body and review body to a file under `/tmp` (outsi
 - `gh issue create --body-file <file>` and `gh issue edit <n> --body-file <file>`
 - REST fallback: `gh api -X POST <path> -F body=@<file>`
 
+Name each body file with a per-issue prefix, `<agent-abbrev><n>-` (`do34-pr.md`, `fe203-comment.md`), where `<agent-abbrev>` is `pm`, `be`, `fe`, `qa`, `do`, `rev` or `oc`; never a generic `pr.md`. `/tmp` is shared by every session, and a session's scratchpad by all of that session's subagents, so a generic name once posted another issue's body (#206 went up with #199's `Closes #199`). Before posting, check that the body names the right issue (`Closes #<n>` in a PR body).
+
 Never pass a body inline (`--body "…"`, `-b "…"`, `-f body=…`). The permission rules in `.claude/settings.json` match the whole command text, so a word such as "protection", "environments", "dispatches" or "private=" in an inline body triggers an ask or deny rule and stalls an unattended run.
 
 ## Parallel sessions: one worktree each
@@ -148,7 +150,7 @@ git worktree prune
   > ✅ **\<agent\> agent — done** in #\<pr\>. \<one line on anything notable or follow-ups (#n)\>.
 
 ### 6. Verify
-- Merge to `main` deploys to **dev** automatically (once #28 lands; until then, verification uses the local stack).
+- Merge to `main` deploys to **dev** automatically (#28). QA verifies on the local stack instead when dev is unusable for it (e.g. during a [fault-injection](observability.md#alert-trigger-fault-injection) drill on dev).
 - For `type:feature` issues the QA agent runs the feature's flow and comments `🧪 qa agent — verified on dev` (or `verified locally`), or files a `bug` issue.
 
 ### 7. Accept

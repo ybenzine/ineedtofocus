@@ -1,6 +1,6 @@
 # Deployment
 
-> **Status: in progress.** Server setup is scripted (#25), the images and production Compose are defined (#27), merges to `main` deploy to dev (#28), prod deploys are a manual, approved workflow (#29) that deploys only bytes CI attested for the approved commit (#128), and a deploy that fails its checks reverts by itself, with a `rollback` workflow for dev and prod (#30). Host resources other than memory and CPU are bounded too: old app images are pruned and every container has process, privilege and disk limits (#117). The plan is in [tech_stack.md §2–3](tech_stack.md).
+> **Status: in place.** Dev and prod run on the Droplet; the first prod deploy ran on 2026-10-25. Server setup is scripted (#25), the images and production Compose are defined (#27), merges to `main` deploy to dev (#28), prod deploys are a manual, approved workflow (#29) that deploys only bytes CI attested for the approved commit (#128), and a deploy that fails its checks reverts by itself, with a `rollback` workflow for dev and prod (#30). Host resources other than memory and CPU are bounded too: old app images are pruned and every container has process, privilege and disk limits (#117). The plan is in [tech_stack.md §2–3](tech_stack.md).
 
 ## Environments
 
@@ -433,7 +433,7 @@ What each key can do:
 
 Dev must be deployed first ([Deploy to dev → One-time setup](#one-time-setup-yacine)), since prod takes its releases from dev.
 
-**Wait for #126 before the key.** Step 1 and the environment settings in step 5 can be done any time. Steps 2–4, the secrets in step 5, and steps 6–8 wait until #126 is merged, so the interim deny rules for starting and approving prod deploys are in place (re-runs aren't denied, and don't need to be: see the table at the top of this section). #127, the agent account that can't approve, is in place too. Without the secrets, the deploy job skips and nothing reaches prod.
+**Done on 2026-10-25**, after #126 (the deny rules for starting and approving prod deploys) merged; the first deploy-prod run succeeded that day. #127 (the agent account that can't approve) followed a few hours later. The steps stay as the record, and for redoing the setup (e.g. a new Droplet). Without the secrets, the deploy job skips and nothing reaches prod.
 
 1. **Install `infra/` at the merge commit of #29**, which updates `focus-ci`: `ssh -t yacine@159.223.188.176 'sudo /opt/focus/infra/server/install.sh <merge sha>'`. The diff shows `server/focus-ci.sh` and `server/install.sh`. Read it, then type `yes`.
 2. **Create the key pair** on your machine, for CI only: `ssh-keygen -t ed25519 -N '' -C focus-ci-prod -f /tmp/focus-ci-prod`
@@ -447,7 +447,7 @@ Dev must be deployed first ([Deploy to dev → One-time setup](#one-time-setup-y
    - **Wait timer**: off.
    - **Deployment branches and tags** → **Selected branches and tags** → **Add deployment branch or tag rule** → Ref type **Branch** (not Tag) → name pattern `main` → **Add rule**.
    - **Save protection rules**.
-   - **Environment secrets** (only once #126 is merged, see above) → **Add environment secret**, twice: `DEPLOY_SSH_KEY`, the whole of `/tmp/focus-ci-prod` (`-----BEGIN OPENSSH PRIVATE KEY-----` to `-----END …-----`), and `DEPLOY_KNOWN_HOSTS`, the line from step 4. Not as repository secrets.
+   - **Environment secrets** → **Add environment secret**, twice: `DEPLOY_SSH_KEY`, the whole of `/tmp/focus-ci-prod` (`-----BEGIN OPENSSH PRIVATE KEY-----` to `-----END …-----`), and `DEPLOY_KNOWN_HOSTS`, the line from step 4. Not as repository secrets.
 6. **Delete the local key files**: `rm /tmp/focus-ci-prod /tmp/focus-ci-prod.pub`.
 7. **Check**, read-only:
    `gh api repos/ybenzine/ineedtofocus/environments/production --jq '{reviewers: [.protection_rules[] | select(.type == "required_reviewers") | .reviewers[].reviewer.login], branches: .deployment_branch_policy, admins_bypass: .can_admins_bypass}'`
@@ -494,7 +494,7 @@ On a refusal, gh's reason is in the step's log (`HTTP 404: Not Found` when the d
 
 - **Dev verifies too.** `deploy-dev` checks before it even writes its key, so when `deploy-dev` deploys, dev's `releases.log` gains only digests `publish` attested. Dev's records then never offer prod a digest prod's check would refuse, and a broken attestation shows up on the dev deploy rather than after Yacine approved a prod deploy.
 - **Rollback doesn't verify.** It must work at any hour, also while GitHub's API or Sigstore is unreachable, and it only restores digests the server recorded with an ok line in that environment's log. On prod, those passed this check when they were deployed, from the first deploy after #128 on.
-- **The server doesn't verify yet: #177.** It's feasible. `focus-ci` could run a pinned verifier under the lock, before the pull: `cosign verify-attestation` with the GitHub OIDC identity, `sigstore-python`, or `gh` with `--bundle-from-oci`, which reads the copy `push-to-registry` keeps in GHCR. That check would hold whatever the workflows say, against an agent-merged edit that drops the step, a `dev`-environment job that deploys without it, or a leaked prod key. It needs a new tool on the host, installed by `bootstrap.sh`, with its trust root kept current, and changes to `focus-ci.sh` and `install.sh`, which #117 is changing now. So it's its own issue.
+- **The server doesn't verify yet: #177.** It's feasible. `focus-ci` could run a pinned verifier under the lock, before the pull: `cosign verify-attestation` with the GitHub OIDC identity, `sigstore-python`, or `gh` with `--bundle-from-oci`, which reads the copy `push-to-registry` keeps in GHCR. That check would hold whatever the workflows say, against an agent-merged edit that drops the step, a `dev`-environment job that deploys without it, or a leaked prod key. It needs a new tool on the host, installed by `bootstrap.sh`, with its trust root kept current, and changes to `focus-ci.sh` and `install.sh`. So it's its own issue.
 - **Images published before #128 have no attestation**, so they can't be deployed to prod (or to dev) any more. Deploy one published after this change, that is, any merge to `main` since. Rolling back to an older release still works.
 
 **If it fails:**
