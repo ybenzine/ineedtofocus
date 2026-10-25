@@ -95,6 +95,15 @@ describe('App account bar', () => {
     window.history.replaceState(null, '', '/')
   })
 
+  it('does not offer Sign out on the session summary', async () => {
+    renderSignedIn()
+    fireEvent.click(await screen.findByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(await screen.findByRole('heading', { name: 'Session not saved' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+  })
+
   it('does not offer Sign out over a session restored at reload', async () => {
     renderSignedIn(await runningStore())
     await screen.findByRole('timer')
