@@ -40,6 +40,9 @@ def payload(**changes: Any) -> dict[str, Any]:
 
 def test_a_valid_payload_passes() -> None:
     assert d.problems(payload()) == []
+    index = payload()
+    index["links"]["runbook"] = d.RUNBOOK_INDEX  # while the alert's runbook isn't written
+    assert d.problems(index) == []
     resolved = payload(status="resolved", resolved_at="2026-10-25T08:43:46Z")
     assert d.problems(resolved) == []
 

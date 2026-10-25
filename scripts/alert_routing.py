@@ -73,6 +73,16 @@ TRACES = {
 }
 
 
+def runbook_link(alert: str) -> str:
+    """The alert's runbook if `_docs/runbooks/<alert>.md` is in the repo, otherwise the
+    runbooks index, so a dispatch never links a missing file. The rules' `runbook_url`
+    annotation (#33) names the runbook before #35 writes it, so the template doesn't use
+    it. When a runbook lands, `--check` goes stale: regenerate and re-apply."""
+    if (REPO / "_docs" / "runbooks" / f"{alert}.md").is_file():
+        return f"{d.RUNBOOKS}{alert}.md"
+    return d.RUNBOOK_INDEX
+
+
 def _nanoseconds(delta: timedelta) -> int:
     return int(delta.total_seconds()) * 10**9
 
@@ -113,8 +123,9 @@ def payload_template(traces_uid: str) -> str:
 {{{{- $range := coll.Dict "from" $from "to" $to -}}}}
 {{{{- $panes := coll.Dict "alert" (coll.Dict
   "datasource" "{traces_uid}" "queries" (coll.Slice $query) "range" $range) -}}}}
-{{{{- $runbook := $a.Annotations.runbook_url -}}}}
-{{{{- if not $runbook }}}}{{{{ $runbook = printf "{d.RUNBOOKS}%s.md" $alert }}}}{{{{ end -}}}}
+{{{{- /* runbook_link(): the alert's runbook once it's in the repo, the index until then */ -}}}}
+{{{{- $runbook := "{runbook_link(saves)}" -}}}}
+{{{{- if eq $alert "{history}" }}}}{{{{ $runbook = "{runbook_link(history)}" }}}}{{{{ end -}}}}
 {{{{- /* A contact point test has no rule behind it: link the alert list instead. */ -}}}}
 {{{{- $rule := $a.GeneratorURL -}}}}
 {{{{- if not (match "^https?://" $rule) -}}}}

@@ -74,10 +74,9 @@ def _matches(route: dict[str, Any], labels: dict[str, str]) -> bool:
     return True
 
 
-@pytest.mark.skipif(not ALERT_RULES.is_dir(), reason="the alert rules (#33) aren't on main yet")
 def test_the_route_matches_the_alert_rules() -> None:
-    """Every prod and dev rule (#33) is routed, carrying the labels the payload reads; the
-    local rules never are, in Grafana Cloud."""
+    """Every prod and dev rule (#33) is routed, carrying the labels and annotations the
+    payload reads; the local rules never are, in Grafana Cloud."""
     route = r.model()["route"]
     for env in g.ENVIRONMENTS:
         data = json.loads((ALERT_RULES / f"key-journey-{env}.json").read_text())
@@ -86,8 +85,29 @@ def test_the_route_matches_the_alert_rules() -> None:
         for rule in rules:
             assert _matches(route, rule["labels"]) is (env in d.DEPLOYED), rule["uid"]
             assert rule["labels"]["environment"] == env
-            assert {"summary", "description", "runbook_url"} <= set(rule["annotations"])
-            assert rule["annotations"]["runbook_url"] == f"{d.RUNBOOKS}{rule['labels']['alert']}.md"
+            assert {"summary", "description"} <= set(rule["annotations"])
+
+
+def test_runbook_links_never_point_at_a_missing_file() -> None:
+    """#33's rules name runbooks #35 writes; until a runbook exists the dispatch links
+    the runbooks index instead."""
+    linked = re.findall(re.escape(d.RUNBOOKS) + r"([\w.-]+)", template())
+    assert len(linked) == len(d.ALERTS)
+    for name in linked:
+        assert (REPO / "_docs" / "runbooks" / name).is_file(), name
+    for alert in d.ALERTS:
+        assert r.runbook_link(alert) in template()
+
+
+def test_runbook_link_is_the_alerts_own_once_it_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(r, "REPO", tmp_path)
+    assert r.runbook_link("history-latency") == d.RUNBOOK_INDEX
+    (tmp_path / "_docs" / "runbooks").mkdir(parents=True)
+    (tmp_path / "_docs" / "runbooks" / "history-latency.md").write_text("# History slow\n")
+    assert r.runbook_link("history-latency") == f"{d.RUNBOOKS}history-latency.md"
+    assert r.runbook_link("session-save-errors") == d.RUNBOOK_INDEX
 
 
 def test_local_route_is_the_local_environment_only() -> None:
@@ -99,11 +119,7 @@ def test_the_template_copies_only_named_labels_and_annotations() -> None:
     """Never all labels or annotations: only what the contract names."""
     text = template()
     assert set(re.findall(r"\.Labels\.(\w+)", text)) == {"environment", "alert", "alertname"}
-    assert set(re.findall(r"\.Annotations\.(\w+)", text)) == {
-        "summary",
-        "description",
-        "runbook_url",
-    }
+    assert set(re.findall(r"\.Annotations\.(\w+)", text)) == {"summary", "description"}
     assert not re.search(r"\.(Labels|Annotations)\b(?!\.)", text)
     assert not re.search(r"\.(Common|Group)(Labels|Annotations)|\.Values|\.ValueString", text)
 

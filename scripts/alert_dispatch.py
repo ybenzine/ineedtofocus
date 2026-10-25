@@ -60,6 +60,7 @@ DEPLOYED = ("prod", "dev")
 GRAFANA_CLOUD = "https://ineedtofocus.grafana.net/"
 LOCAL_GRAFANA = "http://localhost:3000/"  # grafana/otel-lgtm's root URL, whatever the port
 RUNBOOKS = f"https://github.com/{REPOSITORY}/blob/main/_docs/runbooks/"
+RUNBOOK_INDEX = f"{RUNBOOKS}README.md"  # linked while an alert's runbook isn't written yet
 FIELDS = (
     "alert",
     "environment",
@@ -135,7 +136,6 @@ def problems(
             "dashboard": f"{grafana}d/focus-key-journey-{env}?",
             "traces": f"{grafana}explore?",
             "alert": f"{grafana}alerting/",
-            "runbook": f"{RUNBOOKS}{alert}.md",
         }
         for name, prefix in expected.items():
             link = links[name]
@@ -143,6 +143,10 @@ def problems(
                 found.append(f"links.{name} {link[:120]!r} does not start with {prefix}")
             elif len(link) > MAX_LINK:
                 found.append(f"links.{name} is longer than {MAX_LINK} characters")
+        # The alert's own runbook, or the index while it isn't written yet.
+        runbooks = (f"{RUNBOOKS}{alert}.md", RUNBOOK_INDEX)
+        if links["runbook"] not in runbooks:
+            found.append(f"links.runbook {links['runbook'][:120]!r} is not {' or '.join(runbooks)}")
 
     for name, text in _texts(payload):
         if CONTROL.search(text):
