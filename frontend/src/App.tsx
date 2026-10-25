@@ -7,7 +7,7 @@ import { useAccount } from './auth/AccountContext.tsx'
 import AccountBar from './auth/AccountBar.tsx'
 import ArchiveScreen from './archive/ArchiveScreen.tsx'
 import HistoryScreen from './history/HistoryScreen.tsx'
-import { notifySessionExpired, signedInUserId } from './auth/localData.ts'
+import { notifySessionExpired, registerLocalDataHook, signedInUserId } from './auth/localData.ts'
 import ScreenNav from './nav/ScreenNav.tsx'
 import { pathForScreen, screenFromPath, type ScreenId } from './nav/screens.ts'
 import { httpSettingsApi } from './settings/api.ts'
@@ -18,6 +18,7 @@ import {
 } from './settings/adapters.ts'
 import { SettingsContext, useSettingsState } from './settings/SettingsContext.ts'
 import SettingsScreen from './settings/SettingsScreen.tsx'
+import { settingsDataHook } from './settings/hook.ts'
 import { SettingsStore } from './settings/store.ts'
 import { type PreferencesStore } from './setup/preferences.ts'
 import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
@@ -95,6 +96,8 @@ export default function App(props: AppProps) {
     settings.arm()
     return () => settings.dispose()
   }, [settings])
+  // Sign-out sends and counts the settings edits not yet accepted (#129).
+  useEffect(() => registerLocalDataHook(settingsDataHook(settings)), [settings])
   return (
     <SettingsContext.Provider value={settings}>
       <AppBody {...props} settings={settings} />
