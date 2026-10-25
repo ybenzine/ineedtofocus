@@ -129,3 +129,23 @@ test('checkboxes and slider tracks come from the tokens, not the browser', async
   await expect(box).toHaveCSS('border-top-color', 'rgb(97, 97, 179)') // --control-border
   await expect(page.getByRole('slider').first()).toHaveCSS('appearance', 'none')
 })
+
+test('in forced-colors mode the sliders are native and visible, the current nav item is marked', async ({
+  page,
+}) => {
+  await signUp(page, newEmail())
+  await openScreen(page, 'Settings')
+  await page.emulateMedia({ forcedColors: 'active' })
+  const slider = page.getByRole('slider').first()
+  await expect(slider).toHaveCSS('appearance', 'auto')
+  const native = await slider.screenshot()
+  // The same slider drawn from backgrounds only (the dark theme's styling) loses its track and thumb.
+  await slider.evaluate((el) => ((el as HTMLElement).style.appearance = 'none'))
+  const flattened = await slider.screenshot()
+  expect(native.equals(flattened)).toBe(false)
+  const current = page.getByRole('navigation', { name: 'Screens' }).locator('[aria-current]')
+  const border = await current.evaluate((el) => getComputedStyle(el).borderTopColor)
+  const canvas = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
+  expect(border).not.toBe('rgba(0, 0, 0, 0)')
+  expect(border).not.toBe(canvas)
+})

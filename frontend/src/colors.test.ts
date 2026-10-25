@@ -109,33 +109,55 @@ describe('control borders and focus are at least 3:1 (WCAG 1.4.11)', () => {
 
 describe('no colour literals outside :root (#213)', () => {
   // Every CSS named colour plus the system colours; `transparent`, `currentColor` and `inherit` are fine.
-  const NAMED = (
-    'aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen ' +
-    'accentcolor accentcolortext activetext buttonborder buttonface buttontext canvas canvastext field fieldtext graytext highlight highlighttext linktext mark marktext selecteditem selecteditemtext visitedtext activeborder activecaption appworkspace background captiontext inactiveborder inactivecaption inactivecaptiontext infobackground infotext menu menutext scrollbar threeddarkshadow threedface threedhighlight threedlightshadow threedshadow window windowframe windowtext'
-  ).split(' ')
-  const NAMED_SET = new Set(NAMED)
+  const NAMED =
+    'aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen'.split(
+      ' ',
+    )
+  const SYSTEM =
+    'accentcolor accentcolortext activetext buttonborder buttonface buttontext canvas canvastext field fieldtext graytext highlight highlighttext linktext mark marktext selecteditem selecteditemtext visitedtext activeborder activecaption appworkspace background captiontext inactiveborder inactivecaption inactivecaptiontext infobackground infotext menu menutext scrollbar threeddarkshadow threedface threedhighlight threedlightshadow threedshadow window windowframe windowtext'.split(
+      ' ',
+    )
+  const NAMED_SET = new Set([...NAMED, ...SYSTEM])
+  const NAMED_ONLY = new Set(NAMED)
   const FUNCTIONS =
     /#[0-9a-f]{3,8}\b|\b(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch|color|color-mix)\(/i
   // Properties whose values are words, not colours.
-  const NOT_COLOURS = /^(font|font-family|content|src|grid-template-areas|animation-name)$/i
+  const NOT_COLOURS =
+    /^(font|font-family|content|src|grid-template-areas|animation-name|transition|transition-property|will-change)$/i
 
   /** Named colours in a declaration value (words that are not part of a url or a string). */
-  function namedIn(value: string): string[] {
+  function namedIn(value: string, set: Set<string> = NAMED_SET): string[] {
     const bare = value.replace(/url\([^)]*\)/gi, '').replace(/(['"]).*?\1/g, '')
-    return (bare.match(/[a-z]+/gi) ?? []).filter((w) => NAMED_SET.has(w.toLowerCase()))
+    return (bare.match(/[a-z]+/gi) ?? []).filter((w) => set.has(w.toLowerCase()))
   }
 
-  /** The offending colours in a stylesheet, ignoring :root (the tokens) and forced-colors rules. */
+  const FORCED = /@media\s*\(forced-colors:\s*active\)\s*\{((?:[^{}]*\{[^}]*\})*)\s*\}/g
+
+  function declarations(source: string): [string, string][] {
+    return [...source.matchAll(/([a-z-]+)\s*:\s*([^;{}]+);/gi)]
+      .map((m): [string, string] => [m[1] ?? '', m[2] ?? ''])
+      .filter(([prop]) => !prop.startsWith('--') && !NOT_COLOURS.test(prop))
+  }
+
+  /**
+   * The offending colours in a stylesheet. :root (the tokens) is exempt. Inside a forced-colors
+   * block only CSS system colours are allowed: hex, functions and named colours still fail there.
+   */
   function offenders(source: string): string[] {
-    const rest = source
+    const clean = source
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/:root\s*\{[^}]*\}/, '')
-      .replace(/@media\s*\(forced-colors:\s*active\)\s*\{(?:[^{}]*\{[^}]*\})*\s*\}/g, '')
       .replace(/@font-face\s*\{[^}]*\}/g, '')
-    const bad = FUNCTIONS.test(rest) ? ['function or hex literal'] : []
-    for (const m of rest.matchAll(/([a-z-]+)\s*:\s*([^;{}]+);/gi)) {
-      if (m[1]?.startsWith('--') || NOT_COLOURS.test(m[1] ?? '')) continue
-      bad.push(...namedIn(m[2] ?? '').map((w) => `${m[1]}: ${w}`))
+    const forced = [...clean.matchAll(FORCED)].map((m) => m[1] ?? '').join('\n')
+    const rest = clean.replace(FORCED, '')
+    const bad: string[] = []
+    if (FUNCTIONS.test(rest)) bad.push('function or hex literal')
+    if (FUNCTIONS.test(forced)) bad.push('forced-colors: function or hex literal')
+    for (const [prop, value] of declarations(rest)) {
+      bad.push(...namedIn(value).map((w) => `${prop}: ${w}`))
+    }
+    for (const [prop, value] of declarations(forced)) {
+      bad.push(...namedIn(value, NAMED_ONLY).map((w) => `forced-colors ${prop}: ${w}`))
     }
     return bad
   }
@@ -155,6 +177,11 @@ describe('no colour literals outside :root (#213)', () => {
     )
     expect(offenders('a { color: var(--text); font-family: Inter, system-ui; }')).toEqual([])
     expect(offenders('@media (forced-colors: active) { a { color: Highlight; } }')).toEqual([])
+    expect(offenders('@media (forced-colors: active) { a { color: #fff; } }')).toHaveLength(1)
+    expect(offenders('@media (forced-colors: active) { a { color: red; } }')).toEqual([
+      'forced-colors color: red',
+    ])
+    expect(offenders('a { transition: background 0.2s, color 0.2s; }')).toEqual([])
   })
 
   it('forced-colors rules mark the selected chip with system colours', () => {

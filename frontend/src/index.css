@@ -377,6 +377,16 @@ main > p {
     border-color: Highlight;
     color: HighlightText;
   }
+
+  /* The current nav item: a system-colour border, since fills are replaced. */
+  .screen-nav [aria-current='page'] {
+    border-color: Highlight;
+  }
+
+  /* The custom slider is background-only: give it back the native one. */
+  input[type='range'] {
+    appearance: auto;
+  }
 }
 
 .field {
