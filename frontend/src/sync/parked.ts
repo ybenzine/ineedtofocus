@@ -50,7 +50,7 @@ export const PARKED_LOCK = 'ineedtofocus-parked'
  * overwrite each other's entries. Without Web Locks (older browsers, jsdom) it just runs: the
  * read and the write then happen in one synchronous step, which is as close as localStorage gets.
  */
-export function withParkedLock<T>(run: () => T): Promise<T> {
+export function withParkedLock<T>(run: () => T | Promise<T>): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
   if (!locks) return Promise.resolve().then(run)
   return locks.request(PARKED_LOCK, async () => run())
@@ -98,16 +98,28 @@ export async function drainParked(
   sessions: SessionStore,
   options: { storage?: Storage; timeoutMs?: number } = {},
 ): Promise<number> {
-  const { storage, timeoutMs = SAVE_TIMEOUT_MS } = options
+  const { storage = window.localStorage, timeoutMs = SAVE_TIMEOUT_MS } = options
   let moved = 0
-  for (const parked of loadParked(storage)) {
+  for (const { record } of loadParked(storage)) {
+    // Looked at again under the lock, and held until the write has landed and the entry is off
+    // the shelf: a sign-out (`clearParked`, in this tab or another) waits its turn, so it can
+    // neither lose an entry mid-move nor leave a later one to be saved after its data was
+    // cleared. A stalled write holds the lock for at most `timeoutMs`.
     try {
-      await withTimeout(sessions.save(parked.record, parked.ownerId), timeoutMs)
+      const done = await withParkedLock(async () => {
+        const entry = loadParked(storage).find((other) => other.record.id === record.id)
+        if (entry === undefined) return false
+        await withTimeout(sessions.save(entry.record, entry.ownerId), timeoutMs)
+        writeParked(
+          loadParked(storage).filter((other) => other.record.id !== record.id),
+          storage,
+        )
+        return true
+      })
+      if (done) moved += 1
     } catch {
-      continue
+      // A failed or stalled write, or a refused removal: it stays on the shelf for next time.
     }
-    await removeParked((other) => other.record.id !== parked.record.id, storage)
-    moved += 1
   }
   return moved
 }

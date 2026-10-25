@@ -59,7 +59,7 @@ export default function AccountBar({ controller }: { controller: TimerController
       await controller.retryPending()
       await trySyncAll()
       const count = await countUnsynced()
-      if (count.sessions > 0 || count.edits > 0) setUnsynced(count)
+      if (count.sessions > 0 || count.edits > 0 || (count.settings ?? 0) > 0) setUnsynced(count)
       else await finish()
     } finally {
       setBusy(false)

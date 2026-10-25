@@ -145,7 +145,7 @@ describe('finishing hands the session over (AC2.3, AC2.5, AC4.4)', () => {
     expect(update.recordPending).toBe(true)
     expect(store.load()?.pendingRecord?.status).toBe('ended_early')
     // A new session can't overwrite it while it is still unsaved.
-    await expect(controller.start(startOptions(countdown(5)))).rejects.toThrow('not been saved')
+    await expect(controller.start(startOptions(countdown(5)))).rejects.toThrow('still being saved')
     expect(await controller.retryPending()).toBe(false)
 
     fail = false

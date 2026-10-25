@@ -7,7 +7,7 @@ import { useAccount } from './auth/AccountContext.tsx'
 import AccountBar from './auth/AccountBar.tsx'
 import ArchiveScreen from './archive/ArchiveScreen.tsx'
 import HistoryScreen from './history/HistoryScreen.tsx'
-import { notifySessionExpired, signedInUserId } from './auth/localData.ts'
+import { notifySessionExpired, registerLocalDataHook, signedInUserId } from './auth/localData.ts'
 import ScreenNav from './nav/ScreenNav.tsx'
 import { pathForScreen, screenFromPath, type ScreenId } from './nav/screens.ts'
 import { httpSettingsApi } from './settings/api.ts'
@@ -18,6 +18,7 @@ import {
 } from './settings/adapters.ts'
 import { SettingsContext, useSettingsState } from './settings/SettingsContext.ts'
 import SettingsScreen from './settings/SettingsScreen.tsx'
+import { settingsDataHook } from './settings/hook.ts'
 import { SettingsStore } from './settings/store.ts'
 import { type PreferencesStore } from './setup/preferences.ts'
 import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
@@ -55,6 +56,8 @@ export interface AppProps {
 
 export const PENDING_RETRY_MS = 10_000
 export const PARKED_DRAIN_MS = 60_000
+export const FOREIGN_PENDING_MESSAGE =
+  'A session from the account that used this device before could not be saved yet. We keep trying; you can start a new session once it is saved.'
 
 type View =
   | { name: 'loading' }
@@ -93,6 +96,8 @@ export default function App(props: AppProps) {
     settings.arm()
     return () => settings.dispose()
   }, [settings])
+  // Sign-out sends and counts the settings edits not yet accepted (#129).
+  useEffect(() => registerLocalDataHook(settingsDataHook(settings)), [settings])
   return (
     <SettingsContext.Provider value={settings}>
       <AppBody {...props} settings={settings} />
@@ -136,6 +141,9 @@ function AppBody({
   useTheme(values.theme, view.name === 'timer' || view.name === 'summary')
   // The audio source is remembered with the active session (sourceStore), so a reload restores it.
   const [notice, setNotice] = useState<string | null>(null)
+  // A different user's finished session that still can't be saved on this device: kept trying in
+  // the background, and the setup screen says so instead of leaving Start to fail without context.
+  const [foreignPending, setForeignPending] = useState(false)
   const [audio, setAudio] = useState<AudioSource>('none')
 
   // The sign-in expired mid-session: the timer screen and its summary stay; sign-in follows
@@ -159,8 +167,11 @@ function AppBody({
   useEffect(() => {
     let cancelled = false
     const foreign = services.isForeignSession?.() ?? false
+    // A different user's running session never reaches the timer screen, whatever is stored.
+    services.discardForeignRunning?.()
     void timer.restore().then(async (update) => {
-      if (update.snapshot) {
+      if (foreign && update.recordPending && !cancelled) setForeignPending(true)
+      if (update.snapshot && !foreign) {
         void settings.refresh() // no wait: sends pending edits, fetches the server copy
         if (!cancelled) {
           setAudio(sourceStore.load())
@@ -237,7 +248,7 @@ function AppBody({
 
   // A finished session that couldn't be saved on the device yet (a stalled IndexedDB) stays in
   // the timer's own store; keep trying, and drop the "not saved yet" note once it is saved.
-  const recordPending = view.name === 'summary' && view.update.recordPending
+  const recordPending = (view.name === 'summary' && view.update.recordPending) || foreignPending
   useEffect(() => {
     if (!recordPending) return
     let busy = false
@@ -248,6 +259,7 @@ function AppBody({
         .retryPending()
         .then((saved) => {
           if (!saved) return
+          setForeignPending(false)
           setView((current) =>
             current.name === 'summary'
               ? { name: 'summary', update: { ...current.update, recordPending: false } }
@@ -367,6 +379,7 @@ function AppBody({
       <AccountBar controller={timer} />
       <ScreenNav current="setup" onNavigate={goTo} />
       {notice && <p role="status">{notice}</p>}
+      {foreignPending && <p role="status">{FOREIGN_PENDING_MESSAGE}</p>}
       <SessionSetup
         preferences={prefs}
         defaultReminderMinutes={values.default_reminder_minutes}

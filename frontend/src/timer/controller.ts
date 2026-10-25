@@ -151,7 +151,9 @@ export class TimerController {
     const pending = this.#held ?? (stored === null ? null : this.#pendingFor(stored))
     if (pending !== null) {
       if (!(await this.#handOff(pending))) {
-        throw new TimerError('The previous session has not been saved yet')
+        throw new TimerError(
+          'Your last session is still being saved on this device. Try again in a moment.',
+        )
       }
     } else if (this.#session !== null || stored !== null) {
       throw new ActiveSessionExistsError()

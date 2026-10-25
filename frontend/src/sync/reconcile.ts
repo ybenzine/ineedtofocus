@@ -36,9 +36,12 @@ export async function clearArchivedOnDevice(
 
 /**
  * `missing` are device sessions the server's active History doesn't list. Each is either
- * archived (then it is in the Archive list: mark it archived) or deleted (not there: remove the
- * device copy, and with it an edit that could never be sent). Changes nothing if the Archive
- * list can't be loaded, so a session is never removed on a guess.
+ * archived (then it is in the Archive list: mark it archived) or in neither answer. A session in
+ * neither is marked `goneOnServer` and hidden, but kept (#227): it may have been restored on
+ * another device between the two requests, or the server may have restored an older backup. It
+ * is deleted (with an edit that could never be sent) only when a later pair, whose History
+ * request started after the mark was set (`loadStartedAt`), still misses it. Changes nothing if
+ * the Archive list can't be loaded, so a session is never hidden on a guess.
  */
 export async function reconcileMissing(
   store: SessionStore,
@@ -47,6 +50,8 @@ export async function reconcileMissing(
   missing: readonly string[],
   /** Ids to leave alone, asked per id just before each write. */
   isSkipped: (id: string) => boolean = () => false,
+  /** When this load's History request started (ms since the epoch). */
+  loadStartedAt: number = Date.now(),
 ): Promise<void> {
   if (missing.length === 0) return
   const result = await archiveApi.list()
@@ -58,8 +63,9 @@ export async function reconcileMissing(
     missing.flatMap((id) => archived.get(id) ?? []),
     isSkipped,
   )
-  await store.forget(
+  await store.markGone(
     owner,
     missing.filter((id) => !archived.has(id) && !isSkipped(id)),
+    loadStartedAt,
   )
 }

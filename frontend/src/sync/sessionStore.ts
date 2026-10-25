@@ -38,6 +38,12 @@ export interface StoredSession {
   archivedAt: string | null
   /** When it was saved on this device (ms since the epoch); the upload order. */
   savedAt: number
+  /**
+   * Set (ms since the epoch) when an online load found a synced session in neither the History
+   * answer nor the Archive list (#227): it is hidden at once, and deleted only when a later load
+   * pair that started after this moment still misses it. Absent in older records.
+   */
+  goneOnServer?: number | null
 }
 
 /** What history shows for a session (AC10.9). */
@@ -52,6 +58,8 @@ export interface DeviceSession {
   editState: EditState | null
   indicator: SyncIndicator
   archivedAt: string | null
+  /** The server seems not to have it (#227): hidden from History, kept until a load confirms. */
+  goneOnServer: boolean
 }
 
 export function indicatorOf(entry: StoredSession): SyncIndicator {
@@ -68,6 +76,7 @@ export function toDeviceSession(entry: StoredSession): DeviceSession {
     editState: entry.editState,
     indicator: indicatorOf(entry),
     archivedAt: entry.archivedAt,
+    goneOnServer: (entry.goneOnServer ?? null) !== null,
   }
 }
 
@@ -126,6 +135,17 @@ export interface SessionStore {
    * gone, the edit's 404 makes it `rejected` and the next call removes it).
    */
   forget(ownerId: string, ids: readonly string[]): Promise<void>
+  /**
+   * `ids` are the owner's synced sessions that a load pair (History answer and Archive list) which
+   * started at `loadStartedAt` (ms) found in neither (#227). One not marked yet is marked
+   * `goneOnServer` (hidden, kept). One marked before `loadStartedAt` is deleted: this pair
+   * started after the mark, so it confirms. One marked later is left as it is. Never touches
+   * a session the server hasn't accepted (including device-only archived ones), another
+   * account's, or one with a pending edit.
+   */
+  markGone(ownerId: string, ids: readonly string[], loadStartedAt: number): Promise<void>
+  /** The server lists these sessions again: clear their `goneOnServer` mark. */
+  clearGone(ownerId: string, ids: readonly string[]): Promise<void>
   /** Deletes every session (and edit) of this owner from the device; others' stay. */
   clearOwner(ownerId: string | null): Promise<void>
 
@@ -233,8 +253,12 @@ export class IndexedDbSessionStore implements SessionStore {
     // Only the server's archive state is followed here: a device-only archive (a rejected
     // session) is never changed by it.
     await this.#update(id, (entry) =>
-      entry.ownerId === ownerId && entry.syncState === 'synced' && entry.archivedAt !== archivedAt
-        ? { archivedAt }
+      entry.ownerId === ownerId && entry.syncState === 'synced'
+        ? {
+            ...(entry.archivedAt !== archivedAt && { archivedAt }),
+            // The server lists it (live or archived): it isn't gone.
+            ...((entry.goneOnServer ?? null) !== null && { goneOnServer: null }),
+          }
         : {},
     )
   }
@@ -290,6 +314,40 @@ export class IndexedDbSessionStore implements SessionStore {
         )
         .map((entry) => entry.id)
       await sessions.bulkDelete(found)
+    })
+  }
+
+  async markGone(ownerId: string, ids: readonly string[], loadStartedAt: number): Promise<void> {
+    const wanted = new Set(ids)
+    const sessions = this.#db.sessions
+    await this.#db.transaction('rw', sessions, async () => {
+      const now = this.#now()
+      const confirmed: string[] = []
+      for (const entry of await this.#owned(ownerId)) {
+        if (
+          !wanted.has(entry.id) ||
+          entry.syncState !== 'synced' ||
+          entry.editState === 'pending'
+        ) {
+          continue
+        }
+        const mark = entry.goneOnServer ?? null
+        if (mark === null) await sessions.put({ ...entry, goneOnServer: now })
+        else if (mark < loadStartedAt) confirmed.push(entry.id)
+      }
+      await sessions.bulkDelete(confirmed)
+    })
+  }
+
+  async clearGone(ownerId: string, ids: readonly string[]): Promise<void> {
+    const wanted = new Set(ids)
+    const sessions = this.#db.sessions
+    await this.#db.transaction('rw', sessions, async () => {
+      for (const entry of await this.#owned(ownerId)) {
+        if (wanted.has(entry.id) && (entry.goneOnServer ?? null) !== null) {
+          await sessions.put({ ...entry, goneOnServer: null })
+        }
+      }
     })
   }
 
