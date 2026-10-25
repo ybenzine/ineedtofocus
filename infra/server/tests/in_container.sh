@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs inside a throwaway ubuntu:24.04 container (started by run.sh): sets up what the
 # Droplet had before bootstrap.sh (Yacine's sudo user, /opt/focus/*/.env, a cloud-init
-# sshd drop-in enabling passwords), runs bootstrap.sh three times and checks the result.
+# sshd drop-in enabling passwords), runs bootstrap.sh several times and checks the result,
+# then checks that a failing write stops it (#80).
 set -euo pipefail
 
 BOOTSTRAP=/src/server/bootstrap.sh
@@ -89,10 +90,12 @@ done
 echo "--- Real SSH logins against the hardened sshd"
 ssh_opts=(-p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5)
 mkdir -p /tmp/keys
-for who in ci root yacine; do
+for who in ci ci2 root yacine; do
   ssh-keygen -q -t ed25519 -N '' -C "test-$who" -f "/tmp/keys/$who"
 done
+# The two option orders sshd accepts; bootstrap.sh must flag neither (#80).
 printf 'restrict,command="echo forced-command-ran" %s\n' "$(cat /tmp/keys/ci.pub)" >>/etc/ssh/authorized_keys/deploy
+printf 'command="echo forced-command-ran-2",restrict %s\n' "$(cat /tmp/keys/ci2.pub)" >>/etc/ssh/authorized_keys/deploy
 install -d -m 0700 -o deploy -g deploy /home/deploy/.ssh
 install -m 0600 -o deploy -g deploy /tmp/keys/root.pub /home/deploy/.ssh/authorized_keys
 install -d -m 0700 /root/.ssh
@@ -104,6 +107,9 @@ sleep 1
 rc=0
 out=$(ssh "${ssh_opts[@]}" -i /tmp/keys/ci deploy@127.0.0.1 'echo arbitrary-command-ran' 2>&1) || rc=$?
 check "CI key runs only its forced command" eq "$out" "forced-command-ran"
+rc=0
+out=$(ssh "${ssh_opts[@]}" -i /tmp/keys/ci2 deploy@127.0.0.1 'echo arbitrary-command-ran' 2>&1) || rc=$?
+check "CI key with command=…,restrict runs only its forced command" eq "$out" "forced-command-ran-2"
 rc=0
 ssh "${ssh_opts[@]}" -i /tmp/keys/root deploy@127.0.0.1 true >/dev/null 2>&1 || rc=$?
 check "keys in ~deploy/.ssh are ignored" [ "$rc" -ne 0 ]
@@ -137,11 +143,64 @@ check "second run creates nothing" not_contains "$log2" "==> created"
 check "second run doesn't touch sshd" not_contains "$log2" "reloaded sshd"
 check "second run prints no warning" not_contains "$log2" "WARNING"
 check "files, permissions and user unchanged" eq "$(snapshot)" "$before"
-check "CI key kept" contains "$(cat /etc/ssh/authorized_keys/deploy)" "test-ci"
+check "CI keys kept" eq "$(grep -c ' test-ci' /etc/ssh/authorized_keys/deploy)" 2
 
-echo "--- A deploy key without a forced command is flagged"
-cat /tmp/keys/root.pub >>/etc/ssh/authorized_keys/deploy
+echo "--- Deploy keys missing restrict or command=… are flagged, in either option order"
+keys=/etc/ssh/authorized_keys/deploy
+add_key() {
+  printf '%s\n' "$1" >>"$keys"
+  wc -l <"$keys"
+}
+pub=$(cut -d' ' -f1,2 /tmp/keys/root.pub)
+order1=$(grep -n '^restrict,command=' "$keys" | cut -d: -f1)
+order2=$(grep -n '^command=.*,restrict ' "$keys" | cut -d: -f1)
+command_only=$(add_key "command=\"/opt/focus/bin/focus-ci dev\" $pub command-only")
+no_options=$(add_key "$pub no-options")
+# Commas, spaces, "restrict" and \" inside the quoted command aren't options.
+quoted=$(add_key "command=\"echo \\\"a\\\", restrict b\",no-pty $pub quoted-restrict")
+restrict_only=$(add_key "  Restrict,no-pty $pub restrict-only")
 check "third run succeeds" run_bootstrap /tmp/run3.log
-check "third run warns about the unrestricted key" contains "$(cat /tmp/run3.log)" "without restrict,command="
+log3=$(cat /tmp/run3.log)
+check "restrict,command=… isn't flagged" not_contains "$log3" "deploy line $order1:"
+check "command=…,restrict isn't flagged" not_contains "$log3" "deploy line $order2:"
+check "command= without restrict is flagged, naming restrict" \
+  contains "$log3" "deploy line $command_only: deploy key without restrict;"
+check "a key with no options is flagged, naming both" \
+  contains "$log3" "deploy line $no_options: deploy key without restrict and without command=\"…\";"
+check "restrict inside a quoted command doesn't count" \
+  contains "$log3" "deploy line $quoted: deploy key without restrict;"
+check "restrict without command= is flagged, naming command=" \
+  contains "$log3" "deploy line $restrict_only: deploy key without command=\"…\";"
+check "exactly four keys flagged" eq "$(grep -c 'WARNING: .* deploy key without' /tmp/run3.log)" 4
+
+echo "--- A failing write stops bootstrap.sh"
+# Root ignores file modes, so the failing target is on a read-only mount: point
+# apt.conf.d at the read-only /src, where 20auto-upgrades can't be created.
+mv /etc/apt/apt.conf.d /etc/apt/apt.conf.d.saved
+ln -s /src/server/tests /etc/apt/apt.conf.d
+rc=0
+run_bootstrap /tmp/run4.log || rc=$?
+rm /etc/apt/apt.conf.d
+mv /etc/apt/apt.conf.d.saved /etc/apt/apt.conf.d
+log4=$(cat /tmp/run4.log)
+check "a read-only target makes it exit non-zero" [ "$rc" -ne 0 ]
+check "it says which file failed" \
+  contains "$log4" "ERROR: writing /etc/apt/apt.conf.d/20auto-upgrades: install failed"
+check "it stops there (nothing after unattended-upgrades runs)" not_contains "$log4" "==> done"
+check "nothing leaked into the source tree" [ ! -e /src/server/tests/20auto-upgrades ]
+
+# A directory where a managed file belongs: install would put a file inside it.
+mv /etc/docker/daemon.json /tmp/daemon.json.saved
+mkdir /etc/docker/daemon.json
+rc=0
+run_bootstrap /tmp/run5.log || rc=$?
+rmdir /etc/docker/daemon.json
+mv /tmp/daemon.json.saved /etc/docker/daemon.json
+check "a directory in place of a managed file makes it exit non-zero" [ "$rc" -ne 0 ]
+check "it says the target isn't a regular file" \
+  contains "$(cat /tmp/run5.log)" "ERROR: writing /etc/docker/daemon.json: it exists but isn't a regular file"
+
+check "it runs cleanly again once the target is fixed" run_bootstrap /tmp/run6.log
+check "and writes nothing" not_contains "$(cat /tmp/run6.log)" "==> wrote"
 
 finish
