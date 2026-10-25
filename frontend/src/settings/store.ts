@@ -9,6 +9,12 @@
 // The store belongs to one signed-in user: the cache records the owner's id and is ignored for
 // anyone else, and `dispose()` (sign-out, unmount) aborts requests in flight and stops every
 // later write, so one account's edits can never be saved or sent under the next.
+//
+// Several tabs share the one cache. Every change to it is a function of the state (an edit, an
+// accepted send, a fresh server copy) that is applied to what is stored right now, under a Web
+// Lock (unlocked where there are none), not to this tab's older copy. So `pending` merges per
+// field: two tabs' edits to different fields both survive, and for the same field the later
+// edit wins (#129).
 
 import {
   DEFAULT_SETTINGS,
@@ -21,6 +27,10 @@ import {
 } from './api.ts'
 
 export const SETTINGS_KEY = 'ineedtofocus.settings'
+/** Held while the cache is read, merged and written, so two tabs can't overwrite each other. */
+export const SETTINGS_LOCK = 'ineedtofocus-settings'
+/** How long sign-out waits for pending edits to be sent (same as the session sync's). */
+export const SETTINGS_TRY_SYNC_MS = 10_000
 
 export interface SettingsState {
   values: Settings
@@ -78,6 +88,8 @@ export class SettingsStore {
   #retryTimer: ReturnType<typeof setTimeout> | undefined
   readonly #listeners = new Set<() => void>()
   #flushing: Promise<void> | null = null
+  /** Cache writes started and not finished yet (they queue on the lock). */
+  #writing = 0
 
   constructor(options: SettingsStoreOptions = {}) {
     this.#api = options.api
@@ -100,6 +112,11 @@ export class SettingsStore {
   }
 
   #read(): SettingsState {
+    return this.#readStored() ?? { values: DEFAULT_SETTINGS, pending: {}, stalled: false }
+  }
+
+  /** The cache as stored now, or null if it is missing, unreadable or another user's. */
+  #readStored(): SettingsState | null {
     try {
       const raw = this.#storage?.getItem(SETTINGS_KEY)
       if (raw) {
@@ -116,25 +133,84 @@ export class SettingsStore {
     } catch {
       // Unreadable cache: start from defaults.
     }
-    return { values: DEFAULT_SETTINGS, pending: {}, stalled: false }
+    return null
   }
 
-  #set(next: Partial<SettingsState>): void {
-    if (!this.#live()) return
-    this.#state = { ...this.#state, ...next }
+  #write(state: SettingsState): void {
     try {
       this.#storage?.setItem(
         SETTINGS_KEY,
-        JSON.stringify({
-          owner: this.#owner,
-          values: this.#state.values,
-          pending: this.#state.pending,
-        }),
+        JSON.stringify({ owner: this.#owner, values: state.values, pending: state.pending }),
       )
     } catch {
       // A full or blocked storage must not stop the app; the edit still reaches the server.
     }
+  }
+
+  #notify(): void {
     for (const listener of this.#listeners) listener()
+  }
+
+  /** Not persisted: the flag lives only in this tab. */
+  #setStalled(stalled: boolean): void {
+    if (!this.#live() || this.#state.stalled === stalled) return
+    this.#state = { ...this.#state, stalled }
+    this.#notify()
+  }
+
+  /**
+   * Applies `change` to this tab's state now, and to the stored cache (whatever other tabs have
+   * written since) under the lock. What other tabs have pending is taken into this tab's state
+   * once no write of ours is outstanding.
+   */
+  #commit(change: (state: SettingsState) => Partial<SettingsState>): void {
+    if (!this.#live()) return
+    this.#state = { ...this.#state, ...change(this.#state) }
+    this.#notify()
+    this.#writing++
+    const merge = () => {
+      try {
+        if (!this.#live()) return
+        const base = this.#readStored() ?? this.#state
+        const merged: SettingsState = { ...base, ...change(base), stalled: this.#state.stalled }
+        this.#write(merged)
+        if (this.#writing === 1) this.#adopt(merged)
+      } finally {
+        this.#writing--
+      }
+    }
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
+    if (!locks) {
+      merge()
+      return
+    }
+    locks
+      .request(SETTINGS_LOCK, async () => merge())
+      .catch(() => {
+        // Locking failed: merge without it rather than lose the write.
+        this.#writing++
+        merge()
+      })
+  }
+
+  /** Takes the stored cache's values and pending edits as this tab's (they include other tabs'). */
+  #adopt(stored: SettingsState): void {
+    if (
+      sameValue(stored.pending, this.#state.pending) &&
+      sameValue(stored.values, this.#state.values)
+    )
+      return
+    // An older GET must not undo what other tabs changed either.
+    this.#revision++
+    this.#state = { ...this.#state, values: stored.values, pending: stored.pending }
+    this.#notify()
+  }
+
+  /** Picks up another tab's edits before sending or counting, unless a write of ours is queued. */
+  #adoptStored(): void {
+    if (this.#writing > 0 || !this.#live()) return
+    const stored = this.#readStored()
+    if (stored) this.#adopt(stored)
   }
 
   /**
@@ -172,6 +248,26 @@ export class SettingsStore {
     return Object.keys(this.#state.pending).length > 0
   }
 
+  /** How many settings have edits the server hasn't accepted (other tabs' included). */
+  countUnsynced(): number {
+    this.#adoptStored()
+    return Object.keys(this.#state.pending).length
+  }
+
+  /** A last attempt to send pending edits for sign-out: waits at most `timeoutMs`, skipped offline. */
+  async trySync(timeoutMs: number = SETTINGS_TRY_SYNC_MS): Promise<void> {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs)
+    })
+    try {
+      await Promise.race([this.flush(), timeout])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   /** Applies an edit on the device now and sends it to the server when it can. */
   update(patch: SettingsPatch): void {
     if (!this.#live()) return
@@ -181,10 +277,10 @@ export class SettingsStore {
     }
     if (Object.keys(changed).length === 0) return
     this.#revision++
-    this.#set({
-      values: { ...this.#state.values, ...changed },
-      pending: { ...this.#state.pending, ...changed },
-    })
+    this.#commit((state) => ({
+      values: { ...state.values, ...changed },
+      pending: { ...state.pending, ...changed },
+    }))
     void this.flush()
   }
 
@@ -210,6 +306,7 @@ export class SettingsStore {
   async #flushLoop(): Promise<void> {
     const api = this.#api
     if (!api) return
+    this.#adoptStored()
     while (this.#live() && this.hasPending()) {
       const sent = this.#state.pending
       let server: Settings | null = null
@@ -223,7 +320,7 @@ export class SettingsStore {
           const named = error.fields.filter((field) => field in sent)
           if (named.length > 0) drop = named
         } else {
-          this.#set({ stalled: true })
+          this.#setStalled(true)
           if (error instanceof SettingsError && error.kind === 'unauthorized') {
             this.#onUnauthorized?.()
           } else {
@@ -237,16 +334,19 @@ export class SettingsStore {
         this.#revision++
         this.#attempt = 0
       }
-      const pending = Object.fromEntries(
-        Object.entries(this.#state.pending).filter(
-          ([key, value]) =>
-            !(drop.includes(key) && sameValue(value, (sent as Record<string, unknown>)[key])),
-        ),
-      ) as SettingsPatch
-      this.#set({
-        values: server ? { ...server, ...pending } : this.#state.values,
-        pending,
-        stalled: false,
+      // A field another tab (or the user) changed meanwhile stays pending: only what was sent goes.
+      this.#commit((state) => {
+        const pending = Object.fromEntries(
+          Object.entries(state.pending).filter(
+            ([key, value]) =>
+              !(drop.includes(key) && sameValue(value, (sent as Record<string, unknown>)[key])),
+          ),
+        ) as SettingsPatch
+        return {
+          values: server ? { ...server, ...pending } : state.values,
+          pending,
+          stalled: false,
+        }
       })
     }
   }
@@ -264,7 +364,7 @@ export class SettingsStore {
       const server = await api.get(this.#abort.signal)
       // An edit or an accepted send happened meanwhile: this answer is older than the device.
       if (revision !== this.#revision) return
-      this.#set({ values: { ...server, ...this.#state.pending } })
+      this.#commit((state) => ({ values: { ...server, ...state.pending } }))
     } catch (error) {
       if (error instanceof SettingsError && error.kind === 'unauthorized' && this.#live()) {
         this.#onUnauthorized?.()
@@ -279,7 +379,18 @@ export class SettingsStore {
       this.#attempt = 0
       void this.refresh()
     }
+    // Another tab saved to the cache: show and send its edits too.
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === SETTINGS_KEY && this.#writing === 0) {
+        this.#adoptStored()
+        void this.flush()
+      }
+    }
     window.addEventListener('online', onOnline)
-    return () => window.removeEventListener('online', onOnline)
+    window.addEventListener('storage', onStorage)
+    return () => {
+      window.removeEventListener('online', onOnline)
+      window.removeEventListener('storage', onStorage)
+    }
   }
 }

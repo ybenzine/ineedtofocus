@@ -40,6 +40,8 @@ export interface UnsyncedCount {
   sessions: number
   /** Changes to synced sessions (tag/goal) the server hasn't applied. */
   edits: number
+  /** Settings with an edit the server hasn't accepted (#129). Absent means none. */
+  settings?: number
 }
 
 /**
@@ -92,7 +94,7 @@ function remove(key: string): void {
 export const ACTIVE_TIMER_MESSAGE = 'End your session before signing out.'
 
 /** The confirmation's wording (ruling on #9, AC on #19). */
-export function unsyncedWarning({ sessions, edits }: UnsyncedCount): string {
+export function unsyncedWarning({ sessions, edits, settings }: UnsyncedCount): string {
   const parts: string[] = []
   if (sessions > 0) {
     parts.push(
@@ -107,6 +109,9 @@ export function unsyncedWarning({ sessions, edits }: UnsyncedCount): string {
         ? "Some changes to sessions haven't synced either."
         : "Some changes to sessions haven't synced and will be deleted from this device.",
     )
+  }
+  if ((settings ?? 0) > 0) {
+    parts.push("Some settings changes haven't synced and will be deleted from this device.")
   }
   return parts.join(' ')
 }
@@ -123,9 +128,10 @@ export async function countUnsynced(): Promise<UnsyncedCount> {
   const total: UnsyncedCount = { sessions: stored?.pendingRecord ? 1 : 0, edits: 0 }
   for (const hook of hooks) {
     try {
-      const { sessions, edits } = await hook.countUnsynced()
+      const { sessions, edits, settings } = await hook.countUnsynced()
       total.sessions += sessions
       total.edits += edits
+      if (settings) total.settings = (total.settings ?? 0) + settings
     } catch {
       // Unknown: count it as one unsynced session so the user is still asked.
       total.sessions += 1
@@ -135,13 +141,16 @@ export async function countUnsynced(): Promise<UnsyncedCount> {
 }
 
 export async function trySyncAll(): Promise<void> {
-  for (const hook of hooks) {
-    try {
-      await hook.trySync()
-    } catch {
-      // Still unsynced: it is counted and the user is asked.
-    }
-  }
+  // Side by side, so the whole wait stays within one hook's 10 s.
+  await Promise.all(
+    [...hooks].map(async (hook) => {
+      try {
+        await hook.trySync()
+      } catch {
+        // Still unsynced: it is counted and the user is asked.
+      }
+    }),
+  )
 }
 
 /** The last signed-in user, kept so the app opens offline (F13). */
