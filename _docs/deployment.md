@@ -10,6 +10,50 @@
 | Dev | https://dev.ineedtofoc.us | Automatically on merge to `main` | `focus-dev` |
 | Prod | https://ineedtofoc.us | Manual workflow run with Yacine's approval | `focus-prod` |
 
+## Credential separation
+
+No credential is stored at repo level. Each one lives where only the job that needs it can read it, and each environment's branch rule admits only `main`. `scripts/tests/test_ci_workflow.py` fails if a job reads a secret other than `GITHUB_TOKEN` outside a GitHub environment. `scripts/tests/test_oncall_workflow.py` pins which `oncall` step reads which secret.
+
+| Where | Credential | Read by | Reviewer | Can't |
+|---|---|---|---|---|
+| GitHub environment `dev` | Dev deploy key (`focus-ci dev`), host key line | `deploy-dev` in `ci.yml`, `rollback.yml` for dev (#28, #30) | none | Touch prod ([Deploy to dev](#credentials)) |
+| GitHub environment `production` | Prod deploy key (`focus-ci prod`), host key line | `deploy-prod.yml`'s `deploy` job (#29) | **Yacine**, every run | Deploy without his approval |
+| GitHub environment `rollback` | Prod rollback key (`focus-ci rollback-prod`), host key line | `rollback.yml` for prod (#30) | none | Deploy anything new ([Rollback](#credentials-2)) |
+| GitHub environment `oncall` | `ANTHROPIC_API_KEY` (Claude API, with a monthly spend limit) and `GRAFANA_READONLY_TOKEN` (Grafana Cloud **Viewer**) | `.github/workflows/oncall.yml` (#35): the Claude sessions, and the `wait` step for the Grafana token | none, so it works at any hour | Write to GitHub: the sessions' workflow token is read-only |
+| | `REVIEWER_APP_KEY`: a separate private key of the reviewer App (#70) | `oncall.yml`'s `post-review` step only, never a session | | Push, or approve its own push ([infra/github/README.md](../infra/github/README.md#reviewer-github-app-70)) |
+| | `ONCALL_APP_KEY`: the private key of the on-call App, `ineedtofocus-oncall` (#35) | `oncall.yml`'s push, PR and merge steps only, never a session | | Start, re-run or approve a workflow, or change `.github/workflows/` ([infra/github/README.md](../infra/github/README.md#on-call-github-app-35)) |
+| Server, `/opt/focus/<env>/.env` (mode 600) | Grafana Cloud OTLP write token (`GRAFANA_CLOUD_OTLP_TOKEN`) | That environment's collector (#32) | n/a | Read telemetry ([observability.md → Credentials](observability.md#credentials)) |
+| Grafana Cloud contact point `focus-oncall-github` | Fine-grained GitHub token, this repo, Contents write | Grafana's webhook, to send the alert dispatch (#34) | n/a | Approve or start a deploy ([observability.md → The token](observability.md#the-token)) |
+
+The workflow token (`GITHUB_TOKEN`) is set per job with `permissions:`. Every workflow starts from `permissions: {}` or `contents: read`, and only `ci.yml`'s `publish` job can write packages or sign attestations.
+
+### On-call workflow (#35)
+
+`.github/workflows/oncall.yml` runs the on-call agent when an alert fires or resolves ([observability.md → On-call agent](observability.md#on-call-agent-35)). **No Claude session holds a token that can write.** The three sessions (on-call, reviewer, follow-up) get a read-only workflow token and the Claude and Grafana keys, and leave files behind: a decision, a comment, a git bundle, a review. Deterministic jobs on a fresh runner and a fresh checkout check those files (`scripts/oncall.py`) and do every write to GitHub.
+
+| Job | Session? | Workflow token | Secrets (step) | Does |
+|---|---|---|---|---|
+| `alert` | no | `contents: read` | none | Check the payload |
+| `incident` | no | `issues: write`, reads | none | Find the incident issue or open it, and lock it if it isn't; the daily run cap |
+| `respond` | **on-call** | read-only | Claude key, Grafana token | Investigate; write `decision.json`, `comment.md` and, for a fix, commits on `oncall/<n>-<slug>` |
+| `act` | no | `contents: read`, `issues: write` | `ONCALL_APP_KEY` (push and PR step) | Check the decision; post the comment and labels; push the fix branch and open the PR as the on-call App, or post it as a patch; close a resolved incident |
+| `rollback` | no | `actions: write` only | none | Start `rollback.yml` once, for the alert's environment, and wait. No checkout, no repository code |
+| `review` | **reviewer** | read-only | Claude key | Wait for CI; write the review body and verdict |
+| `post-review` | no | `contents: read`, `pull-requests: write` (fallback comment) | `REVIEWER_APP_KEY` (post step) | Post the checked review through `scripts/reviewer-review.sh` |
+| `merge` | no | `issues: write`, reads | `ONCALL_APP_KEY` (merge step) | Squash-merge on `reviewDecision` `APPROVED` and green required checks, as the on-call App (dev deploy); post the prod ask |
+| `wait` | no | none | Grafana token | Wait for the alert to resolve |
+| `follow-up` | **on-call** | read-only | Claude key, Grafana token | Write the report from the steps' checked results |
+| `report` | no | `issues: write` | none | Post the report, or `⛔ Needs Yacine:` |
+
+- **It can't push to `main`.** No workflow token has `contents: write`. The on-call App's pushes go to `oncall/<n>-<slug>` only, and branch protection holds against it like against every identity: the five CI checks, and an approval from someone other than the last pusher (the reviewer App), administrators included.
+- **It can't put new code on prod.** No job holds a deploy key or runs in `production`. The rollback job starts `rollback.yml` only, whose key can only restore a known-good release. Nothing here can approve a deployment: the workflow token can't, and neither App has the Actions or Deployments permission.
+- **A failure always says so.** The `incident`, `act` and `merge` jobs end with an `if: failure()` step that posts `⛔ Needs Yacine:` on the incident, for example after a refused push, a failed token mint or a failed `gh` call. Failures in `review`, `post-review`, `rollback` or `wait` reach the `merge` or follow-up report, and a follow-up that doesn't finish reaches `report`.
+- **What reaches a write is checked.** A rollback is a decision the `act` job checks: the alert's own environment, firing, a 40-hex `tag` or none, and not when the incident already carries `oncall:rolled-back`. The `rollback` job checks it again against what the `incident` job read before any session ran. That re-check is the real boundary, because those outputs come from a job no session ran in. A fix branch is checked too: its name, its base, at most 20 files and 1000 lines, a test file, no closing keyword in its commit messages (`#n`, `owner/repo#n` or an issue URL), and no change under `.github/`, `.claude/` or `infra/github/`, to `scripts/oncall*`, to the modules `oncall.py` imports, or to `scripts/reviewer_token.py` and `reviewer-review.sh`. The check reads paths raw (`-z`, so a non-ASCII name isn't quoted past the patterns) and counts renames as a deletion plus an addition (`--no-renames`), so moving a protected file away is refused like deleting or editing it. The squash commit's subject and body are the workflow's own text. Every check runs on a fresh runner from a fresh checkout. Only the session's checked files cross to it: `decision.json`, `comment.md`, `pr.md` and `fix.bundle` as an artifact, the review's two files, the follow-up's report. No cache crosses: every `setup-uv` and `setup-node` in the workflow has caching off (`enable-cache: false`, `package-manager-cache: false`, tested). Otherwise a session could leave files in a cache that a job holding an App key restores and runs.
+- **One rollback per environment and per incident.** The rollback job has a per-environment concurrency group, and skips if that environment had a successful or running rollback in the last 30 minutes. It finds its run by the run's title among runs that weren't there before the dispatch. The incident's `oncall:rolled-back` label makes `decision` refuse a second rollback for it. Only triage access can add or remove a label.
+- **What a session can still leak.** A session holds the Claude API key and the Grafana token, and `.claude/settings.json` allows `python3`, so an injected session could send them out. The backstops are the Anthropic spend limit on that key and the token's Viewer role, which reads telemetry and changes nothing. A leaked key or token gets revoked and replaced in `oncall`. Neither App key is ever in a session's job.
+- **What it can do to dev without a real review.** Both App keys are in `oncall`, so a run could push, approve and merge a PR to `main`, which deploys it to dev, if the reviewer session approves a bad fix. That's the price of an unattended merge to dev (AC4, AC8). Prod still waits for Yacine.
+- **Cost.** Each session has a turn cap, a dollar cap and a step timeout: on-call 60 turns and USD 10, the reviewer 40 and USD 5, the follow-up 40 and USD 6. The `incident` job counts this workflow's runs for the same alert and environment in the last 24 hours: from the fifth, it starts no session and posts `⛔ Needs Yacine:` once. The Anthropic spend limit is the backstop.
+
 ## App image and migrations
 
 One image (root `Dockerfile`, #4) serves the API and the built frontend. Its entrypoint (`infra/app/entrypoint.sh`) runs `alembic upgrade head` and then starts the server. A failed migration exits non-zero, so the container never serves on a schema it doesn't expect.

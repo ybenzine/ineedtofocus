@@ -39,6 +39,7 @@ Agents don't act as Yacine. They use a machine account of their own, so the `pro
 | `ybenzine` | Yacine, the repo owner | Approving prod deploys (the only required reviewer of `production`), admin settings (branch protection, environments, secrets, collaborators), `owner:human` tasks | Admin |
 | `merciful-poseidon` | Machine account: a regular GitHub user, not an App | Everything the agents do: issues and comments, branches and pushes, PRs and merges, the board, re-running CI, the `rollback` workflow (#30) | Write on the repo (collaborator) and on the board |
 | `ineedtofocus-reviewer[bot]` | GitHub App ([below](#reviewer-github-app-70)) | The approving or request-changes review on every PR | Pull requests and Contents write |
+| `ineedtofocus-oncall[bot]` | GitHub App ([below](#on-call-github-app-35)) | The on-call workflow's fix PRs: pushing `oncall/<n>-<slug>`, opening the PR, squash-merging it once approved and green (#35) | Contents and Pull requests write; Checks and Commit statuses read. No Actions, Workflows or Issues |
 
 ### Setup (Yacine, once per machine)
 
@@ -158,4 +159,21 @@ To limit exposure, the key stays on Yacine's machine, a token is minted per revi
 
 **Rotating the key:** generate a new key in the App's settings, replace the file, then delete the old key there. Nothing else holds a copy.
 
-**Headless runs** such as the on-call workflow (#35) don't have the key. Until it's provided to them (for example as a secret of the `oncall` environment), their reviews fall back to comments and their merges wait for Yacine.
+**Headless runs:** the on-call workflow (#35) reads a separate private key of the App from the `oncall` environment's `REVIEWER_APP_KEY` secret, in its `post-review` job's posting step only, never in a Claude session: the reviewer session writes the review, and that later step posts it. It writes the key to a mode-600 file under the runner's temp directory for `REVIEWER_APP_KEY_PATH`, and deletes it in an `always()` step. Without that secret the review falls back to a comment, and the merge waits for Yacine ([deployment.md → On-call workflow](../../_docs/deployment.md#on-call-workflow-35)). To revoke only that copy, delete that key in the App's settings.
+
+## On-call GitHub App (#35)
+
+The on-call workflow pushes, opens and merges its fix PRs as a GitHub App of its own, `ineedtofocus-oncall`. Events made with a workflow's own `GITHUB_TOKEN` start no workflows (only `workflow_dispatch` and `repository_dispatch` do), so a fix pushed or merged with it would get no CI and no dev deploy. The App's events do. It's a third identity, next to the agent account and the reviewer App, so `require_last_push_approval` still holds: on-call's App pushes and the reviewer's App approves. The product manager's decision on [#35](https://github.com/ybenzine/ineedtofocus/issues/35#issuecomment-6401903338) chose it over a classic token of the agent account (`_docs/product_decisions.md`, decision log).
+
+| | |
+|---|---|
+| App | `ineedtofocus-oncall`, owned by `ybenzine`, installed on `ybenzine/ineedtofocus` only. No webhook. Repository permissions: Contents **read & write**, Pull requests **read & write**, Checks read, Commit statuses read, Metadata read. Everything else, Actions, Workflows, Administration, Environments, Secrets and Issues included, is **No access** |
+| App ID / installation ID | `5470564` / `175230402`. Public; they're `ONCALL_APP_ID` / `ONCALL_INSTALLATION_ID` in `.github/workflows/oncall.yml` |
+| Private key | The `oncall` environment's `ONCALL_APP_KEY` secret. No local copy. Only two workflow steps read it: `act`'s push-and-PR step and `merge`'s merge step. Neither runs a Claude session, and no session's job holds it |
+| Token | Minted in that step with `scripts/reviewer_token.py`, given the App's IDs and a mode-600 key file that's deleted right after: one hour, this repository, Contents and Pull requests write. Masked in the log, never written to disk |
+
+**What a leaked token or key could do:** push to any branch except `main`, open PRs, and merge a PR that already has an approving review and green CI. The same branch protection as for the reviewer App keeps it from getting code into `main` on its own: its own push needs someone else's approval, and the five CI checks must pass, administrators included. It **can't** start, re-run or approve any workflow (no Actions permission), so it can't reach `deploy-prod` or `rollback`. It can't change `.github/workflows/` (no Workflows permission), comment on issues, or read any secret. Combined with the reviewer App's key, which sits in the same environment, it could push, approve and merge to `main` and so deploy to dev. Prod still waits for Yacine.
+
+**Revoking:** delete the key in the App's settings (that also stops new tokens), or uninstall or delete the App. Neither touches the agent account or the reviewer App. Without the key, the workflow posts its fixes as patches with `⛔ Needs Yacine:`.
+
+**Set up (Yacine, done on 2026-10-25):** create the App with the permissions above (**Settings → Developer settings → GitHub Apps → New GitHub App**, webhook inactive, installable only on this account), install it on this repository only, generate a private key, and paste it into the `oncall` environment's `ONCALL_APP_KEY` secret. Then delete the downloaded `.pem`.

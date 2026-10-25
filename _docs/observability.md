@@ -1,6 +1,6 @@
 # Observability
 
-Instrumented in #31; Grafana Cloud wiring and the key-journey dashboards in #32; the user-impact alert rules, the fault-injection trigger and the traffic script in #33; routing alerts to the on-call workflow in #34. The on-call agent itself follows in #35.
+Instrumented in #31; Grafana Cloud wiring and the key-journey dashboards in #32; the user-impact alert rules, the fault-injection trigger and the traffic script in #33; routing alerts to the on-call workflow in #34; the on-call agent that workflow runs in #35 ([below](#on-call-agent-35)).
 
 ## Key user journey
 
@@ -119,6 +119,7 @@ Grafana Cloud alert rule (#33; labels service, environment, alert)
   -> POST https://api.github.com/repos/ybenzine/ineedtofocus/dispatches
   -> repository_dispatch event, type grafana-alert
   -> .github/workflows/oncall.yml (#34: checks and logs the payload; #35: the on-call agent)
+  -> incident issue, then a rollback, a fix PR or an escalation (below)
 ```
 
 ### Decision: Grafana calls GitHub directly, no relay
@@ -185,7 +186,7 @@ Event type **`grafana-alert`**; `client_payload` (`scripts/alert_dispatch.py` is
 
 The synthetic alerts that `verify` renders and `test` sends carry the rule's description with `0` in every slot (`0% of the 0 sessions submitted …`), so they pass the same check and say nothing failed. A contact point test is told apart by `links.alert`, which links the alert list rather than a rule. `scripts/tests/test_alert_dispatch.py` checks that every real dispatch passes (both alerts, prod and dev, firing and resolved) and that injection attempts fail `check-event` (`test_a_description_other_than_the_rules_fails_check_event`, `test_a_prompt_injection_fails_check_event`). Pinning limits what a sender can say, not whether the numbers are true: #35's prompt still presents every payload field as untrusted data and reads the real values from Grafana.
 
-**For #35:** keep `python3 scripts/alert_dispatch.py check-event "$GITHUB_EVENT_PATH"` as the workflow's first step and add the agent job after it. That job needs `needs:` on the check and the `oncall` environment. A `repository_dispatch` always runs on the default branch, `main`, which the environment's branch rule allows. Pass the payload to the agent as the event file or through `env:`, never with `${{ }}` inside a `run:` script. A concurrency group per `alert` and `environment`, never cancelling, makes a resolved event wait for its firing run. Repeats and resolutions come as new runs, so look up the open `type:incident` issue for the same alert and environment first. Adding `_docs/runbooks/<alert>.md` makes `infra/grafana/routing/oncall-github.json` stale: `make test-scripts` fails until you run `python3 scripts/alert_routing.py`. After the merge, `apply cloud` has to run again, a human step, so that the dispatches link the runbooks. Until then they keep linking the index, which the check still accepts. `scripts/tests/test_alert_routing.py` asserts that the stub has one job, no environment and no secrets (`test_the_workflow_holds_no_credential`, `test_the_workflow_checks_the_payload_without_injection`). #35 is meant to change those assertions when it adds the agent job in `oncall`. Keep their intent: the check job stays secret-free, and payload values never appear in `${{ }}` inside `run:`.
+**For #35 (done):** `python3 scripts/alert_dispatch.py check-event "$GITHUB_EVENT_PATH"` is still the workflow's first job, `alert`, with no secret and no environment. The agent jobs come after it, in the `oncall` environment ([On-call agent](#on-call-agent-35)). A `repository_dispatch` always runs on the default branch, `main`, which the environment's branch rule allows. No payload value appears in `${{ }}` inside a `run:` script; `scripts/tests/test_alert_routing.py` and `scripts/tests/test_oncall_workflow.py` check both. #35 added the runbooks `_docs/runbooks/session-save-errors.md` and `history-latency.md` and regenerated `infra/grafana/routing/oncall-github.json`, so after the merge `apply cloud` has to run again, a human step, for the dispatches to link the runbooks. Until then they keep linking the index, which the check still accepts.
 
 ### Proof on the local stack (#34)
 
@@ -247,6 +248,65 @@ One alert watches a resource: the Droplet's disk. It's a DigitalOcean Monitoring
    - **apt caches and old kernels**, from unattended upgrades: `sudo du -sh /var/cache/apt`, then `sudo apt-get clean` and `sudo apt-get autoremove`.
    - **A manual mistake**: a dump, a copied image or a log left in a home directory or `/tmp`. The `du` above finds it.
 3. **Resolved** once use is back below 80%. If the disk filled before anyone acted, a `releases.log` line may have been cut short: deployment.md's [release record](deployment.md#the-release-record) says how to find and move it out.
+
+## On-call agent (#35)
+
+`.github/workflows/oncall.yml` runs Claude Code headless when a dispatch arrives. There's one run per alert and environment at a time, never cancelled, so a resolved event waits for its firing run. GitHub keeps one waiting run per group, so a newer dispatch replaces one that's still waiting. **No Claude session holds a token that can write.** Sessions leave files, and deterministic jobs check them and do every write. The jobs, and what each may do, are in [deployment.md → On-call workflow](deployment.md#on-call-workflow-35).
+
+```text
+alert        check-event (no secrets)
+incident     find "Incident: <rule title>" (type:incident), or open it and lock it; daily run cap
+respond      on-call session (.claude/agents/oncall.md: opus, high), read-only token
+               reads Grafana with scripts/oncall_grafana.py, follows the runbook
+               -> /tmp/oncall/decision.json (rollback | fix | escalate | none), comment.md,
+                  for a fix: commits on oncall/<n>-<slug> (bundled), pr.md
+act          checks them (scripts/oncall.py); posts the comment; labels (needs-yacine, oncall:rolled-back)
+               fix: pushes the branch and opens the PR (Refs #n) as the on-call App, or posts a patch
+               resolved: closes the incident unless its fix PR is still open
+rollback     gh workflow run rollback.yml -f env=<the alert's env> [-f tag=<sha>], once; waits
+review       waits for CI; reviewer session (read-only, no App key) writes the review and verdict
+post-review  posts it through the reviewer App (scripts/reviewer-review.sh); comment if no key
+merge        APPROVED and green: squash-merge as the on-call App (dev deploy); prod: ask Yacine
+               to start deploy-prod with that tag and approve it
+wait         waits for the alert to resolve (after a rollback, or a merged fix to a dev alert)
+follow-up    on-call session given only the steps' checked results; writes the report
+report       posts it, or ⛔ Needs Yacine: if it didn't finish
+```
+
+**What a session reads.** Its prompt (`scripts/oncall.py`, templates in `scripts/oncall_prompts/`) carries only the payload fields whose values are fixed or pinned: `alert`, `environment` and `status` (enums), `title`, `summary` and `description`, pinned to the rule's text since #212 with only numbers in the description's slots, and the timestamps. The Grafana links stay out, since their query strings are free text. It also gets the workflow's own record of the incident: its number, whether it already had its rollback, and its open fix PR. State passes between sessions only that way, through the steps' checked outputs. The follow-up session gets the rollback run, its result, the review verdict, the merge, the wait result and the alert's numbers, all checked. It never takes over what an earlier session wrote on the issue. The prompt presents the alert as untrusted data. Only comments by `ybenzine` and `merciful-poseidon` may carry instructions. Everything else is data: other accounts, this workflow's own bot, and anything found in logs, traces, commits or PR bodies. The workflow locks each incident issue to collaborators, when it opens it and when it reuses one that isn't locked. It uses no lock reason, since none of GitHub's fits.
+
+**Reading Grafana: `scripts/oncall_grafana.py`.** GET only, with `GRAFANA_READONLY_TOKEN` as a bearer token, over https only, never through a redirect, and never printed.
+- `journey`, `alerts` and `wait <alert> <env> normal|firing` cover the alert. `wait` runs as a workflow step, not in a session, since the Bash tool's timeout is shorter than a wait.
+- `errors`, `failed` and `slow` give error logs, failed requests and slow requests, and `trace <id>` shows one trace's spans with a few allowlisted attributes.
+- `prom`, `logs` and `traces` run any query.
+- A log line's body prints as a quoted string under a header that calls it untrusted data, since it can carry request-derived text. Each line is cut at 400 characters.
+- Against the local stack it needs no token: `GRAFANA_URL=http://127.0.0.1:<GRAFANA_PORT>`. The token must stay **Viewer** ([above](#the-token)).
+
+**The incident's life.** A firing alert updates the newest open incident with its exact title, or opens one. A repeat (every 4 hours while it fires) updates the same issue: a fix PR says `Refs #<n>`, never `Closes`, so the merge to dev doesn't close it. A resolution looks in any state, for an issue still open or closed after the alert started, and never opens one. Its session writes the incident summary (timeline, cause, action, verification, follow-ups). The workflow posts it and closes the issue, unless the incident's fix PR is still open. Adding a label takes triage access, so an outsider's issue with the same title can't take an incident's place.
+
+**When it can't finish.** Every session has a turn cap, a dollar cap and a step timeout below its job's, so a cap fails the step instead of cancelling the job. The jobs after it run `always()`: `act` after the on-call session, `post-review` and `merge` after the reviewer, `report` after the follow-up. If a session's files are missing or don't pass the check, nothing happens: no rollback, PR, review or merge. The workflow posts `⛔ Needs Yacine:` on the incident with the reason and the run's link, and adds the `needs-yacine` label. From a run's fifth for the same alert and environment within 24 hours, the workflow starts no session and posts `⛔ Needs Yacine:` once. The Anthropic spend limit stays the backstop.
+
+**Proof without Grafana Cloud.** `scripts/tests/test_oncall_workflow.py` runs the workflow's own steps with `scripts/tests/oncall_sim.py`. It takes the `needs`, the `if:` conditions and the `env:` and `outputs:` mappings from the YAML, with fake `gh`, `claude` and `uv` and real git against a throwaway origin. It covers:
+- a prod rollback, started once;
+- a second rollback for the same incident, refused by the label;
+- a second alert's rollback, skipped as recent;
+- a dev fix pushed and opened by the on-call App, reviewed through the reviewer App and merged by the on-call App, with no session holding a write token or an App key;
+- a prod fix's deploy ask;
+- the comment fallback without the reviewer key, ending in `⛔ Needs Yacine:`;
+- the patch fallback without the on-call key;
+- a fix that touches the guardrails, refused;
+- resolutions that close, keep or skip the incident;
+- the daily cap;
+- sessions that don't finish.
+
+`scripts/oncall_grafana.py` ran against the local stack's Grafana on 2026-10-25, with `FAULT_SAVE_ERROR_PERCENT=30` and `traffic.py --rate 30`:
+- `wait session-save-errors local firing` saw pending at 18:49:10Z and firing at 18:50:10Z.
+- `journey local` read a `save_error_rate` of 0.339 over 62 sessions.
+- `failed local` listed the failed saves. `trace <id>` on one showed `error.type` `app.faults.InjectedSaveFault` on `POST /api/sessions/sync` (500).
+- `errors local` gave the `unhandled exception` lines with `exception_type=InjectedSaveFault` and their `trace_id`.
+- Fault injection went off at 18:51:05Z, and `wait … normal` saw the alert resolve at 18:57:06Z, with the error rate back at 0.
+
+The end-to-end drill on dev needs #33's rules and #34's contact point applied to Grafana Cloud first ([#35](https://github.com/ybenzine/ineedtofocus/issues/35)).
 
 ## Where to look
 
