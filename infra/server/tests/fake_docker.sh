@@ -7,13 +7,19 @@
 #   calls.log            one line per call: <epoch> uid=<uid> env=<names> app_tag=<APP_TAG> :: <args>
 #   labels/<digest>      the registry: that digest exists, built from the commit in the file
 #                        (empty for the dependency images: Postgres, the collector, Caddy)
-#   local/<digest>       pulled to this host. Starts empty, like a fresh host: the
-#                        dependency images are missing too (#170)
+#   local/<digest>       pulled to this host; the file holds the name it was pulled as
+#                        (name:tag for the pinned images, the repository for the app's).
+#                        Starts empty, like a fresh host: the dependency images are
+#                        missing too (#170). `image ls` lists them, `image rm` of its
+#                        <repo>@<digest> reference removes one (#117)
 #   tags/<tag>           the digest a local :<tag> points at (one image store for the
-#                        host, shared by every environment, like the real one)
+#                        host, shared by every environment, like the real one). Only
+#                        the app's repository has these; `image rm` of <repo>:<tag>
+#                        removes one
 #   running-<env>        the digest <env>'s app container was created from: what
 #                        tags/<APP_TAG> pointed at when `compose up` ran
-#   fail/<what>          make a call fail: pull, migrate, up, exec, verify (wrong image)
+#   fail/<what>          make a call fail: pull, migrate, up, exec, verify (wrong image),
+#                        rm (`image rm`), refs (`image inspect` of an image's references)
 #   broken/<digest>      a deliberately broken build (#30): the image itself fails, so
 #                        only containers created from it do. The file holds what fails,
 #                        and optionally the one environment it fails in:
@@ -23,8 +29,9 @@
 #   drop-on-up           a digest: that image leaves the host when a start of a broken
 #                        build fails (to test that the revert pulls it again)
 #   probe-lock           while it exists, every `compose up` appends to lock-probe.log
-#                        whether /opt/focus/deploy.lock was held (by its caller), and
-#                        every `pull` to pull-lock-probe.log
+#                        whether /opt/focus/deploy.lock was held (by its caller), every
+#                        `pull` to pull-lock-probe.log and every `image rm` to
+#                        rm-lock-probe.log
 #
 # Compose reads the images from the -f file (the real, installed compose files):
 # `config --images` lists them, and `run` and `up` fail like the real thing (#28) when
@@ -39,7 +46,19 @@ names=$(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' |
 printf '%s uid=%s env=%s app_tag=%s :: %s\n' "$(date +%s.%N)" "$(id -u)" "$names" \
   "${APP_TAG:--}" "$*" >>"$state/calls.log"
 
+app_repo=ghcr.io/ybenzine/ineedtofocus
 image_id() { printf 'sha256:img%s\n' "${1#sha256:}"; }
+# repository <name[:tag]>: the name without its tag.
+repository() { if [[ ${1##*/} == *:* ]]; then printf '%s' "${1%:*}"; else printf '%s' "$1"; fi; }
+# lock_probe <log> <line>: append whether /opt/focus/deploy.lock is held, while probe-lock exists.
+lock_probe() {
+  local held
+  [[ -e $state/probe-lock ]] || return 0
+  if flock -n /opt/focus/deploy.lock true; then held=free; else held=held; fi
+  echo "$2 lock=$held" >>"$state/$1"
+}
+# arrive <name@digest>: that image is on the host now, under that name.
+arrive() { printf '%s\n' "${1%@*}" >"$state/local/${1#*@}"; }
 # broken <digest> <env> <what>: that image is broken that way in that environment.
 broken() {
   local how where
@@ -69,7 +88,7 @@ dependencies_present() {
     digest=$(digest_of "$ref")
     [[ -z $digest || ! -f $state/local/$digest ]] || continue
     if [[ $2 != never && -n $digest && -f $state/labels/$digest && ! -e $state/fail/pull ]]; then
-      : >"$state/local/$digest"
+      arrive "$ref"
       continue
     fi
     echo "Error response from daemon: No such image: $ref" >&2
@@ -81,34 +100,125 @@ case ${1:-} in
   pull)
     ref=${*: -1}
     digest=$(digest_of "$ref")
-    if [[ -e $state/probe-lock ]]; then
-      if flock -n /opt/focus/deploy.lock true; then held=free; else held=held; fi
-      echo "pull $ref lock=$held" >>"$state/pull-lock-probe.log"
-    fi
+    lock_probe pull-lock-probe.log "pull $ref"
     [[ ! -e $state/fail/pull ]] || exit 1
     [[ -n $digest && -f $state/labels/$digest ]] || {
       echo "Error response from daemon: manifest unknown" >&2
       exit 1
     }
-    : >"$state/local/$digest"
+    arrive "$ref"
     echo "$ref"
     ;;
-  image)
-    [[ $2 == inspect ]] || exit 1
-    if [[ $3 == --format ]]; then
-      format=$4 ref=$5
-    else
-      format="" ref=$3
-    fi
-    digest=$(digest_of "$ref")
-    [[ -n $digest && -f $state/local/$digest ]] || {
-      echo "Error: No such image: $ref" >&2
-      exit 1
-    }
-    case $format in
-      "") echo '[{}]' ;;
-      *image.revision*) cat "$state/labels/$digest" ;;
-      '{{.Id}}') image_id "$digest" ;;
+  image) # inspect, ls, rm
+    case $2 in
+      inspect)
+        if [[ $3 == --format ]]; then
+          format=$4 ref=$5
+        else
+          format="" ref=$3
+        fi
+        if [[ $ref == sha256:img* ]]; then # by image ID (#117)
+          digest=sha256:${ref#sha256:img}
+        else
+          digest=$(digest_of "$ref")
+        fi
+        [[ -n $digest && -f $state/local/$digest ]] || {
+          echo "Error: No such image: $ref" >&2
+          exit 1
+        }
+        case $format in
+          "") echo '[{}]' ;;
+          *image.revision*) cat "$state/labels/$digest" ;;
+          '{{.Id}}') image_id "$digest" ;;
+          *RepoTags*RepoDigests*) # its references: tags, then <repo>@<digest>
+            [[ ! -e $state/fail/refs ]] || exit 1
+            name=$(cat "$state/local/$digest")
+            repo=$(repository "$name")
+            if [[ $repo == "$app_repo" ]]; then
+              for path in "$state"/tags/*; do
+                [[ -f $path && $(cat "$path") == "$digest" ]] || continue
+                printf '%s:%s\n' "$app_repo" "${path##*/}"
+              done
+            elif [[ $name != "$repo" ]]; then
+              printf '%s\n' "$name"
+            fi
+            printf '%s@%s\n' "$repo" "$digest"
+            ;;
+          *) exit 1 ;;
+        esac
+        ;;
+      ls) # image ls --no-trunc --format '{{.Repository}} {{.ID}}': a line per name
+        for path in "$state"/local/sha256:*; do
+          [[ -f $path ]] || continue
+          digest=${path##*/}
+          repo=$(repository "$(cat "$path")")
+          echo "$repo $(image_id "$digest")"
+          if [[ $repo == "$app_repo" ]]; then
+            for tag_path in "$state"/tags/*; do
+              if [[ -f $tag_path && $(cat "$tag_path") == "$digest" ]]; then
+                echo "$repo $(image_id "$digest")"
+              fi
+            done
+          fi
+        done
+        ;;
+      rm) # image rm <reference...>, unforced, like Docker's classic image store: each
+        # reference in turn, then status 1 if any failed. Removing an image's last tag
+        # deletes the image, digest references included (so a later <repo>@<digest>
+        # is "No such image"). An image a container runs can't lose its last reference.
+        shift 2
+        lock_probe rm-lock-probe.log "rm $*"
+        [[ ! -e $state/fail/rm ]] || exit 1
+        tags_of() { # <digest>: the app tags pointing at it
+          local path
+          for path in "$state"/tags/*; do
+            if [[ -f $path && $(cat "$path") == "$1" ]]; then echo "${path##*/}"; fi
+          done
+        }
+        in_use() { # <digest>
+          local path
+          for path in "$state"/running-*; do
+            [[ -f $path && $(cat "$path") == "$1" ]] && return 0
+          done
+          return 1
+        }
+        status=0
+        for ref in "$@"; do
+          if [[ $ref == *@sha256:* ]]; then
+            digest=${ref#*@}
+            if [[ ! -f $state/local/$digest ]]; then
+              echo "Error response from daemon: No such image: $ref" >&2
+              status=1
+            elif [[ -n $(tags_of "$digest") ]]; then
+              echo "Untagged: $ref" # the tags keep the image
+            elif in_use "$digest"; then
+              echo "Error response from daemon: conflict: unable to delete $ref (cannot be forced) - image is being used by running container" >&2
+              status=1
+            else
+              rm -f "$state/local/$digest"
+              echo "Untagged: $ref"
+              echo "Deleted: $(image_id "$digest")"
+            fi
+          elif [[ $ref == "$app_repo":* && -f $state/tags/${ref##*:} ]]; then
+            digest=$(cat "$state/tags/${ref##*:}")
+            if [[ $(tags_of "$digest" | wc -l) -gt 1 ]]; then
+              rm -f "$state/tags/${ref##*:}"
+              echo "Untagged: $ref"
+            elif in_use "$digest"; then
+              echo "Error response from daemon: conflict: unable to remove repository reference \"$ref\" - container is using its referenced image" >&2
+              status=1
+            else
+              rm -f "$state/tags/${ref##*:}" "$state/local/$digest"
+              echo "Untagged: $ref"
+              echo "Deleted: $(image_id "$digest")"
+            fi
+          else
+            echo "Error response from daemon: No such image: $ref" >&2
+            status=1
+          fi
+        done
+        exit "$status"
+        ;;
       *) exit 1 ;;
     esac
     ;;
@@ -155,10 +265,7 @@ case ${1:-} in
         dependencies_present "$file" "$policy" || exit 1
         [[ ! -e $state/fail/up ]] || exit 1
         [[ ! -f $state/sleep-up ]] || sleep "$(cat "$state/sleep-up")"
-        if [[ -e $state/probe-lock ]]; then
-          if flock -n /opt/focus/deploy.lock true; then held=free; else held=held; fi
-          echo "app_tag=${APP_TAG:--} lock=$held" >>"$state/lock-probe.log"
-        fi
+        lock_probe lock-probe.log "app_tag=${APP_TAG:--}"
         if ((!edge)) && [[ " $* " != *" otel-collector "* ]]; then
           # --pull never: the image must be on the host under :<APP_TAG>.
           [[ -n $env_name && -f $state/tags/$APP_TAG ]] || exit 1

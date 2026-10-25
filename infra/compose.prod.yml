@@ -25,6 +25,13 @@
 # Memory: every container has a limit. The total for Caddy + prod + dev, plus one
 # one-shot migration container, fits the 2 GiB Droplet (checked by
 # scripts/check_prod_compose.py in `make test-infra`).
+#
+# Other host resources (#117): every container in this file has a process limit
+# (pids_limit), drops every Linux capability and can't gain privileges
+# (no-new-privileges). The app and the collector run on a read-only root filesystem, so
+# a bug can't fill the disk prod and dev share; the app writes only to a small /tmp
+# tmpfs, which counts towards its mem_limit. Postgres writes to its data volume. Also
+# checked by scripts/check_prod_compose.py; see _docs/deployment.md, Host resources.
 
 name: focus-${FOCUS_ENV:?set FOCUS_ENV (pass infra/env/<env>.env as the last --env-file)}
 
@@ -77,6 +84,15 @@ services:
     mem_limit: ${APP_MEM_LIMIT:?set by infra/env/<env>.env}
     oom_score_adj: ${OOM_SCORE_ADJ:?set by infra/env/<env>.env}
     cpu_shares: ${CPU_SHARES:?set by infra/env/<env>.env}
+    # Host resources (#117), see the header. The image runs as uid 10001 with
+    # PYTHONDONTWRITEBYTECODE=1 and writes nothing outside /tmp (Python's tempfile).
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   db:
@@ -108,6 +124,17 @@ services:
     mem_limit: ${DB_MEM_LIMIT:?set by infra/env/<env>.env}
     oom_score_adj: ${OOM_SCORE_ADJ:?set by infra/env/<env>.env}
     cpu_shares: ${CPU_SHARES:?set by infra/env/<env>.env}
+    # Host resources (#117), see the header. Runs as the image's postgres user from the
+    # start, so the entrypoint needs no capability: as root it would chown the data
+    # directory and switch users: CHOWN, DAC_OVERRIDE, FOWNER, SETUID and SETGID.
+    # The data directory is already postgres's (the image creates it, and on the server
+    # the root entrypoint did). Not read-only: Postgres writes its sockets and lock file
+    # outside the volume, and its data, the one thing that grows, is the volume anyway.
+    user: postgres
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
   otel-collector:
@@ -129,6 +156,13 @@ services:
     mem_limit: ${OTELCOL_MEM_LIMIT:?set by infra/env/<env>.env}
     oom_score_adj: ${OOM_SCORE_ADJ:?set by infra/env/<env>.env}
     cpu_shares: ${CPU_SHARES:?set by infra/env/<env>.env}
+    # Host resources (#117), see the header. The image runs as a non-root user and
+    # writes nothing to disk (no file storage, no persistent queue).
+    read_only: true
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
 
 networks:
