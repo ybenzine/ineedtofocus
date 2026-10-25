@@ -10,6 +10,39 @@
 | Dev | https://dev.ineedtofoc.us | Automatically on merge to `main` | `focus-dev` |
 | Prod | https://ineedtofoc.us | Manual workflow run with Yacine's approval | `focus-prod` |
 
+## Credential separation
+
+No credential is stored at repo level. Each one lives where only the job that needs it can read it, and each environment's branch rule admits only `main`. `scripts/tests/test_ci_workflow.py` fails if a job reads a secret other than `GITHUB_TOKEN` outside a GitHub environment, and `scripts/tests/test_oncall_workflow.py` pins which `oncall` job reads which secret.
+
+| Where | Credential | Read by | Reviewer | Can't |
+|---|---|---|---|---|
+| GitHub environment `dev` | Dev deploy key (`focus-ci dev`), host key line | `deploy-dev` in `ci.yml`, `rollback.yml` for dev (#28, #30) | none | Touch prod ([Deploy to dev](#credentials)) |
+| GitHub environment `production` | Prod deploy key (`focus-ci prod`), host key line | `deploy-prod.yml`'s `deploy` job (#29) | **Yacine**, every run | Deploy without his approval |
+| GitHub environment `rollback` | Prod rollback key (`focus-ci rollback-prod`), host key line | `rollback.yml` for prod (#30) | none | Deploy anything new ([Rollback](#credentials-2)) |
+| GitHub environment `oncall` | `ANTHROPIC_API_KEY` (Claude API, with a monthly spend limit), `GRAFANA_READONLY_TOKEN` (Grafana Cloud **Viewer**), `REVIEWER_APP_KEY` (a separate private key of the reviewer App, #70). Optional, decision pending on #35: `ONCALL_GH_TOKEN` (the agent account, for the fix PR) | `.github/workflows/oncall.yml` (#35): the agent jobs read the Claude key and the Grafana token, and only the `review` job reads the App key | none, so it works at any hour | Hold a deploy key, start a workflow other than `rollback.yml`, approve a deployment ([On-call workflow](#on-call-workflow-35)) |
+| Server, `/opt/focus/<env>/.env` (mode 600) | Grafana Cloud OTLP write token (`GRAFANA_CLOUD_OTLP_TOKEN`) | That environment's collector (#32) | n/a | Read telemetry ([observability.md → Credentials](observability.md#credentials)) |
+| Grafana Cloud contact point `focus-oncall-github` | Fine-grained GitHub token, this repo, Contents write | Grafana's webhook, to send the alert dispatch (#34) | n/a | Approve or start a deploy ([observability.md → The token](observability.md#the-token)) |
+
+The workflow token (`GITHUB_TOKEN`) is set per job with `permissions:`. Every workflow starts from `permissions: {}` or `contents: read`, and only `ci.yml`'s `publish` job can write packages or sign attestations.
+
+### On-call workflow (#35)
+
+`.github/workflows/oncall.yml` runs the on-call agent when an alert fires or resolves ([observability.md → On-call agent](observability.md#on-call-agent-35)). What it can and can't do:
+
+| Job | Workflow token | Secrets | Can |
+|---|---|---|---|
+| `alert` | `contents: read` | none | Check the payload |
+| `respond` | `contents: read`, `issues: write`, `pull-requests: read`, `actions: read`, `checks: read` | Claude key, Grafana token (`ONCALL_GH_TOKEN` if set) | The incident trail. With `ONCALL_GH_TOKEN`: push `oncall/<n>-<slug>` and open the fix PR |
+| `rollback` | `actions: write` only | none | Start `rollback.yml` once, for the alert's own environment, with a checked `tag`. No checkout, no repository code |
+| `review` | `contents: read`, `pull-requests: write` (the fallback comment review), reads | Claude key, reviewer App key | The reviewer App's review (`scripts/reviewer-review.sh`) |
+| `follow-up` | as `respond` | Claude key, Grafana token (`ONCALL_GH_TOKEN` if set) | Verify, report. With `ONCALL_GH_TOKEN`: squash-merge an approved green fix PR, which deploys to dev |
+
+- **It can't push to `main`.** No job's workflow token has `contents: write`. `ONCALL_GH_TOKEN` is the agent account's, and branch protection holds against it like against every agent: CI checks and an approval from someone other than the last pusher, administrators included.
+- **It can't put new code on prod.** No job holds a deploy key, and none runs in `production`. The rollback job starts `rollback.yml` only, whose key can only restore a known-good release. No job can approve a deployment: the workflow token can't, and the agent account isn't a `production` reviewer (#127). The agent sessions also deny `gh workflow run`, `gh run rerun` and `gh run cancel` (`--disallowedTools`), on top of `.claude/settings.json`'s rules, which deny `deploy-prod` (#126).
+- **Agents never hold `actions: write`.** A rollback is a checked value in the agent's decision file (`scripts/oncall.py decision`). The rollback job checks it again against what the workflow read before the agent ran.
+- **The fix PR needs a credential that starts CI.** GitHub starts no workflow for events made with the workflow token, except `workflow_dispatch` and `repository_dispatch`. A PR opened or merged with it would get no CI and no dev deploy. Without `ONCALL_GH_TOKEN`, the agent posts its fix and regression test as a patch on the incident issue with `⛔ Needs Yacine:` (question on [#35](https://github.com/ybenzine/ineedtofocus/issues/35)).
+- **What it can do to dev without the reviewer agent.** With `ONCALL_GH_TOKEN` and `REVIEWER_APP_KEY` in the same environment, a leaked pair, or a job an agent-merged workflow edit adds to `oncall`, could push, approve and merge a PR to `main`, which deploys it to dev. That's the price of an unattended merge to dev (the AC). Prod still waits for Yacine.
+
 ## App image and migrations
 
 One image (root `Dockerfile`, #4) serves the API and the built frontend. Its entrypoint (`infra/app/entrypoint.sh`) runs `alembic upgrade head` and then starts the server. A failed migration exits non-zero, so the container never serves on a schema it doesn't expect.

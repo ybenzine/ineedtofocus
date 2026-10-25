@@ -1,16 +1,42 @@
-# On-call (#34 stub; #35 makes it the on-call agent). Woken by Grafana: an alert's contact
-# point posts to GitHub's dispatch API for this repo, which starts this workflow with a
-# `repository_dispatch` event of type `grafana-alert` (_docs/observability.md, Alert routing).
+# On-call (#34, #35). Woken by Grafana: an alert's contact point posts to GitHub's dispatch
+# API for this repo, which starts this workflow with a `repository_dispatch` event of type
+# `grafana-alert` (_docs/observability.md, Alert routing). Firing and resolved alerts, and
+# a still-firing alert's 4-hourly repeat, each arrive as a new run.
 #
-# For now it only proves the route: it checks the payload against the contract in
-# scripts/alert_dispatch.py (alert, environment, status, title, summary, description,
-# started_at, resolved_at, links), logs it and writes a job summary. An invalid payload
-# fails the run red. #35 keeps this check as its first step and adds the agent after it.
+#   alert      Check the payload against the contract (scripts/alert_dispatch.py): no
+#              secrets, no environment. An invalid payload fails the run red here.
+#   respond    The on-call agent: headless Claude Code with the `oncall` agent definition
+#              (.claude/agents/oncall.md), in the `oncall` environment. It opens or updates
+#              the incident issue, investigates with the read-only Grafana token, follows
+#              the runbook and writes a decision: rollback, fix (a PR), escalate or none.
+#   rollback   Only for a rollback decision: starts rollback.yml for the alert's own
+#              environment, once, and waits for it. The only job with `actions: write`;
+#              no checkout, no repository code, no secret. The agent can't start any
+#              workflow itself.
+#   review     Only for a fix PR: the reviewer agent, a separate Claude Code session, posts
+#              its review through the reviewer App (scripts/reviewer-review.sh, #70), after
+#              waiting for CI. Without the App key it falls back to a comment review.
+#   follow-up  After a rollback or a fix: the on-call agent again. It verifies the
+#              rollback, or squash-merges the approved green fix PR (deploying it to dev)
+#              and asks Yacine to approve the prod deploy. Then it waits for the alert
+#              to resolve and writes the incident summary.
 #
-# The payload is untrusted input: anyone with a token that can write to the repo can send
-# a dispatch. It's read from $GITHUB_EVENT_PATH by the script, never through `${{ }}` in a
-# script (no injection). No secrets, no environment: #35's agent job runs in `oncall`
-# (main only; a repository_dispatch run is always on the default branch, main).
+# Guardrails (_docs/deployment.md, On-call):
+# - The payload is untrusted. It's read from $GITHUB_EVENT_PATH by scripts, never through
+#   `${{ }}` in a `run:` script. The agent's prompt holds only payload fields with fixed or
+#   pinned values (scripts/oncall.py); the free-text description stays out until #212.
+# - Secrets come only from the `oncall` environment (main only, no reviewer). The workflow
+#   token's permissions are set per job, least privilege. No job can approve a deployment,
+#   and nothing here starts deploy-prod: the rollback job runs rollback.yml only.
+# - Pushing and opening or merging the fix PR need a token whose events start CI, which
+#   the workflow token's don't. That's the optional `ONCALL_GH_TOKEN` (the agent account,
+#   decision pending on #35). Without it, the fix path posts the patch on the incident
+#   issue with a `⛔ Needs Yacine:` instead.
+# - Cost: every Claude Code session has a turn cap, a dollar cap and a job timeout.
+#
+# One run per alert and environment at a time, never cancelled: a resolved event waits
+# for its firing run. GitHub keeps one waiting run per group, so a newer dispatch
+# replaces one that's still waiting.
 
 name: oncall
 run-name: "Alert: ${{ github.event.client_payload.alert }} ${{ github.event.client_payload.status }} in ${{ github.event.client_payload.environment }}"
@@ -21,9 +47,19 @@ on:
 
 permissions: {}
 
+concurrency:
+  group: oncall-${{ github.event.client_payload.alert }}-${{ github.event.client_payload.environment }}
+  cancel-in-progress: false
+
 defaults:
   run:
     shell: bash
+
+env:
+  CLAUDE_CODE_VERSION: "2.1.310"
+  UV_VERSION: "0.11.4" # same as ci.yml
+  NODE_VERSION: "24" # same as ci.yml
+  ONCALL_OUT: /tmp/oncall
 
 jobs:
   alert:
@@ -38,3 +74,331 @@ jobs:
           persist-credentials: false
       - name: Check and log the payload
         run: python3 scripts/alert_dispatch.py check-event "$GITHUB_EVENT_PATH"
+
+  respond:
+    name: On-call agent
+    needs: alert
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment:
+      name: oncall
+      deployment: false
+    # The workflow token: read code, runs, checks and PRs; write issues (the incident
+    # trail). It can't push, open a PR, merge or start a workflow.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      actions: read
+      checks: read
+    outputs:
+      alert: ${{ steps.prepare.outputs.alert }}
+      environment: ${{ steps.prepare.outputs.environment }}
+      status: ${{ steps.prepare.outputs.status }}
+      can_open_prs: ${{ steps.identity.outputs.can_open_prs }}
+      action: ${{ steps.decision.outputs.action }}
+      incident: ${{ steps.decision.outputs.incident }}
+      rollback_env: ${{ steps.decision.outputs.rollback_env }}
+      rollback_tag: ${{ steps.decision.outputs.rollback_tag }}
+      pr: ${{ steps.decision.outputs.pr }}
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 100 # recent commits, for "did a deploy cause it?"
+      - name: Choose the GitHub identity
+        id: identity
+        env:
+          ONCALL_GH_TOKEN: ${{ secrets.ONCALL_GH_TOKEN }}
+        run: |
+          if [[ -n $ONCALL_GH_TOKEN ]]; then
+            echo "can_open_prs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "can_open_prs=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=No ONCALL_GH_TOKEN::the fix path posts its patch on the incident issue instead of opening a PR (#35)."
+          fi
+      - name: Find the open incident issue and write the prompt
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ONCALL_CAN_OPEN_PRS: ${{ steps.identity.outputs.can_open_prs }}
+        run: |
+          mkdir -p "$ONCALL_OUT"
+          gh issue list --state open --label type:incident --limit 100 \
+            --json number,title,state,labels > "$RUNNER_TEMP/issues.json"
+          python3 scripts/oncall.py prepare "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/issues.json" "$ONCALL_OUT"
+          # The decision check runs from this copy: the agent edits the checkout.
+          install -d "$RUNNER_TEMP/checks"
+          cp -R scripts/oncall.py scripts/alert_dispatch.py scripts/oncall_prompts "$ONCALL_OUT/alert.json" \
+            "$RUNNER_TEMP/checks/"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Install Claude Code
+        run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      - name: Run the on-call agent
+        id: agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GRAFANA_READONLY_TOKEN: ${{ secrets.GRAFANA_READONLY_TOKEN }}
+          GH_TOKEN: ${{ secrets.ONCALL_GH_TOKEN || github.token }}
+          CAN_OPEN_PRS: ${{ steps.identity.outputs.can_open_prs }}
+        run: |
+          git config user.name "ineedtofocus on-call agent"
+          git config user.email "merciful-poseidon@users.noreply.github.com"
+          [[ $CAN_OPEN_PRS == true ]] && gh auth setup-git
+          claude -p --agent oncall --permission-mode dontAsk \
+            --max-turns 60 --max-budget-usd 10 --output-format json \
+            --add-dir "$ONCALL_OUT" \
+            --disallowedTools 'Bash(gh workflow run *)' 'Bash(gh run rerun *)' 'Bash(gh run cancel *)' \
+            < "$ONCALL_OUT/prompt.md" > "$RUNNER_TEMP/agent.json"
+      - name: Check the decision
+        id: decision
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        run: |
+          cp "$RUNNER_TEMP/checks/alert.json" "$ONCALL_OUT/alert.json"
+          python3 "$RUNNER_TEMP/checks/oncall.py" decision "$ONCALL_OUT"
+      - name: Summary
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        env:
+          ACTION: ${{ steps.decision.outputs.action }}
+          INCIDENT: ${{ steps.decision.outputs.incident }}
+        run: |
+          usage=$(jq -r '"turns: \(.num_turns // "?"), cost: $\(.total_cost_usd // "?"), result: \(.subtype // "?")"' \
+            "$RUNNER_TEMP/agent.json" 2> /dev/null || echo "no result")
+          {
+            echo "### On-call agent"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Decision | \`${ACTION:-none}\` |"
+            echo "| Incident | ${INCIDENT:+#$INCIDENT} |"
+            echo "| Session | $usage |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Ask for help if the agent didn't finish
+        # A session that hit its cap or wrote no valid decision takes no further action
+        # (no rollback, no review), so a person has to look.
+        if: ${{ failure() && steps.prepare.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INCIDENT: ${{ steps.decision.outputs.incident || steps.prepare.outputs.incident }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 "$RUNNER_TEMP/checks/oncall.py" stalled-body "$RUNNER_TEMP/checks/alert.json" \
+            "$RUN_URL" > "$RUNNER_TEMP/stalled.md"
+          if [[ $INCIDENT =~ ^[1-9][0-9]*$ ]]; then
+            gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/stalled.md"
+            gh issue edit "$INCIDENT" --add-label needs-yacine
+          else
+            title=$(jq -r .incident_title "$RUNNER_TEMP/checks/alert.json")
+            gh issue create --title "$title" --body-file "$RUNNER_TEMP/stalled.md" \
+              --label type:incident --label agent:oncall --label needs-yacine
+          fi
+
+  rollback:
+    name: Roll back (on-call decision)
+    needs: respond
+    if: needs.respond.outputs.action == 'rollback'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    # The only job that can start a workflow. It runs no repository code and starts
+    # rollback.yml only, once, for the alert's own environment.
+    permissions:
+      actions: write
+    outputs:
+      result: ${{ steps.watch.outputs.result }}
+      run: ${{ steps.start.outputs.run }}
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      TARGET_ENV: ${{ needs.respond.outputs.rollback_env }}
+      ALERT_ENV: ${{ needs.respond.outputs.environment }}
+      STATUS: ${{ needs.respond.outputs.status }}
+      TAG: ${{ needs.respond.outputs.rollback_tag }}
+    steps:
+      - name: Check the request
+        # Checked again here, against what the workflow read before the agent ran.
+        run: |
+          die() { echo "::error title=$1::$2"; exit 1; }
+          [[ $STATUS == firing ]] || die "Not firing" "a rollback is only for a firing alert."
+          [[ $TARGET_ENV == dev || $TARGET_ENV == prod ]] || die "Bad env" "env must be dev or prod."
+          [[ $TARGET_ENV == "$ALERT_ENV" ]] || die "Wrong env" "a rollback is of the alert's environment."
+          [[ -z $TAG || $TAG =~ ^[0-9a-f]{40}$ ]] || die "Bad tag" "tag must be empty or a 40-hex sha."
+      - name: Start rollback.yml
+        id: start
+        run: |
+          started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          args=(-f "env=$TARGET_ENV")
+          [[ -n $TAG ]] && args+=(-f "tag=$TAG")
+          gh workflow run rollback.yml "${args[@]}"
+          id=""
+          for _ in $(seq 1 24); do
+            sleep 5
+            id=$(gh run list --workflow rollback.yml --event workflow_dispatch --limit 10 \
+              --json databaseId,createdAt \
+              --jq "[.[] | select(.createdAt >= \"$started\")] | last | .databaseId // empty")
+            [[ -n $id ]] && break
+          done
+          [[ -n $id ]] || { echo "::error title=Rollback run not found::started at $started"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "run=https://github.com/$GH_REPO/actions/runs/$id" >> "$GITHUB_OUTPUT"
+      - name: Wait for it
+        id: watch
+        env:
+          RUN_ID: ${{ steps.start.outputs.id }}
+        run: |
+          if gh run watch "$RUN_ID" --exit-status --interval 30 > /dev/null; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+            echo "::error title=Rollback failed::see run $RUN_ID"
+            exit 1
+          fi
+
+  review:
+    name: Reviewer agent
+    needs: respond
+    if: needs.respond.outputs.action == 'fix' && needs.respond.outputs.can_open_prs == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment:
+      name: oncall
+      deployment: false
+    # pull-requests: write only for the fallback comment review. The workflow token
+    # can't approve: the repo doesn't let Actions approve pull requests.
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      actions: read
+      checks: read
+    outputs:
+      review: ${{ steps.result.outputs.review }}
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ needs.respond.outputs.pr }}
+      INCIDENT: ${{ needs.respond.outputs.incident }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check it's the on-call fix PR
+        run: |
+          gh pr view "$PR" --json number,state,baseRefName,headRefName,isCrossRepository \
+            > "$RUNNER_TEMP/pr.json"
+          python3 scripts/oncall.py check-pr "$RUNNER_TEMP/pr.json" "$INCIDENT"
+          python3 scripts/oncall.py review-prompt "$ONCALL_OUT" "$PR" "$INCIDENT"
+      - name: Wait for CI
+        timeout-minutes: 40
+        # Red checks don't stop the review: the reviewer reports them. CI takes a few
+        # seconds to register its checks on a new PR.
+        run: |
+          for _ in $(seq 1 24); do
+            [[ $(gh pr view "$PR" --json statusCheckRollup --jq '.statusCheckRollup | length') -gt 0 ]] && break
+            sleep 5
+          done
+          gh pr checks "$PR" --watch --required --interval 30 || true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Install Claude Code
+        run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      - name: Set up the reviewer App key
+        env:
+          REVIEWER_APP_KEY: ${{ secrets.REVIEWER_APP_KEY }}
+        # reviewer_token.py reads the key from a path. A missing file makes
+        # reviewer-review.sh fall back to a comment review (_docs/process.md §4).
+        run: |
+          dir=$RUNNER_TEMP/reviewer-app
+          install -d -m 700 "$dir"
+          if [[ -n $REVIEWER_APP_KEY ]]; then
+            (umask 077 && printf '%s\n' "$REVIEWER_APP_KEY" > "$dir/key.pem")
+          else
+            echo "::warning title=No reviewer App key::the review falls back to a comment; the merge waits for Yacine."
+          fi
+          echo "REVIEWER_APP_KEY_PATH=$dir/key.pem" >> "$GITHUB_ENV"
+      - name: Run the reviewer agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          claude -p --agent reviewer --permission-mode dontAsk \
+            --max-turns 40 --max-budget-usd 5 --output-format json \
+            --add-dir "$ONCALL_OUT" \
+            --disallowedTools 'Bash(gh pr checkout *)' 'Bash(git checkout *)' 'Bash(git switch *)' \
+              'Bash(git fetch *)' 'Bash(git pull *)' 'Bash(make *)' 'Bash(gh workflow run *)' \
+              'Bash(gh pr merge *)' 'Bash(git push *)' \
+            < "$ONCALL_OUT/review-prompt.md" > "$RUNNER_TEMP/reviewer.json"
+      - name: Remove the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/reviewer-app/key.pem"
+      - name: Read the review result
+        id: result
+        if: ${{ !cancelled() }}
+        run: python3 scripts/oncall.py review-result "$ONCALL_OUT"
+
+  follow-up:
+    name: On-call follow-up
+    needs: [respond, rollback, review]
+    if: >-
+      ${{ !cancelled() && needs.respond.result == 'success' &&
+      (needs.respond.outputs.action == 'rollback' ||
+      (needs.respond.outputs.action == 'fix' && needs.respond.outputs.can_open_prs == 'true')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment:
+      name: oncall
+      deployment: false
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      actions: read
+      checks: read
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Write the prompt
+        env:
+          ACTION: ${{ needs.respond.outputs.action }}
+          INCIDENT: ${{ needs.respond.outputs.incident }}
+          ALERT: ${{ needs.respond.outputs.alert }}
+          ALERT_ENV: ${{ needs.respond.outputs.environment }}
+          PR: ${{ needs.respond.outputs.pr }}
+          REVIEW: ${{ needs.review.outputs.review }}
+          ROLLBACK_RESULT: ${{ needs.rollback.outputs.result || 'not-found' }}
+          ROLLBACK_RUN: ${{ needs.rollback.outputs.run }}
+          ROLLBACK_TAG: ${{ needs.respond.outputs.rollback_tag }}
+        run: |
+          python3 scripts/oncall.py follow-up-prompt "$ONCALL_OUT" \
+            --action "$ACTION" --incident "$INCIDENT" --alert "$ALERT" --environment "$ALERT_ENV" \
+            --pr "$PR" --review "${REVIEW:-unknown}" \
+            --rollback-result "$ROLLBACK_RESULT" --rollback-run "$ROLLBACK_RUN" --rollback-tag "$ROLLBACK_TAG"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Install Claude Code
+        run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      - name: Run the on-call agent
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GRAFANA_READONLY_TOKEN: ${{ secrets.GRAFANA_READONLY_TOKEN }}
+          GH_TOKEN: ${{ secrets.ONCALL_GH_TOKEN || github.token }}
+        run: |
+          claude -p --agent oncall --permission-mode dontAsk \
+            --max-turns 50 --max-budget-usd 8 --output-format json \
+            --add-dir "$ONCALL_OUT" \
+            --disallowedTools 'Bash(gh workflow run *)' 'Bash(gh run rerun *)' 'Bash(gh run cancel *)' \
+              'Bash(git push *)' \
+            < "$ONCALL_OUT/follow-up-prompt.md" > "$RUNNER_TEMP/agent.json"

@@ -1,0 +1,3 @@
+1. **Incident issue.** ${issue} Post that the alert resolved at `resolved_at`, with `journey ${env}` as it is now.
+2. **Finish the report** if the incident's action is complete: a rollback ran, a fix merged, or the escalation was handled. Post the incident summary: timeline (UTC), cause, action taken, verification and follow-ups. Open follow-ups as new issues. Close the incident issue with `gh issue close`, unless an open fix PR will close it (`Closes #<n>`). If the action isn't complete (a fix PR waits for review or for Yacine), say what's pending and leave the issue open.
+3. Decision: `"none"`.

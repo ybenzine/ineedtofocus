@@ -320,17 +320,26 @@ def test_the_workflow_is_woken_by_the_dispatch_only(workflow: dict[Any, Any]) ->
     assert triggers == {"repository_dispatch": {"types": [d.EVENT_TYPE]}}
 
 
-def test_the_workflow_holds_no_credential(workflow: dict[Any, Any]) -> None:
+def test_the_check_job_holds_no_credential(workflow: dict[Any, Any]) -> None:
+    """The check runs first, with no secret and no environment. The agent jobs after it
+    (#35, scripts/tests/test_oncall_workflow.py) hold the `oncall` environment's secrets."""
     assert workflow["permissions"] == {}
-    (job,) = workflow["jobs"].values()
+    assert next(iter(workflow["jobs"])) == "alert"
+    job = workflow["jobs"]["alert"]
     assert job["permissions"] == {"contents": "read"}
-    assert "secrets." not in WORKFLOW.read_text()
+    assert "secrets." not in yaml.safe_dump(job)
     assert "environment" not in job
+    for name, other in workflow["jobs"].items():
+        if "secrets." in yaml.safe_dump(other):
+            assert other["environment"]["name"] == "oncall", name
 
 
 def test_the_workflow_checks_the_payload_without_injection(workflow: dict[Any, Any]) -> None:
-    """The payload reaches the check through $GITHUB_EVENT_PATH, never `${{ }}` in a script."""
-    (job,) = workflow["jobs"].values()
+    """The payload reaches the check through $GITHUB_EVENT_PATH, never `${{ }}` in a script,
+    and the agent starts only after the check passed."""
+    job = workflow["jobs"]["alert"]
     runs = [step["run"] for step in job["steps"] if "run" in step]
     assert runs == ['python3 scripts/alert_dispatch.py check-event "$GITHUB_EVENT_PATH"']
-    assert not [run for run in runs if "${{" in run]
+    for other in workflow["jobs"].values():
+        assert not [s["run"] for s in other["steps"] if "${{" in str(s.get("run", ""))]
+    assert workflow["jobs"]["respond"]["needs"] == "alert"
