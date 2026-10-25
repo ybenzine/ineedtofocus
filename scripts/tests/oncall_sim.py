@@ -59,9 +59,12 @@ case "$1 $2" in
   "workflow run") touch "$SIM/dispatched" ;;
   "run watch") exit "$(cat "$SIM/watch-exit" 2> /dev/null || echo 0)" ;;
   "pr view") answer "$SIM/pr.json" ;;
-  "pr create") echo "https://github.com/ybenzine/ineedtofocus/pull/$(cat "$SIM/new-pr")" ;;
+  "pr create")
+    [[ -f $SIM/fail-pr-create ]] && { echo "pull request create failed: HTTP 422" >&2; exit 1; }
+    echo "https://github.com/ybenzine/ineedtofocus/pull/$(cat "$SIM/new-pr")" ;;
   "pr review") ;;
   "auth setup-git") ;;
+  "api repos/"*) answer "$SIM/issue-api.json" ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
 exit 0
@@ -214,6 +217,7 @@ class Simulation:
         ):
             self.write(name, "[]")
         self.write("pr.json", "{}")
+        self.write("issue-api.json", {"locked": False})
 
     def _git(self, cwd: Path, *args: str) -> None:
         env = {
@@ -230,8 +234,11 @@ class Simulation:
         seed = self.tmp / "seed"
         seed.mkdir()
         (seed / "README.md").write_text("seed\n")
+        # A protected file on main, so a test can try to move or delete it.
+        (seed / ".claude").mkdir()
+        (seed / ".claude" / "settings.json").write_text("{}\n")
         self._git(seed, "init", "-q")
-        self._git(seed, "add", "README.md")
+        self._git(seed, "add", "README.md", ".claude/settings.json")
         self._git(seed, "commit", "-q", "-m", "seed")
         self._git(self.tmp, "clone", "-q", "--bare", str(seed), str(self.origin))
 

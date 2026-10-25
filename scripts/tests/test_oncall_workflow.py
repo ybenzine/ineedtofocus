@@ -536,7 +536,7 @@ def test_simulated_fix_through_both_apps(tmp_path: Path, grafana: str) -> None:
         n: j["result"] for n, j in jobs.items()
     }
     assert calls(sim, "gh issue create --title Incident: Session saves failing (dev)")
-    assert calls(sim, "gh issue lock 500 --reason off_topic")
+    assert [c.split(" [")[0] for c in calls(sim, "gh issue lock")] == ["gh issue lock 500"]
     # The branch really reached the origin, pushed by the act job, not by the session.
     pushed = subprocess.run(
         ["git", "--git-dir", str(sim.origin), "branch", "--list", "oncall/*"],
@@ -735,3 +735,142 @@ def test_simulated_invalid_dispatch_never_reaches_an_agent(tmp_path: Path, grafa
     assert jobs["alert"]["result"] == "failure"
     assert all(j["result"] == "skipped" for n, j in jobs.items() if n != "alert")
     assert sim.gh_calls() == [] and sim.sessions() == []
+
+
+# --- Review round 2 -----------------------------------------------------------------------
+
+
+def all_steps(jobs: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    return [(name, step) for name, job in jobs.items() for step in job["steps"]]
+
+
+def test_no_cache_crosses_between_jobs(jobs: dict[str, Any]) -> None:
+    """A cache saved after a session and restored next to an App key would bridge them:
+    uv doesn't re-verify the files it unpacks."""
+    uses = [(n, s) for n, s in all_steps(jobs) if "uses" in s]
+    for name, step in uses:
+        action = step["uses"].split("@")[0]
+        assert action in {
+            "actions/checkout",
+            "actions/setup-node",
+            "astral-sh/setup-uv",
+            "actions/upload-artifact",
+            "actions/download-artifact",
+        }, action
+        if action == "astral-sh/setup-uv":
+            caching = {
+                k: step["with"].get(k) for k in ("enable-cache", "restore-cache", "save-cache")
+            }
+            assert caching == {
+                "enable-cache": False,
+                "restore-cache": False,
+                "save-cache": False,
+            }, name
+        if action == "actions/setup-node":
+            assert step["with"].get("package-manager-cache") is False, name
+            assert "cache" not in step["with"], name
+    assert sum(1 for _, s in uses if "setup-uv" in s["uses"]) == 4
+    assert sum(1 for _, s in uses if "setup-node" in s["uses"]) == 3
+
+
+def test_artifacts_hold_only_the_checked_files(jobs: dict[str, Any]) -> None:
+    uploads = {
+        s["with"]["name"]: s["with"]["path"].split()
+        for _, s in all_steps(jobs)
+        if "upload-artifact" in str(s.get("uses", ""))
+    }
+    assert uploads == {
+        "respond": [
+            "/tmp/oncall/decision.json",
+            "/tmp/oncall/comment.md",
+            "/tmp/oncall/pr.md",
+            "/tmp/oncall/fix.bundle",
+        ],
+        "review": ["/tmp/oncall/review.md", "/tmp/oncall/review.json"],
+        "follow-up": ["/tmp/oncall/comment.md"],
+    }
+
+
+def test_write_jobs_ask_for_help_when_a_step_fails(jobs: dict[str, Any]) -> None:
+    for name in ("incident", "act", "merge"):
+        (help_step,) = [
+            s for s in jobs[name]["steps"] if s.get("name") == "Ask for help if a step failed"
+        ]
+        assert help_step["if"] == "failure()"
+        assert "stalled-body" in help_step["run"] and "needs-yacine" in help_step["run"]
+
+
+def test_the_lock_has_no_reason(jobs: dict[str, Any]) -> None:
+    text = "\n".join(str(s.get("run", "")) for _, s in all_steps(jobs))
+    assert re.findall(r"gh issue lock [^\n]*", text) == ['gh issue lock "$INCIDENT"']
+
+
+def test_simulated_reused_incident_is_locked(tmp_path: Path, grafana: str) -> None:
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    sim = simulation(tmp_path / "a", grafana, dispatch())
+    sim.write("issues.json", [incident_issue(77)])
+    sim.session("oncall", write_files(decision_json=decision(action="none"), comment_md="x"))
+    sim.run()
+    assert [c.split(" [")[0] for c in calls(sim, "gh issue lock")] == ["gh issue lock 77"]
+    locked = simulation(tmp_path / "b", grafana, dispatch())
+    locked.write("issues.json", [incident_issue(77)])
+    locked.write("issue-api.json", {"locked": True})
+    locked.session("oncall", write_files(decision_json=decision(action="none"), comment_md="x"))
+    locked.run()
+    assert calls(locked, "gh issue lock") == []
+
+
+def test_simulated_new_incident_is_locked_without_a_reason(tmp_path: Path, grafana: str) -> None:
+    sim = simulation(tmp_path, grafana, dispatch())
+    script = write_files(decision_json=decision(action="escalate"), comment_md="⛔ Needs Yacine: x")
+    sim.session("oncall", script)
+    sim.run()
+    assert [c.split(" [")[0] for c in calls(sim, "gh issue lock")] == ["gh issue lock 500"]
+
+
+def test_simulated_rename_of_a_protected_file_is_refused(tmp_path: Path, grafana: str) -> None:
+    """`git diff` detects renames and would list only the new path; --no-renames lists
+    the old one too."""
+    sim = simulation(tmp_path, grafana, dev_dispatch())
+    script = "\n".join(
+        [
+            "git switch -q -c oncall/500-move origin/main",
+            "mkdir -p backend/tests",
+            "git mv .claude/settings.json backend/settings.json",
+            "printf 'x' > backend/tests/test_m.py && git add backend/tests/test_m.py",
+            "git commit -q -m 'chore: move'",
+        ]
+    )
+    files = write_files(
+        decision_json=decision(action="fix", branch="oncall/500-move"), comment_md="Fix."
+    )
+    sim.session("oncall", script + "\n" + files)
+    sim.run()
+    assert calls(sim, "gh pr create") == []
+    refused = [b for _, b in sim.comments() if "the fix branch was refused" in b]
+    assert refused and "may not change .claude/settings.json" in refused[0]
+
+
+def test_simulated_failed_pr_create_asks_for_help(tmp_path: Path, grafana: str) -> None:
+    sim = simulation(tmp_path, grafana, dev_dispatch())
+    sim.write("fail-pr-create", "")
+    sim.session("oncall", fix_session())
+    jobs = sim.run()
+    assert jobs["act"]["result"] == "failure"
+    assert jobs["review"]["result"] == "skipped" and jobs["follow-up"]["result"] == "skipped"
+    failed = [b for _, b in sim.comments() if "a step of the act job failed" in b]
+    assert failed and failed[0].startswith("⛔ Needs Yacine:")
+
+
+def test_simulated_squash_message_is_the_workflows(tmp_path: Path, grafana: str) -> None:
+    sim = simulation(tmp_path, grafana, dev_dispatch())
+    sim.write("pr.json", approved_pr())
+    sim.session("oncall", fix_session(), nth=1)
+    sim.session("reviewer", REVIEW)
+    sim.session("oncall", write_files(comment_md="Merged."), nth=3)
+    sim.run()
+    (merge,) = calls(sim, "gh pr merge")
+    assert "--subject fix(oncall): incident #500 (#600) --body-file" in merge
+    body = (sim.tmp / "jobs" / "merge" / "runner" / "squash.md").read_text()
+    assert "Refs #500" in body and not re.search(r"(?i)\b(close|fix|resolve)[sd]?\b\s+#", body)

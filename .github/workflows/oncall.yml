@@ -9,7 +9,7 @@
 # checkout, check those files with scripts/oncall.py and do every write.
 #
 #   alert        #34's payload check. No secrets.
-#   incident     Finds the incident issue, or opens and locks it; the daily run cap.
+#   incident     Finds the incident issue or opens it, locks it; the daily run cap.
 #   respond      The on-call agent (Claude Code, .claude/agents/oncall.md). Read-only.
 #   act          Checks the decision; posts the comment; labels; for a fix, pushes the
 #                branch and opens the PR as the on-call App (ONCALL_APP_KEY), or posts it
@@ -122,19 +122,27 @@ jobs:
             --json databaseId,displayTitle,createdAt > "$RUNNER_TEMP/runs.json"
           python3 scripts/oncall.py incident "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/issues.json" \
             "$RUNNER_TEMP/prs.json" "$RUNNER_TEMP/runs.json" "$GITHUB_RUN_ID" "$RUNNER_TEMP"
-      - name: Open the incident issue and lock it
+      - name: Open the incident issue
         id: open
         if: steps.plan.outputs.create == 'true'
         env:
           TITLE: ${{ steps.plan.outputs.title }}
-        # Locked to collaborators: outsiders can't comment where the agents read.
         run: |
           url=$(gh issue create --title "$TITLE" --body-file "$RUNNER_TEMP/incident-body.md" \
             --label type:incident --label agent:oncall)
           number=${url##*/}
           [[ $number =~ ^[1-9][0-9]*$ ]] || { echo "::error::no issue number in $url"; exit 1; }
-          gh issue lock "$number" --reason off_topic
           echo "incident=$number" >> "$GITHUB_OUTPUT"
+      - name: Lock the incident issue
+        # New or reused: outsiders can't comment where the agents read. No lock reason:
+        # none of GitHub's (off-topic, too heated, resolved, spam) fits.
+        env:
+          INCIDENT: ${{ steps.open.outputs.incident || steps.plan.outputs.incident }}
+        run: |
+          [[ $INCIDENT =~ ^[1-9][0-9]*$ ]] || exit 0
+          if [[ $(gh api "repos/$GH_REPO/issues/$INCIDENT" --jq .locked) != true ]]; then
+            gh issue lock "$INCIDENT"
+          fi
       - name: Post the daily cap
         if: steps.plan.outputs.cap_notice == 'true'
         env:
@@ -142,6 +150,21 @@ jobs:
         run: |
           [[ $INCIDENT =~ ^[1-9][0-9]*$ ]] || { echo "::warning::daily cap reached, no incident to post on"; exit 0; }
           gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/cap-body.md"
+          gh issue edit "$INCIDENT" --add-label needs-yacine
+      - name: Ask for help if a step failed
+        if: failure()
+        env:
+          INCIDENT: ${{ steps.open.outputs.incident || steps.plan.outputs.incident }}
+          ALERT: ${{ steps.plan.outputs.alert }}
+          STATUS: ${{ steps.plan.outputs.status }}
+          ALERT_ENV: ${{ steps.plan.outputs.environment }}
+          TITLE: ${{ steps.plan.outputs.title }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [[ $INCIDENT =~ ^[1-9][0-9]*$ ]] || exit 1
+          python3 scripts/oncall.py stalled-body "$ALERT" "$STATUS" "$ALERT_ENV" "$TITLE" "$RUN_URL" \
+            "a step of the incident job failed (see the run's log)" > "$RUNNER_TEMP/failed.md"
+          gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/failed.md"
           gh issue edit "$INCIDENT" --add-label needs-yacine
 
   respond:
@@ -180,9 +203,14 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
       - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
         with:
           version: ${{ env.UV_VERSION }}
+          # No cache: it would carry what a session wrote to the jobs that hold the App keys.
+          enable-cache: false
+          restore-cache: false
+          save-cache: false
       - name: Install Claude Code
         run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
       - name: Run the on-call agent
@@ -207,7 +235,12 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: respond
-          path: /tmp/oncall/
+          # Only what the act job reads: artifacts on a public repo are downloadable.
+          path: |
+            /tmp/oncall/decision.json
+            /tmp/oncall/comment.md
+            /tmp/oncall/pr.md
+            /tmp/oncall/fix.bundle
           retention-days: 7
           if-no-files-found: ignore
 
@@ -280,6 +313,10 @@ jobs:
         if: steps.decision.outputs.action == 'fix'
         with:
           version: ${{ env.UV_VERSION }}
+          # No cache: it would carry what a session wrote to the jobs that hold the App keys.
+          enable-cache: false
+          restore-cache: false
+          save-cache: false
       - name: Push the fix and open the PR, or post the patch
         id: fix
         if: steps.decision.outputs.action == 'fix'
@@ -332,6 +369,17 @@ jobs:
           else
             gh issue close "$INCIDENT" --reason completed
           fi
+      - name: Ask for help if a step failed
+        # A refused push, a failed token mint or a failed gh call: nothing else says so.
+        if: failure()
+        env:
+          REASON: "a step of the act job failed (see the run's log)"
+        run: |
+          [[ $INCIDENT =~ ^[1-9][0-9]*$ ]] || exit 1
+          python3 scripts/oncall.py stalled-body "$ALERT" "$STATUS" "$ALERT_ENV" "$TITLE" "$RUN_URL" \
+            "$REASON" > "$RUNNER_TEMP/failed.md"
+          gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/failed.md"
+          gh issue edit "$INCIDENT" --add-label needs-yacine
       - name: Remove the key
         if: always()
         run: rm -rf "$RUNNER_TEMP/oncall-app"
@@ -463,6 +511,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
       - name: Install Claude Code
         run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
       - name: Run the reviewer agent
@@ -521,6 +570,10 @@ jobs:
         if: steps.result.outputs.verdict != ''
         with:
           version: ${{ env.UV_VERSION }}
+          # No cache: it would carry what a session wrote to the jobs that hold the App keys.
+          enable-cache: false
+          restore-cache: false
+          save-cache: false
       - name: Post it through the reviewer App
         id: post
         if: steps.result.outputs.verdict != ''
@@ -574,6 +627,10 @@ jobs:
       PR: ${{ needs.act.outputs.pr }}
       INCIDENT: ${{ needs.incident.outputs.incident }}
       ALERT_ENV: ${{ needs.incident.outputs.environment }}
+      ALERT: ${{ needs.incident.outputs.alert }}
+      STATUS: ${{ needs.incident.outputs.status }}
+      TITLE: ${{ needs.incident.outputs.title }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       POSTED: ${{ needs.post-review.outputs.posted || 'none' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -589,6 +646,10 @@ jobs:
         if: steps.check.outputs.ok == 'true'
         with:
           version: ${{ env.UV_VERSION }}
+          # No cache: it would carry what a session wrote to the jobs that hold the App keys.
+          enable-cache: false
+          restore-cache: false
+          save-cache: false
       - name: Squash-merge as the on-call App
         id: merge
         if: steps.check.outputs.ok == 'true'
@@ -604,7 +665,11 @@ jobs:
             REVIEWER_APP_KEY_PATH=$dir/key.pem uv run --quiet --locked --script scripts/reviewer_token.py)
           rm -f "$dir/key.pem"
           echo "::add-mask::$token"
-          GH_TOKEN=$token gh pr merge "$PR" --squash --delete-branch
+          # The squash commit's message is the workflow's own, so no text from the branch
+          # (a closing keyword, say) reaches main.
+          python3 scripts/oncall.py squash-body "$INCIDENT" "$PR" > "$RUNNER_TEMP/squash.md"
+          GH_TOKEN=$token gh pr merge "$PR" --squash --delete-branch \
+            --subject "fix(oncall): incident #$INCIDENT (#$PR)" --body-file "$RUNNER_TEMP/squash.md"
           token=""
           sha=$(gh pr view "$PR" --json mergeCommit --jq .mergeCommit.oid)
           echo "merged=true" >> "$GITHUB_OUTPUT"
@@ -627,6 +692,17 @@ jobs:
             gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/not-merged.md"
             gh issue edit "$INCIDENT" --add-label needs-yacine
           fi
+      - name: Ask for help if a step failed
+        # A refused push, a failed token mint or a failed gh call: nothing else says so.
+        if: failure()
+        env:
+          REASON: "a step of the merge job failed (see the run's log)"
+        run: |
+          [[ $INCIDENT =~ ^[1-9][0-9]*$ ]] || exit 1
+          python3 scripts/oncall.py stalled-body "$ALERT" "$STATUS" "$ALERT_ENV" "$TITLE" "$RUN_URL" \
+            "$REASON" > "$RUNNER_TEMP/failed.md"
+          gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/failed.md"
+          gh issue edit "$INCIDENT" --add-label needs-yacine
       - name: Remove the key
         if: always()
         run: rm -rf "$RUNNER_TEMP/oncall-app"
@@ -715,6 +791,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
       - name: Install Claude Code
         run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
       - name: Run the on-call agent

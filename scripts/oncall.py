@@ -28,6 +28,7 @@ checked values in its prompt, never through what an earlier session wrote on the
     check-pr <pr.json> <incident>        # the PR the reviewer reviews
     merge-check <pr.json> <incident>     # GITHUB_OUTPUT: ok, reason
     not-merged-body <incident> <pr> <reason> <app|fallback|none>
+    squash-body <incident> <pr>          # the squash commit's body: the workflow's text
     merged-body <environment> <incident> <pr> <sha>
     follow-up-prompt <out dir> --key value ...
     stalled-body <alert> <status> <environment> <incident title> <run url> <reason>
@@ -440,18 +441,29 @@ def check_fix(branch: str, number: str) -> list[str]:
     commits = _git("rev-list", "--count", f"origin/main..{branch}").strip()
     if commits == "0":
         problems.append("the branch has no commits")
-    files = [f for f in _git("diff", "--name-only", f"origin/main...{branch}").splitlines() if f]
+    # --no-renames: a rename then lists its old path too, so moving a protected file out
+    # of its place is refused like deleting or editing it.
+    files = [
+        f
+        for f in _git("diff", "--no-renames", "--name-only", f"origin/main...{branch}").splitlines()
+        if f
+    ]
     for f in files:
         if any(re.search(p, f) for p in PROTECTED_PATHS):
             problems.append(f"the fix may not change {f}")
     if len(files) > MAX_FIX_FILES:
         problems.append(f"the fix changes {len(files)} files (at most {MAX_FIX_FILES})")
     lines = 0
-    for row in _git("diff", "--numstat", f"origin/main...{branch}").splitlines():
+    for row in _git("diff", "--no-renames", "--numstat", f"origin/main...{branch}").splitlines():
         added, removed, _ = row.split("\t", 2)
         lines += int(added) + int(removed) if added.isdigit() and removed.isdigit() else 0
     if lines > MAX_FIX_LINES:
         problems.append(f"the fix changes {lines} lines (at most {MAX_FIX_LINES})")
+    messages = _git("log", "--format=%B", f"origin/main..{branch}")
+    if CLOSING.search(messages):
+        problems.append(
+            "a commit message has a closing keyword (Closes/Fixes/Resolves #n): use Refs"
+        )
     if not any(re.search(r"(^|/)tests?/|(^|/)test_[^/]*\.py$|\.test\.tsx?$", f) for f in files):
         problems.append("the fix has no test file (a regression test comes with it)")
     return problems
@@ -549,8 +561,19 @@ NOT_MERGED_WHY = {
 
 
 def not_merged_body(number: int, pr: int, reason: str, posted: str) -> str:
-    why = NOT_MERGED_WHY.get(posted, "No review was posted: the reviewer session didn't finish.")
+    why = NOT_MERGED_WHY.get(
+        posted, "No review was posted: the reviewer session didn't finish, or posting it failed."
+    )
     return render("not-merged", incident=number, pr=pr, reason=_one_line(reason), why=why)
+
+
+def squash_body(number: int, pr: int) -> str:
+    """The squash commit's body: the workflow's own text, never the branch's."""
+    return (
+        f"On-call fix for incident #{number}, from PR #{pr}, merged by the on-call workflow "
+        "(#35) after the reviewer App's approval and green CI.\n\n"
+        f"Refs #{number}\n"
+    )
 
 
 def merged_body(env: str, number: int, pr: int, sha: str) -> str:
@@ -715,6 +738,9 @@ def main(argv: list[str]) -> int:
         if command == "not-merged-body" and len(args) == 4:
             number, pr = _number(args[0], "incident"), _number(args[1], "pr")
             print(not_merged_body(number, pr, args[2], args[3]), end="")
+            return 0
+        if command == "squash-body" and len(args) == 2:
+            print(squash_body(_number(args[0], "incident"), _number(args[1], "pr")), end="")
             return 0
         if command == "merged-body" and len(args) == 4:
             if args[0] not in d.DEPLOYED:

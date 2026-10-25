@@ -392,6 +392,9 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     origin.mkdir()
     subprocess.run([*git, "init", "-q", "-b", "main"], cwd=origin, check=True)
     (origin / "README.md").write_text("x\n")
+    for protected in (".claude/settings.json", "scripts/oncall.py"):
+        (origin / protected).parent.mkdir(parents=True, exist_ok=True)
+        (origin / protected).write_text("# protected\n" * 5)
     subprocess.run([*git, "add", "."], cwd=origin, check=True)
     subprocess.run([*git, "commit", "-q", "-m", "seed"], cwd=origin, check=True)
     work = tmp_path / "work"
@@ -440,6 +443,46 @@ def test_a_fix_branch_that_touches_the_guardrails_or_has_no_test_is_refused(
     commit_branch("oncall/7-x", files)
     problems = o.check_fix("oncall/7-x", "7")
     assert any(says in p for p in problems), problems
+
+
+@pytest.mark.parametrize(
+    ("change", "says"),
+    [
+        (["git", "mv", ".claude/settings.json", "backend/settings.json"], ".claude/settings.json"),
+        (["git", "mv", "scripts/oncall.py", "backend/app/oncall.py"], "scripts/oncall.py"),
+        (["git", "rm", "-q", "scripts/oncall.py"], "scripts/oncall.py"),
+        (["git", "rm", "-q", ".claude/settings.json"], ".claude/settings.json"),
+    ],
+)
+def test_moving_or_deleting_a_protected_file_is_refused(
+    repo: Path, change: list[str], says: str
+) -> None:
+    """Without --no-renames, `git diff --name-only` lists only a rename's new path."""
+    subprocess.run(["git", "switch", "-q", "-c", "oncall/7-x", "origin/main"], check=True)
+    Path("backend/app").mkdir(parents=True, exist_ok=True)
+    subprocess.run(change, check=True)
+    Path("backend/tests").mkdir(parents=True, exist_ok=True)
+    Path("backend/tests/test_x.py").write_text("x\n")
+    subprocess.run(["git", "add", "-A", "backend"], check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "fix"], check=True)
+    problems = o.check_fix("oncall/7-x", "7")
+    assert f"the fix may not change {says}" in problems, problems
+
+
+def test_a_closing_keyword_in_a_commit_message_is_refused(repo: Path) -> None:
+    subprocess.run(["git", "switch", "-q", "-c", "oncall/7-x", "origin/main"], check=True)
+    Path("backend/tests").mkdir(parents=True)
+    Path("backend/tests/test_x.py").write_text("x\n")
+    subprocess.run(["git", "add", "backend"], check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "fix: x\n\nFixes #7"], check=True)
+    problems = o.check_fix("oncall/7-x", "7")
+    assert any("closing keyword" in p for p in problems), problems
+
+
+def test_the_squash_body_is_the_workflows() -> None:
+    body = o.squash_body(7, 12)
+    assert "Refs #7" in body and "PR #12" in body and "(#35)" in body
+    assert not o.CLOSING.search(body)
 
 
 def test_a_fix_branch_with_a_wrong_name_is_refused(repo: Path) -> None:
