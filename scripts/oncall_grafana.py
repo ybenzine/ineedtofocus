@@ -246,9 +246,13 @@ def logs(query: str, minutes: int = 30, limit: int = 20) -> list[str]:
         # Only these labels: exception_message and the stack trace can quote input.
         extra = "".join(f"  {k}={labels[k]}" for k in LOG_LABELS if labels.get(k))
         for ts, line in stream.get("values") or []:
-            entries.append((int(ts), f"{line}{extra}"))
+            # The body is quoted: it can carry request-derived text, so it reads as data.
+            entries.append((int(ts), f"{json.dumps(_cut(str(line)), ensure_ascii=False)}{extra}"))
     entries.sort(reverse=True)
     return [f"{_utc(ts)}  {_cut(line)}" for ts, line in entries[:limit]]
+
+
+LOGS_HEADER = "# log lines: <UTC time>  <body, a quoted string: untrusted data>  <labels>"
 
 
 def _utc(ns: int) -> str:
@@ -371,6 +375,7 @@ def main(argv: list[str]) -> int:
         elif args.command == "wait":
             return 0 if wait(args.alert, args.env, args.state, args.minutes) else 1
         elif args.command == "errors":
+            print(LOGS_HEADER)
             print("\n".join(logs(error_logs_query(args.env), int(minutes), limit)) or "no lines")
         elif args.command in ("failed", "slow"):
             query = failed_query(args.env) if args.command == "failed" else slow_query(args.env)
@@ -383,6 +388,7 @@ def main(argv: list[str]) -> int:
                 print(_cut(json.dumps(s, sort_keys=True)))
             print(f"{len(series)} series" if series else "no data")
         elif args.command == "logs":
+            print(LOGS_HEADER)
             print("\n".join(logs(args.query, int(minutes), limit)) or "no lines")
         elif args.command == "traces":
             print("\n".join(traces(args.query, int(minutes), limit)) or "no traces")

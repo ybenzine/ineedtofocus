@@ -500,4 +500,4 @@ def test_the_workflow_checks_the_payload_without_injection(workflow: dict[Any, A
     assert runs == ['python3 scripts/alert_dispatch.py check-event "$GITHUB_EVENT_PATH"']
     for other in workflow["jobs"].values():
         assert not [s["run"] for s in other["steps"] if "${{" in str(s.get("run", ""))]
-    assert workflow["jobs"]["respond"]["needs"] == "alert"
+    assert workflow["jobs"]["incident"]["needs"] == "alert"

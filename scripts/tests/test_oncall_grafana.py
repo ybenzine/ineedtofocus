@@ -242,7 +242,8 @@ def test_logs_newest_first_with_their_trace(grafana: type[Recorder]) -> None:
     )
     lines = og.logs(og.error_logs_query("dev"), minutes=30, limit=5)
     assert lines[0] == (
-        "2025-10-25T08:37:52Z  second line  exception_type=InjectedSaveFault  trace_id=" + "a" * 32
+        '2025-10-25T08:37:52Z  "second line"  exception_type=InjectedSaveFault  trace_id='
+        + "a" * 32
     )
     assert not [line for line in lines if "could quote input" in line]
     assert len(lines[1]) <= og.LINE + 22

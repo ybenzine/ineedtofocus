@@ -1,8 +1,0 @@
-## The fix PR #${pr}
-
-The reviewer step's result: **${review}** (verdict/how it was posted, from the reviewer session's own file; check it against GitHub below).
-
-1. Check the merge conditions: `gh pr view ${pr} --json state,reviewDecision,headRefOid,statusCheckRollup` and `gh pr checks ${pr} --required`. Merge only if `reviewDecision` is `APPROVED` (the reviewer App's approving review) **and** every required check passed. Then run `gh pr merge ${pr} --squash --delete-branch`, which deploys the fix to dev.
-2. If it isn't approved, don't merge. If the review fell back to a comment (the App key is unavailable), post `⛔ Needs Yacine: the reviewer App key is unavailable to the oncall workflow, so PR #${pr} can't be approved; restore REVIEWER_APP_KEY in the oncall environment, or review and approve the PR yourself`. If the review requested changes, or CI is red, post the findings and `⛔ Needs Yacine:` (a normal agent session takes the PR from here). Add the `needs-yacine` label either way.
-3. After a merge, watch the dev deploy: `gh run list --workflow ci.yml --branch main --event push --limit 1 --json databaseId,headSha,status,conclusion,url`, then `gh run watch <databaseId> --exit-status`. For a dev alert, verify with `wait ${alert} dev normal --minutes 15`. For a prod alert, the fix reaches prod only through a deploy Yacine approves: post `⛔ Needs Yacine: approve prod deploy of <merge sha> for incident #${incident}` and add the `needs-yacine` label.
-4. Report on the incident: timeline (UTC), cause, action, verification so far, follow-ups (as new issues). The resolved dispatch, a later run, finishes the report once the alert resolves.
