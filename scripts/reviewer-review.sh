@@ -7,11 +7,11 @@
 # Mints an installation token with scripts/reviewer_token.py and passes it to
 # `gh pr review` (--approve, --request-changes or --comment, --body-file) through
 # GH_TOKEN, in this process only: the token never reaches the terminal, a log or a file.
-# The review shows as the App's bot, so it can approve a PR the shared account authored,
+# The review shows as the App's bot, so it can approve a PR the agent account authored,
 # and its approval counts toward the review that branch protection on `main` requires.
 #
 # Fallback: if the App's private key is missing or unreadable (reviewer_token.py exits 3),
-# the review is posted as a COMMENT review from your default gh login instead, and this
+# the review is posted as a COMMENT review from your own gh login instead, and this
 # script says so. A comment can't approve, so the merge waits for Yacine to restore the
 # key (_docs/process.md §4). Any other failure (GitHub refused the token, network) stops
 # without posting, so it gets looked at instead of silently downgrading the review.

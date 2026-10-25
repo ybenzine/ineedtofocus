@@ -37,9 +37,10 @@
 # numeric workflow ID, and approving through `pending_deployments` or GraphQL
 # `approveDeployments` (#126). The workflow's name is deploy-prod too, so starting it by
 # name matches the same rules. Re-runs aren't denied: they wait for the approval again.
-# The gate is the environment's required approval, but agents' `gh` is Yacine, the
-# required reviewer, and the rules only match command text. #127 gives agents a credential
-# that can't approve. See _docs/deployment.md, Deploy to prod.
+# The gate is the environment's required approval, and it holds against agents: they act
+# as merciful-poseidon (#127), which isn't a production reviewer or an administrator, so
+# it can't approve a run or edit the environment. The #126 rules, which only match
+# command text, are the second line. See _docs/deployment.md, Deploy to prod.
 
 name: deploy-prod
 run-name: "Deploy to prod: ${{ inputs.tag || 'the release dev runs' }}"
