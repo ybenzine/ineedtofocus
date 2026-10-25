@@ -24,7 +24,8 @@
    runs against Prometheus, Loki and Tempo; each metrics query returns data, so a renamed
    metric or label can't blank a panel silently (scripts/grafana_dashboards.py verify).
 7. The user-impact alert rules (#33) are provisioned, Grafana evaluates them without
-   errors, and each of their queries returns data (scripts/grafana_alerts.py verify).
+   errors, their queries run and every metric they query has series
+   (scripts/grafana_alerts.py verify).
 
 Ports: APP_PORT (8000) and GRAFANA_PORT (3000), from the environment or .env. Stdlib only.
 """
@@ -326,7 +327,7 @@ def main() -> None:
         sys.exit("FAIL  alert rules: " + "; ".join(problems))
     print(
         f"ok    alert rules {grafana_alerts.group_name('local')} are provisioned, evaluate "
-        "without errors and their queries return data"
+        "without errors and the metrics they query have series"
     )
 
 

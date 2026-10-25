@@ -5,7 +5,7 @@
     python3 scripts/grafana_alerts.py --check    # fail if those files are out of date
     python3 scripts/grafana_alerts.py verify [<grafana url>]
         # the local stack (`make up`): the local rules are provisioned, Grafana evaluates
-        # them without errors, and each of their queries returns data
+        # them without errors, their queries run and the metrics they query have series
     python3 scripts/grafana_alerts.py wait <rule> <state> [--minutes N] [<grafana url>]
         # wait until a local rule (session-save-errors, history-latency) is in a state
         # (firing, pending, normal), e.g. during a fault-injection drill
@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -294,13 +295,25 @@ def rule_states(grafana: str) -> dict[str, dict[str, Any]]:
     return states
 
 
+SELECTOR = re.compile(r"\b[a-z_][a-z0-9_]*\{[^}]*\}")
+
+
+def selectors(env: str) -> list[str]:
+    """Every distinct `metric{labels}` the environment's rules query, in order."""
+    return list(dict.fromkeys(m for _, expr in queries(env) for m in SELECTOR.findall(expr)))
+
+
 def verify(grafana: str, wait_s: float = 0) -> list[str]:
     """Problems with the local rules in the running local stack (empty: none).
 
-    Each query must return at least one series, not merely parse: a renamed metric or
-    label would otherwise leave the rule quietly evaluating no data, which is never an
-    alert. Needs the journey traffic `make check-stack` sends first (a save and a history
-    load) and a metric export since; "no data" is retried for up to `wait_s` seconds."""
+    Every query must run, and every metric selector in it must return series, not merely
+    parse: a renamed metric or label would otherwise leave the rule quietly evaluating no
+    data, which is never an alert. The selectors are checked rather than the whole
+    expressions, because those are no data by design whenever the 5-minute window holds
+    too little traffic (the `> 0` filters above): one history load makes the latency
+    series exist, but its p95 needs a second sample. Needs the journey traffic `make
+    check-stack` sends first (a save and a history load) and a metric export since; "no
+    data" is retried for up to `wait_s` seconds."""
     deadline = time.monotonic() + wait_s
     while True:
         problems: list[str] = []
@@ -316,14 +329,19 @@ def verify(grafana: str, wait_s: float = 0) -> list[str]:
             elif state.get("health") not in ("ok", "nodata", None) or state.get("lastError"):
                 problems.append(f"rule {name} fails to evaluate: {state.get('lastError')}")
         for title, expr in queries("local"):
-            target = {"datasource": {"type": "prometheus"}, "expr": expr}
+            try:
+                g.run_query(grafana, {"datasource": {"type": "prometheus"}, "expr": expr})
+            except (RuntimeError, OSError) as e:
+                problems.append(f"{title}: {e}")
+        for selector in selectors("local"):
+            target = {"datasource": {"type": "prometheus"}, "expr": selector}
             try:
                 series = g.run_query(grafana, target)
             except (RuntimeError, OSError) as e:
-                problems.append(f"{title}: {e}")
+                problems.append(f"{selector}: {e}")
                 continue
             if not series:
-                problems.append(f"{title}: {g.NO_DATA} (unknown metric or label?): {expr}")
+                problems.append(f"{selector} {g.NO_DATA} (unknown metric or label?)")
         if not any(g.NO_DATA in p for p in problems) or time.monotonic() > deadline:
             return problems
         time.sleep(5)
@@ -456,7 +474,7 @@ def main(argv: list[str]) -> int:
                 print(f"FAIL  alert rules: {problem}", file=sys.stderr)
             if problems:
                 return 1
-            print(f"ok    {group_name('local')} is provisioned and its queries return data")
+            print(f"ok    {group_name('local')} is provisioned and its metrics have series")
             return 0
         if len(argv) not in (2, 3) or normalised(argv[1]) not in ("firing", "pending", "normal"):
             print(__doc__, file=sys.stderr)

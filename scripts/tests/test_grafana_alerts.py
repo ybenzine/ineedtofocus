@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -152,12 +153,23 @@ def test_documented() -> None:
 # --- verify and wait (the local stack) ---------------------------------------------------
 
 
-def _grafana(states: list[dict[str, Any]], empty: bool = False) -> Any:
+def _grafana(
+    states: list[dict[str, Any]], empty: bool = False, quiet: bool = False, bad: str = ""
+) -> Any:
+    """A fake local Grafana. `empty`: no series at all (renamed metric); `quiet`: the
+    series exist but the full expressions are no data (too little traffic in the window);
+    `bad`: the backend refuses queries containing it."""
+
     def fake(url: str) -> Any:
         if "/api/prometheus/grafana/api/v1/rules" in url:
             return {"data": {"groups": [{"name": "key-journey-local", "rules": states}]}}
         assert "/prometheus/api/v1/query" in url
-        return {"status": "success", "data": {"result": [] if empty else [{"value": [0, "1"]}]}}
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)["query"][0]
+        if bad and bad in query:
+            raise RuntimeError("HTTP 400: bad_data")
+        full = query not in a.selectors("local")
+        none = empty or (quiet and full)
+        return {"status": "success", "data": {"result": [] if none else [{"value": [0, "1"]}]}}
 
     return fake
 
@@ -175,12 +187,28 @@ def test_verify_passes_on_healthy_rules_with_data(monkeypatch: pytest.MonkeyPatc
     assert a.verify("http://grafana.invalid") == []
 
 
-def test_verify_needs_data_from_every_query(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_verify_needs_series_for_every_selector(monkeypatch: pytest.MonkeyPatch) -> None:
     """A renamed metric parses fine and returns nothing: the rule would never fire."""
     monkeypatch.setattr(g, "_get", _grafana(HEALTHY, empty=True))
     problems = a.verify("http://grafana.invalid")
-    assert len(problems) == len(a.queries("local")) == 3
+    # The error-outcome series, all sessions, the history latency buckets.
+    assert len(a.selectors("local")) == 3
+    assert len(problems) == 3
     assert all(g.NO_DATA in p for p in problems)
+    assert any('outcome="error"' in p for p in problems)
+
+
+def test_verify_accepts_a_quiet_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The full expressions are no data by design with too little traffic (one history
+    load: the p95 needs a second sample); the series existing is what proves the names."""
+    monkeypatch.setattr(g, "_get", _grafana(HEALTHY, quiet=True))
+    assert a.verify("http://grafana.invalid") == []
+
+
+def test_verify_reports_a_query_the_backend_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(g, "_get", _grafana(HEALTHY, bad="histogram_quantile"))
+    [problem] = a.verify("http://grafana.invalid")
+    assert problem.startswith("History slow (local) [A]: HTTP 400")
 
 
 def test_verify_reports_missing_and_broken_rules(monkeypatch: pytest.MonkeyPatch) -> None:
