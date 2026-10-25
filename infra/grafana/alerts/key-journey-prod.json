@@ -125,7 +125,7 @@
                   "type": "prometheus",
                   "uid": "grafanacloud-prom"
                 },
-                "expr": "sum(increase(focus_history_loads_total{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\"}[5m])) >= 5",
+                "expr": "sum(increase(focus_history_load_duration_seconds_count{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\"}[5m])) >= 5",
                 "instant": true,
                 "range": false,
                 "intervalMs": 1000,

@@ -20,8 +20,9 @@ import yaml  # type: ignore[import-untyped]  # no stubs in the locked env
 REPO = Path(__file__).resolve().parents[2]
 OBSERVABILITY = (REPO / "_docs" / "observability.md").read_text()
 PROM_SELECTOR = re.compile(r"\b([a-z_][a-z0-9_]*)\{([^}]*)\}")
-# Only the journey's own metrics (#31): saves and history latency.
-JOURNEY_METRICS = {g.SAVES, f"{g.HISTORY_DURATION}_bucket", g.HISTORY_LOADS}
+# Only the journey's own metrics (#31): saves and history latency. Not
+# `focus_history_loads_total`: the history minimum counts the latency samples (#208).
+JOURNEY_METRICS = {g.SAVES, f"{g.HISTORY_DURATION}_bucket", f"{g.HISTORY_DURATION}_count"}
 RESOURCE_WORDS = re.compile(r"cpu|memory|mem_|heap|disk|filesystem|process_|container_|node_")
 
 
@@ -75,7 +76,7 @@ def test_thresholds_are_the_agreed_ones() -> None:
     assert save["data"][2]["model"]["expression"] == "$A > 0.05 && $B >= 10"
     assert history["data"][2]["model"]["expression"] == "$A > 2 && $B >= 5"
     assert history["data"][1]["model"]["expr"] == (
-        f"sum(increase({g.HISTORY_LOADS}{g._sel('prod')}[5m])) >= 5"
+        f"sum(increase({g.HISTORY_DURATION}_count{g._sel('prod')}[5m])) >= 5"
     )
     for rule in (save, history):
         assert rule["condition"] == "C"
@@ -114,8 +115,41 @@ def test_below_a_minimum_the_window_is_no_data() -> None:
     save, history = a.rules("prod")
     assert save["data"][1]["model"]["expr"] == f"{a.sessions_submitted('prod')} >= 10"
     assert history["data"][1]["model"]["expr"] == f"{a.history_loads('prod')} >= 5"
-    # Every history load counts, whatever its outcome (the counter is zero-initialised).
+    # Every load that recorded a latency counts, whatever its outcome: the samples behind A.
     assert "outcome" not in a.history_loads("prod")
+
+
+# A window of history traffic, as the backend records it (backend/app/metrics.py, checked
+# by tests/integration/test_journey_telemetry.py): a load that reaches the handler adds 1
+# to `focus_history_loads_total` and one latency sample to the histogram; a request FastAPI
+# rejects with a 422 before the handler (`count_early_failure`) adds 1 to the counter only.
+def _window(rejected: int, slow: int) -> dict[str, float]:
+    """The 5-minute `increase()` of each history series, by metric name."""
+    return {g.HISTORY_LOADS: rejected + slow, f"{g.HISTORY_DURATION}_count": slow}
+
+
+def _instant(expr: str, window: dict[str, float]) -> list[float]:
+    """Evaluate a count query of the shape `sum(increase(<metric>{…}[5m])) >= N` the way
+    Prometheus does: one value, or no result at all when the comparison filters it out."""
+    m = re.fullmatch(r"sum\(increase\(([a-z_]+)\{[^}]*\}\[5m\]\)\) >= (\d+)", expr)
+    assert m, f"not a count query: {expr}"
+    value = window[m.group(1)]
+    return [value] if value >= int(m.group(2)) else []
+
+
+def test_rejected_history_loads_do_not_count_towards_the_minimum() -> None:
+    """#208: 4 requests FastAPI rejects with a 422 and 1 slow valid load in the window. A,
+    the p95 of that one sample, is over 2 s, but B counts 1 load, below 5, so it is no data
+    and the rule stays Normal. Counting `focus_history_loads_total`, every outcome, would
+    have made B 5 and paged on one slow request."""
+    _, history = a.rules("prod")
+    b = history["data"][1]["model"]["expr"]
+    window = _window(rejected=4, slow=1)
+    assert _instant(b, window) == []  # no data
+    assert history["noDataState"] == "OK"  # no data is Normal, never firing
+    old = a.at_least(f"sum(increase({g.HISTORY_LOADS}{g._sel('prod')}[5m]))", 5)
+    assert _instant(old, window) == [5]  # the old query met the minimum
+    assert _instant(b, _window(rejected=0, slow=5)) == [5]  # 5 timed loads do
 
 
 @pytest.mark.parametrize("env", a.ENVIRONMENTS)
@@ -207,7 +241,7 @@ def test_verify_needs_series_for_every_selector(monkeypatch: pytest.MonkeyPatch)
     """A renamed metric parses fine and returns nothing: the rule would never fire."""
     monkeypatch.setattr(g, "_get", _grafana(HEALTHY, empty=True))
     problems = a.verify("http://grafana.invalid")
-    # The error-outcome series, all sessions, the history latency buckets, history loads.
+    # The error-outcome series, all sessions, the history latency buckets and its count.
     assert len(a.selectors("local")) == 4
     assert len(problems) == 4
     assert all(g.NO_DATA in p for p in problems)
