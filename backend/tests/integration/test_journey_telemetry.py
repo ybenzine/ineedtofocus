@@ -301,7 +301,8 @@ def test_history_loads_rejected_before_the_handler_record_no_latency(
 ) -> None:
     """#208: the history alert's minimum counts the latency samples
     (`focus_history_load_duration_seconds_count`), so 4 of FastAPI's 422s and 1 valid load
-    are 1 towards it, while `focus_history_loads_total` counts all 5."""
+    are 1 towards it, while `focus_history_loads_total` counts all 5. A 422 from the handler
+    itself (an unknown time zone) records a latency, so it counts."""
 
     def loads() -> int:
         return sum(int(p.value) for p in _points("focus.history.loads").values())
@@ -317,6 +318,9 @@ def test_history_loads_rejected_before_the_handler_record_no_latency(
     assert c.get("/api/history?view=all&tz=UTC").status_code == 200
     assert loads() == before_loads + 5
     assert timed() == before_timed + 1
+    assert c.get("/api/history?view=all&tz=Not/AZone").status_code == 422  # from the handler
+    assert loads() == before_loads + 6
+    assert timed() == before_timed + 2
 
 
 def test_a_failure_inside_the_handler_is_counted_once(
