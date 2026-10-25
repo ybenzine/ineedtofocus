@@ -20,6 +20,20 @@ export async function markArchivedOnDevice(
   }
 }
 
+/** The server lists these ids as live: clear the archived mark on the device copy. */
+export async function clearArchivedOnDevice(
+  store: SessionStore,
+  owner: string,
+  ids: readonly string[],
+  /** Ids to leave alone, asked per id just before each write (archived or restored on this screen). */
+  isSkipped: (id: string) => boolean = () => false,
+): Promise<void> {
+  for (const id of ids) {
+    if (isSkipped(id)) continue
+    await store.setArchived(owner, id, null)
+  }
+}
+
 /**
  * `missing` are device sessions the server's active History doesn't list. Each is either
  * archived (then it is in the Archive list: mark it archived) or deleted (not there: remove the
@@ -31,6 +45,8 @@ export async function reconcileMissing(
   archiveApi: Pick<ArchiveApi, 'list'>,
   owner: string,
   missing: readonly string[],
+  /** Ids to leave alone, asked per id just before each write. */
+  isSkipped: (id: string) => boolean = () => false,
 ): Promise<void> {
   if (missing.length === 0) return
   const result = await archiveApi.list()
@@ -40,9 +56,10 @@ export async function reconcileMissing(
     store,
     owner,
     missing.flatMap((id) => archived.get(id) ?? []),
+    isSkipped,
   )
   await store.forget(
     owner,
-    missing.filter((id) => !archived.has(id)),
+    missing.filter((id) => !archived.has(id) && !isSkipped(id)),
   )
 }

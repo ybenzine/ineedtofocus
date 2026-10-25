@@ -25,6 +25,7 @@ import type { AudioSource } from './setup/options.ts'
 import SessionSummary from './timerscreen/SessionSummary.tsx'
 import TimerScreen from './timerscreen/TimerScreen.tsx'
 import { createAppServices, type AppServices } from './services.ts'
+import { useTheme } from './theme.ts'
 import type { TimerController, TimerUpdate } from './timer/index.ts'
 
 export interface AppProps {
@@ -132,6 +133,7 @@ function AppBody({
   const sourceStore = useMemo(() => audioStore ?? new LocalAudioSourceStore(), [audioStore])
   const { values } = useSettingsState()
   const [view, setView] = useState<View>({ name: 'loading' })
+  useTheme(values.theme, view.name === 'timer' || view.name === 'summary')
   // The audio source is remembered with the active session (sourceStore), so a reload restores it.
   const [notice, setNotice] = useState<string | null>(null)
   const [audio, setAudio] = useState<AudioSource>('none')

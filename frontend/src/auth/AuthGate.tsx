@@ -15,6 +15,7 @@ import {
   setPendingLogout,
   USER_KEY,
 } from './localData.ts'
+import { applyTheme } from '../theme.ts'
 
 interface Props {
   children: ReactNode
@@ -53,6 +54,10 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
     expiredRef.current = expired
     userRef.current = user
   }, [expired, user])
+  // Signed out: the sign-in screen follows the device, not the last user's explicit theme.
+  useEffect(() => {
+    if (!checking && !user) applyTheme('system')
+  }, [checking, user])
 
   /**
    * Ends the server session left over from an offline sign-out. Resolves `'done'` once none is
