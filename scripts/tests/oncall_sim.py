@@ -5,9 +5,9 @@ the workflow's job order. The workflow file supplies the `needs`, the job and st
 conditions, and the `env:` and `outputs:` expressions. A test only picks the scenario:
 what the fake `gh`, `claude` and `uv` answer, and what the sessions leave behind.
 
-- `actions/checkout`: a fresh clone of a throwaway origin repo, with the real `scripts/`
-  and `infra/` linked in. git is real, so a fix branch really is bundled, fetched, checked
-  and pushed (to that origin).
+- `actions/checkout`: a fresh clone of a throwaway origin repo, with the real `scripts/`,
+  `infra/` and `.claude/agents/` linked in. git is real, so a fix branch really is bundled,
+  fetched, checked and pushed (to that origin).
 - `upload-artifact` / `download-artifact`: copies between the jobs' directories.
 - `gh`: answers from the scenario's files, logs every call (with the token it was given)
   and keeps every posted comment.
@@ -96,7 +96,9 @@ env > "$session/full-env"
 script="$SIM/session-$agent-$((n + 1)).sh"
 [[ -f $script ]] || script="$SIM/session-$agent.sh"
 [[ -f $script ]] && bash "$script"
-echo '{"num_turns": 3, "total_cost_usd": 0.42, "subtype": "success"}'
+# The result JSON: the scenario's, or a session that ended normally.
+cat "$SIM/claude-result-$agent" 2> /dev/null ||
+  echo '{"type": "result", "num_turns": 3, "total_cost_usd": 0.42, "subtype": "success"}'
 exit "$(cat "$SIM/claude-exit-$agent" 2> /dev/null || echo 0)"
 """
 
@@ -337,9 +339,9 @@ class Simulation:
         with_ = {k: substitute(v, ctx) for k, v in (step.get("with") or {}).items()}
         if uses.startswith("actions/checkout@"):
             self._git(job_dir, "clone", "-q", str(self.origin), str(work))
-            for linked in ("scripts", "infra"):
+            for linked in ("scripts", "infra", ".claude/agents"):
                 (work / linked).symlink_to(REPO / linked)
-            (work / ".git" / "info" / "exclude").write_text("scripts\ninfra\n")
+            (work / ".git" / "info" / "exclude").write_text("scripts\ninfra\n.claude/agents\n")
             return True, {}
         if uses.startswith(("actions/setup-node@", "astral-sh/setup-uv@")):
             return True, {}

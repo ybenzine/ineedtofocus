@@ -78,7 +78,7 @@ Each agent is a Claude Code subagent: a role prompt, the tools it may use, and t
 | Frontend | [`.claude/agents/frontend.md`](../.claude/agents/frontend.md) | Read, Write, Edit, Glob, Grep, Bash |
 | QA | [`.claude/agents/qa.md`](../.claude/agents/qa.md) | Read, Write, Edit, Glob, Grep, Bash |
 | DevOps | [`.claude/agents/devops.md`](../.claude/agents/devops.md) | Read, Write, Edit, Glob, Grep, Bash |
-| Reviewer | [`.claude/agents/reviewer.md`](../.claude/agents/reviewer.md) | Read, Glob, Grep, Bash — no Write/Edit tools; Bash is for running tests and `gh`, and its role forbids editing, committing, pushing or merging |
+| Reviewer | [`.claude/agents/reviewer.md`](../.claude/agents/reviewer.md) | Read, Write, Glob, Grep, Bash — no Edit tool; Write is for the review body under `/tmp` (the headless review in the on-call workflow has no other way to leave it, #232), Bash for running tests and `gh`, and its role forbids editing repo files, committing, pushing or merging |
 | On-call | [`.claude/agents/oncall.md`](../.claude/agents/oncall.md) | Read, Write, Edit, Glob, Grep, Bash. Run headless by the alert workflow, `.github/workflows/oncall.yml` (#35), which also runs the reviewer on its fix PRs ([observability.md → On-call agent](observability.md#on-call-agent-35)) |
 
 ## Models

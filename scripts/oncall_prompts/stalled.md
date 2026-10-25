@@ -1,6 +1,6 @@
 ⛔ Needs Yacine: the on-call workflow took no action for `${alert}` ${status} in ${env} (${incident_title}, #35).
 
-Why: ${reason}
+Why: ${reason}${session}
 
 A session that hits its turn, budget or time cap, fails, or leaves files that don't pass the workflow's check gets no rollback, review or merge. The run: ${run_url}
 

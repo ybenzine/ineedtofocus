@@ -27,11 +27,15 @@ checked values in its prompt, never through what an earlier session wrote on the
     check-comment <file>                 # a session's comment: there, not empty, not huge
     check-pr <pr.json> <incident>        # the PR the reviewer reviews
     merge-check <pr.json> <incident>     # GITHUB_OUTPUT: ok, reason
-    not-merged-body <incident> <pr> <reason> <app|fallback|none>
+    not-merged-body <incident> <pr> <reason> <app|fallback|none> [<session line>]
     squash-body <incident> <pr>          # the squash commit's body: the workflow's text
     merged-body <environment> <incident> <pr> <sha>
     follow-up-prompt <out dir> --key value ...
     stalled-body <alert> <status> <environment> <incident title> <run url> <reason>
+        [<session line>]
+    session-summary <result.json> respond|review|follow-up
+        # after a session: Claude Code's result (subtype, turns, cost, refused tool calls,
+        # named safely) in the step summary; GITHUB_OUTPUT: session (one line)
     open-fix-pr <prs.json> <incident>    # prints the incident's open on-call PR, if any
 
 The prompts are the Markdown templates in scripts/oncall_prompts/. Stdlib only, plus
@@ -581,11 +585,18 @@ NOT_MERGED_WHY = {
 }
 
 
-def not_merged_body(number: int, pr: int, reason: str, posted: str) -> str:
+def not_merged_body(number: int, pr: int, reason: str, posted: str, session: str = "") -> str:
     why = NOT_MERGED_WHY.get(
         posted, "No review was posted: the reviewer session didn't finish, or posting it failed."
     )
-    return render("not-merged", incident=number, pr=pr, reason=_one_line(reason), why=why)
+    return render(
+        "not-merged",
+        incident=number,
+        pr=pr,
+        reason=_one_line(reason),
+        why=why,
+        session=_session_note(session),
+    )
 
 
 def squash_body(number: int, pr: int) -> str:
@@ -674,7 +685,9 @@ def follow_up_prompt(values: dict[str, str]) -> str:
     )
 
 
-def stalled_body(alert: str, status: str, env: str, title: str, run_url: str, reason: str) -> str:
+def stalled_body(
+    alert: str, status: str, env: str, title: str, run_url: str, reason: str, session: str = ""
+) -> str:
     if not RUN_URL.fullmatch(run_url):
         raise Invalid("not a run of this repo")
     if alert not in d.ALERTS or env not in d.DEPLOYED or status not in d.STATUSES:
@@ -688,7 +701,100 @@ def stalled_body(alert: str, status: str, env: str, title: str, run_url: str, re
         runbook=f"{RUNBOOKS}/{alert}.md",
         run_url=run_url,
         reason=_one_line(reason) or "no reason recorded",
+        session=_session_note(session),
     )
+
+
+# --- What a session's Claude Code run ended with (#232) -------------------------------
+
+SESSIONS = ("respond", "review", "follow-up")
+# Words from a session's result that may reach a comment: no spaces, no @ (a mention), no
+# # (a reference), no Markdown or shell syntax. The tool input around them stays out: a
+# command or a path can carry text the session read from Grafana or GitHub.
+SAFE_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/=+-]{0,59}")
+SAFE_LINE = re.compile(r"[^A-Za-z0-9 _.,:;()/=+$'-]")
+MAX_LABELS = 5
+
+
+def _denied_label(denial: Any) -> str:
+    """A refused tool call, named safely: the tool, and for Bash the command's first words
+    up to the first flag, or for a file tool the file's name."""
+    if not isinstance(denial, dict):
+        return "?"
+    tool = str(denial.get("tool_name", ""))
+    if not SAFE_WORD.fullmatch(tool):
+        return "?"
+    given = denial.get("tool_input")
+    given = given if isinstance(given, dict) else {}
+    if tool == "Bash":
+        words = []
+        for word in str(given.get("command", "")).split()[:3]:
+            if word.startswith("-") or not SAFE_WORD.fullmatch(word):
+                break
+            words.append(word)
+        return f"Bash({' '.join(words)})" if words else "Bash"
+    name = Path(str(given.get("file_path", ""))).name
+    return f"{tool}({name})" if SAFE_WORD.fullmatch(name) else tool
+
+
+def session_result(raw: Any) -> tuple[str, list[str]]:
+    """Claude Code's `--output-format json` result, as one safe line and the refused calls:
+    the result's subtype, turns, cost, and each refused tool call's label with its count."""
+    if not isinstance(raw, dict) or raw.get("type", "result") != "result":
+        return "Claude Code left no result (the step's time cap, or the CLI failed)", []
+    subtype = str(raw.get("subtype", ""))
+    subtype = subtype if re.fullmatch(r"[a-z_]{1,40}", subtype) else "unknown"
+    parts = [f"ended with {subtype}" + (" (an error)" if raw.get("is_error") is True else "")]
+    turns, cost = raw.get("num_turns"), raw.get("total_cost_usd")
+    if isinstance(turns, int) and not isinstance(turns, bool):
+        parts.append(f"after {turns} turns")
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+        parts.append(f"for ${cost:.2f}")
+    denials = raw.get("permission_denials")
+    denials = denials if isinstance(denials, list) else []
+    counts: dict[str, int] = {}
+    for denial in denials:
+        label = _denied_label(denial)
+        counts[label] = counts.get(label, 0) + 1
+    labels = [f"{label} x{n}" for label, n in sorted(counts.items(), key=lambda kv: -kv[1])]
+    line = ", ".join(parts)
+    if denials:
+        shown = ", ".join(labels[:MAX_LABELS])
+        more = f" and {len(labels) - MAX_LABELS} more" if len(labels) > MAX_LABELS else ""
+        line += f"; {len(denials)} tool calls refused: {shown}{more}"
+    else:
+        line += "; no tool call refused"
+    return line, labels
+
+
+def session_summary(result_path: str, session: str) -> int:
+    """After a session: its result in the step summary and the job's `session` output, for
+    the ⛔ Needs Yacine: comment when the session leaves nothing usable."""
+    if session not in SESSIONS:
+        raise Invalid(f"unknown session {session!r}")
+    try:
+        raw: Any = json.loads(Path(result_path).read_text())
+    except (OSError, json.JSONDecodeError):
+        raw = None
+    line, labels = session_result(raw)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        rows = "".join(f"- `{label}`\n" for label in labels)
+        intro = "Refused tool calls (the session's allow list is in scripts/oncall-claude.sh):"
+        refused = f"\n{intro}\n\n{rows}" if rows else ""
+        with open(summary, "a") as f:
+            f.write(f"### Claude Code session: {session}\n\n{line}\n{refused}\n")
+    level = "warning" if labels or "error" in line or "no result" in line else "notice"
+    print(f"::{level} title=Claude Code session ({session})::{json.dumps(line)}")
+    _write_outputs({"session": line})
+    return 0
+
+
+def _session_note(session: str) -> str:
+    """The session's line in a comment: checked again here, on the fresh checkout, since
+    the job that wrote it ran a session."""
+    text = _one_line(SAFE_LINE.sub("", _one_line(session)))
+    return f"\n\nClaude Code: {text}." if text else ""
 
 
 # --- CLI ------------------------------------------------------------------------------
@@ -756,9 +862,9 @@ def main(argv: list[str]) -> int:
             for p in problems:
                 print(f"::error title=Not the on-call fix PR::{json.dumps(p)}")
             return 1 if problems else 0
-        if command == "not-merged-body" and len(args) == 4:
+        if command == "not-merged-body" and len(args) in (4, 5):
             number, pr = _number(args[0], "incident"), _number(args[1], "pr")
-            print(not_merged_body(number, pr, args[2], args[3]), end="")
+            print(not_merged_body(number, pr, *args[2:]), end="")
             return 0
         if command == "squash-body" and len(args) == 2:
             print(squash_body(_number(args[0], "incident"), _number(args[1], "pr")), end="")
@@ -773,9 +879,11 @@ def main(argv: list[str]) -> int:
             return 0
         if command == "follow-up-prompt" and args:
             return _write(args[0], "follow-up-prompt.md", follow_up_prompt(_options(args[1:])))
-        if command == "stalled-body" and len(args) == 6:
+        if command == "stalled-body" and len(args) in (6, 7):
             print(stalled_body(*args), end="")
             return 0
+        if command == "session-summary" and len(args) == 2:
+            return session_summary(args[0], args[1])
         if command == "open-fix-pr" and len(args) == 2:
             found = open_fix_pr(json.loads(Path(args[0]).read_text()), _number(args[1], "incident"))
             print(found or "")

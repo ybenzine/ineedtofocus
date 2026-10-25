@@ -183,6 +183,8 @@ jobs:
       pull-requests: read
       actions: read
       checks: read
+    outputs:
+      session: ${{ steps.session.outputs.session }}
     env:
       GH_REPO: ${{ github.repository }}
     steps:
@@ -221,7 +223,14 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GRAFANA_READONLY_TOKEN: ${{ secrets.GRAFANA_READONLY_TOKEN }}
           GH_TOKEN: ${{ github.token }}
-        run: scripts/oncall-claude.sh oncall 60 10 "$ONCALL_OUT/prompt.md" "$RUNNER_TEMP/agent.json"
+        run: scripts/oncall-claude.sh respond 60 10 "$ONCALL_OUT/prompt.md" "$RUNNER_TEMP/agent.json"
+      - name: Summarise the session
+        # Claude Code's result: subtype, turns, cost and the refused tool calls, named
+        # safely (#232). The transcript stays on the runner: it holds untrusted and Grafana
+        # text. The job that posts a ⛔ Needs Yacine: checks the line again.
+        id: session
+        if: ${{ !cancelled() }}
+        run: python3 scripts/oncall.py session-summary "$RUNNER_TEMP/agent.json" respond
       - name: Pack the agent's fix branch
         if: ${{ !cancelled() }}
         run: |
@@ -271,6 +280,7 @@ jobs:
       ROLLED_BACK: ${{ needs.incident.outputs.rolled_back }}
       OPEN_PR: ${{ needs.incident.outputs.open_pr }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      SESSION: ${{ needs.respond.outputs.session }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -295,7 +305,7 @@ jobs:
         run: |
           if [[ $ACTION == stalled ]]; then
             python3 scripts/oncall.py stalled-body "$ALERT" "$STATUS" "$ALERT_ENV" "$TITLE" "$RUN_URL" \
-              "$REASON" > "$RUNNER_TEMP/stalled.md"
+              "$REASON" "$SESSION" > "$RUNNER_TEMP/stalled.md"
             gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/stalled.md"
           else
             gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/respond/comment.md"
@@ -483,6 +493,8 @@ jobs:
       pull-requests: read
       actions: read
       checks: read
+    outputs:
+      session: ${{ steps.session.outputs.session }}
     env:
       GH_REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
@@ -518,9 +530,14 @@ jobs:
         timeout-minutes: 15
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          scripts/oncall-claude.sh reviewer 40 5 "$ONCALL_OUT/review-prompt.md" "$RUNNER_TEMP/reviewer.json" \
-            'Bash(gh pr checkout *)' 'Bash(git checkout *)' 'Bash(git switch *)' 'Bash(make *)'
+        run: scripts/oncall-claude.sh review 40 5 "$ONCALL_OUT/review-prompt.md" "$RUNNER_TEMP/reviewer.json"
+      - name: Summarise the session
+        # Claude Code's result: subtype, turns, cost and the refused tool calls, named
+        # safely (#232). The transcript stays on the runner: it holds untrusted and Grafana
+        # text. The job that posts a ⛔ Needs Yacine: checks the line again.
+        id: session
+        if: ${{ !cancelled() }}
+        run: python3 scripts/oncall.py session-summary "$RUNNER_TEMP/reviewer.json" review
       - name: Hand the review to the next job
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -605,7 +622,7 @@ jobs:
 
   merge:
     name: Merge the fix (on-call App)
-    needs: [incident, act, post-review]
+    needs: [incident, act, review, post-review]
     if: ${{ always() && needs.act.outputs.pr != '' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -632,6 +649,7 @@ jobs:
       TITLE: ${{ needs.incident.outputs.title }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       POSTED: ${{ needs.post-review.outputs.posted || 'none' }}
+      SESSION: ${{ needs.review.outputs.session }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -689,7 +707,8 @@ jobs:
             if [[ $ALERT_ENV == prod ]]; then gh issue edit "$INCIDENT" --add-label needs-yacine; fi
           else
             if [[ $APP == missing ]]; then REASON="the on-call App isn't set up (ONCALL_APP_KEY and its IDs)"; fi
-            python3 scripts/oncall.py not-merged-body "$INCIDENT" "$PR" "$REASON" "$POSTED" > "$RUNNER_TEMP/not-merged.md"
+            python3 scripts/oncall.py not-merged-body "$INCIDENT" "$PR" "$REASON" "$POSTED" "$SESSION" \
+              > "$RUNNER_TEMP/not-merged.md"
             gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/not-merged.md"
             gh issue edit "$INCIDENT" --add-label needs-yacine
           fi
@@ -760,6 +779,8 @@ jobs:
       pull-requests: read
       actions: read
       checks: read
+    outputs:
+      session: ${{ steps.session.outputs.session }}
     env:
       GH_REPO: ${{ github.repository }}
     steps:
@@ -801,7 +822,14 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GRAFANA_READONLY_TOKEN: ${{ secrets.GRAFANA_READONLY_TOKEN }}
           GH_TOKEN: ${{ github.token }}
-        run: scripts/oncall-claude.sh oncall 40 6 "$ONCALL_OUT/follow-up-prompt.md" "$RUNNER_TEMP/agent.json"
+        run: scripts/oncall-claude.sh follow-up 40 6 "$ONCALL_OUT/follow-up-prompt.md" "$RUNNER_TEMP/agent.json"
+      - name: Summarise the session
+        # Claude Code's result: subtype, turns, cost and the refused tool calls, named
+        # safely (#232). The transcript stays on the runner: it holds untrusted and Grafana
+        # text. The job that posts a ⛔ Needs Yacine: checks the line again.
+        id: session
+        if: ${{ !cancelled() }}
+        run: python3 scripts/oncall.py session-summary "$RUNNER_TEMP/agent.json" follow-up
       - name: Hand the report to the next job
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -829,6 +857,7 @@ jobs:
       STATUS: ${{ needs.incident.outputs.status }}
       TITLE: ${{ needs.incident.outputs.title }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      SESSION: ${{ needs.follow-up.outputs.session }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -847,7 +876,7 @@ jobs:
             if grep -q '⛔ Needs Yacine' "$report"; then gh issue edit "$INCIDENT" --add-label needs-yacine; fi
           else
             python3 scripts/oncall.py stalled-body "$ALERT" "$STATUS" "$ALERT_ENV" "$TITLE" "$RUN_URL" \
-              "the follow-up session didn't finish its report" > "$RUNNER_TEMP/stalled.md"
+              "the follow-up session didn't finish its report" "$SESSION" > "$RUNNER_TEMP/stalled.md"
             gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/stalled.md"
             gh issue edit "$INCIDENT" --add-label needs-yacine
           fi

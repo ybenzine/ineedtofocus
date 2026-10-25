@@ -47,6 +47,7 @@ concurrency:
 env:
   UV_VERSION: "0.11.4" # same as the Dockerfile
   NODE_VERSION: "24" # same as the Dockerfile
+  CLAUDE_CODE_VERSION: "2.1.310" # same as oncall.yml (scripts/tests/test_oncall_cli.py)
   FORCE_COLOR: "1"
 
 jobs:
@@ -97,7 +98,18 @@ jobs:
       - name: Summarise the report
         if: ${{ !cancelled() }}
         run: python3 scripts/check_junit.py reports/backend-unit.xml --title "Backend unit tests" --min-tests 1
+      # The on-call sessions' permissions (#232): scripts/tests/test_oncall_cli.py runs the
+      # on-call workflow's pinned Claude Code on a fresh checkout against a fake API, so no
+      # key and no cost. Required here, so it can't skip.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Install Claude Code, the on-call workflow's pinned version
+        run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
       - name: Repo script tests (scripts/tests)
+        env:
+          ONCALL_CLI_CHECK: required
         run: make test-scripts JUNIT_DIR=reports
       - name: Summarise the script test report
         if: ${{ !cancelled() }}
