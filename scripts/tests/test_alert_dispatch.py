@@ -195,10 +195,12 @@ def test_a_rule_change_moves_the_pattern(monkeypatch: pytest.MonkeyPatch) -> Non
 SAVE_VALUES = [
     ("30.95%", "87"),  # the local drill (#34)
     ("19.67%", "65"),  # the fault-injection drill (#33)
+    ("20.47%", "99"),  # #212's drill: firing,
+    ("30%", "21"),  # and resolved once traffic stopped (no data)
     ("5.001%", "10"),
     ("100%", "1234567"),
     ("1e-05%", "10"),
-    ("0%", "0"),  # zero in every slot: a synthetic alert, a resolution without data
+    ("0%", "0"),  # zero in every slot: a synthetic alert
     ("NaN%", "0"),
 ]
 HISTORY_VALUES = [
@@ -239,8 +241,9 @@ def test_every_real_dispatch_passes(
     alert: str, values: tuple[str, ...], status: str, env: str
 ) -> None:
     """Both alerts in prod and dev, firing and resolved, with what Grafana renders. A
-    resolution after the window ran out of traffic (no data) still carries the values of
-    the last evaluation that had data; `0` in every slot covers a test or empty values."""
+    resolution because the window ran out of traffic (no data) carries the description of
+    the last evaluation that had data (#212's drill: Normal (NoData), "30% of the 21
+    sessions …"), so it's the same shape as any other."""
     assert d.problems(real_payload(alert, env, status, values)) == []
 
 

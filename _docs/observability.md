@@ -208,6 +208,8 @@ On 2026-10-25, on the local stack with #33's rules, `FAULT_SAVE_ERROR_PERCENT=30
 
 Both dispatches arrived with `Authorization: Bearer <stand-in token>`, `Accept: application/vnd.github+json`, `Content-Type: application/json` and `User-Agent: Grafana`. Both passed the check, with the description `30.95% of the 87 sessions submitted in the last 5 minutes failed (outcome="error"); … Users' sessions stay queued …`. The traces link's query found the 19 failed save requests in Tempo. A request without the token gets 401 (covered by `scripts/tests/test_alert_dispatch.py`).
 
+**A resolution with no data (#212)**, the same day. Fault injection stayed on and the traffic stopped at 18:26:51Z, so the rule could resolve only through "no data". It fired at 18:24:20Z with `20.47% of the 99 sessions submitted …`. It resolved at 18:32:20Z as **Normal (NoData)**, and the resolved dispatch carried the description of the last evaluation that had data, `30% of the 21 sessions submitted …`. Both dispatches pass the pinned check, so a no-data resolution has the same shape as any other.
+
 ### Set up in Grafana Cloud (Yacine)
 
 Do this once, after the PR that adds `.github/workflows/oncall.yml` is merged: a dispatch only starts workflows that are on `main`. The exact steps are on [#34](https://github.com/ybenzine/ineedtofocus/issues/34):
