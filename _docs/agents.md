@@ -55,7 +55,7 @@ sequenceDiagram
 | From → To | What is handed over | Where |
 |---|---|---|
 | Product manager → everyone | Acceptance criteria for each issue; decisions on ambiguities | Issue body; `product_decisions.md` (incl. decision log) |
-| Backend → Frontend | The API contract: endpoints, request/response schemas, error format | `_docs/api/openapi.json` (exported from FastAPI in the backend PR); frontend generates its TypeScript client types from it |
+| Backend → Frontend | The API contract: endpoints, request/response schemas, error format | `_docs/api/openapi.json` (exported from FastAPI in the backend PR); frontend writes its API types by hand against it (`frontend/src/*/api.ts`) |
 | Backend/Frontend → QA | A feature merged and running on dev, with the ACs it covers | Closing comment on the issue |
 | QA → Backend/Frontend | Bugs found by end-to-end or accessibility tests | New issue labeled with the owner's `agent:*`, linked to the original |
 | DevOps → Backend/Frontend | How to run, test and configure the app (env vars, compose services) | `Makefile`, `.env.example`, `deployment.md` |
