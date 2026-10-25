@@ -151,7 +151,7 @@ lint-backend: backend/.venv ## ruff check, ruff format --check, mypy
 lint-frontend: frontend/node_modules ## eslint, prettier --check, tsc
 	$(NPM) run lint
 
-lint-scripts: backend/.venv ## ruff check, ruff format --check, mypy (strict) on scripts/*.py and infra/tests/*.py
+lint-scripts: backend/.venv ## ruff check, ruff format --check, mypy (strict) on scripts/*.py, infra/tests/*.py and infra/app/*.py
 	$(SCRIPTS_RUN) ruff check --config pyproject.toml --extend-exclude $(SCRIPTS_LINT_EXCLUDE) ../scripts $(INFRA_PY)
 	$(SCRIPTS_RUN) ruff format --config pyproject.toml --extend-exclude $(SCRIPTS_LINT_EXCLUDE) --check ../scripts $(INFRA_PY)
 	$(SCRIPTS_RUN) mypy --config-file pyproject.toml --exclude '$(SCRIPTS_LINT_EXCLUDE)$$' ../scripts $(INFRA_PY)

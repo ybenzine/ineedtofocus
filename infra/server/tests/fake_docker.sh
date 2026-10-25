@@ -24,6 +24,9 @@
 #   schema/<digest>      what that release's migration_info.py prints (#165): its schema=
 #                        and contracts= lines. Without it: schema=0002, contracts=-
 #   run-stdin            what the last `run … python -` got on stdin
+#   containerd           while it exists, `image inspect` of an app image's references
+#                        lists its <repo>@<digest> once per name (that and each tag), as
+#                        the containerd image store does (#186)
 #   broken/<digest>      a deliberately broken build (#30): the image itself fails, so
 #                        only containers created from it do. The file holds what fails,
 #                        and optionally the one environment it fails in:
@@ -138,15 +141,21 @@ case ${1:-} in
             [[ ! -e $state/fail/refs ]] || exit 1
             name=$(cat "$state/local/$digest")
             repo=$(repository "$name")
+            names=1
             if [[ $repo == "$app_repo" ]]; then
               for path in "$state"/tags/*; do
                 [[ -f $path && $(cat "$path") == "$digest" ]] || continue
                 printf '%s:%s\n' "$app_repo" "${path##*/}"
+                names=$((names + 1))
               done
             elif [[ $name != "$repo" ]]; then
               printf '%s\n' "$name"
             fi
-            printf '%s@%s\n' "$repo" "$digest"
+            # The containerd image store lists the digest reference once per name (#186).
+            [[ -e $state/containerd ]] || names=1
+            for ((n = 0; n < names; n++)); do
+              printf '%s@%s\n' "$repo" "$digest"
+            done
             ;;
           *) exit 1 ;;
         esac

@@ -69,13 +69,28 @@
 # Pruning (#117). After a successful deploy or rollback, still under the lock, focus-ci
 # removes the ghcr.io/ybenzine/ineedtofocus images that neither environment may start
 # again, whichever profile runs: each environment keeps its record's current and
-# previous release and its newest KEEP_KNOWN_GOOD known-good releases. Older known-good
-# releases stay rollback targets: a rollback to one pulls it again by its recorded
-# digest. No other image is touched: the dependency images (Postgres, the collector,
-# Caddy) stay, so a rollback never depends on Docker Hub. Pruning never fails the
-# request, and whatever it can't read with certainty (a malformed log, an image whose
-# references it can't read) keeps images rather than removing them.
-# Known-good there stops at each environment's rollback floor, like rollback (#165).
+# previous release and its newest KEEP_KNOWN_GOOD known-good releases at or above its
+# rollback floor (#165), like rollback. Older known-good releases stay rollback targets:
+# a rollback to one pulls it again by its recorded digest. No other image is touched:
+# the dependency images (Postgres, the collector, Caddy) stay, so a rollback never
+# depends on Docker Hub. Pruning never fails the request, and whatever it can't read
+# with certainty (a malformed log, an image whose references it can't read) keeps
+# images rather than removing them.
+# What pruning prints, whichever environment it concerns (#186). To the client only
+# (log, stdout): a `pruned <refs>` line with the references (<repo>:<sha>,
+# <repo>@<digest>) of each image it removed, and a summary of how many it removed and
+# kept. To the client and syslog (warn): the references of each image it meant to
+# remove but docker refused, with docker's own error (which can name the container
+# using it); the ID of an image whose references it couldn't read; and, when it doesn't
+# prune, why: an unreadable directory or file by its path, a malformed record by its
+# path and key (not the value), a malformed releases.log by its path and line number
+# only, never what the line holds, or `docker image ls failed`. To syslog only (audit):
+# `pruned removed=<n> kept=<n>`. Docker's own error output from `image ls` and `image
+# inspect` also reaches the client. The images it keeps on purpose (some environment's
+# window) are only counted, never named. (A deploy, rollback or `candidate` that reads
+# a malformed log shows up to 40 characters of the bad word: those read only logs their
+# key may read anyway, dev's included for the prod key. Pruning reads the other
+# environment's log whichever key runs.)
 #
 # Profiles:
 #   dev            deploy, rollback, status       on focus-dev
@@ -94,8 +109,9 @@
 # whichever environment ran them. So the dev key can remove a prod release's image, but
 # only one outside prod's window (current, previous, newest known-good), which a prod
 # rollback would pull again by digest. No key can make pruning keep less: the window
-# comes from the records, which only focus-ci writes. Nothing of the other
-# environment's records reaches the client but the references of the images removed.
+# comes from the records, which only focus-ci writes. Of the other environment's
+# records, the client sees only what Pruning lists above: image references and IDs
+# (shas and digests), counts, and where a record or log is malformed, never its content.
 # Add a profile in the `case` below, and keep each one to the verbs its key needs.
 #
 # Anything else is refused with exit status 2, before anything runs. That covers
@@ -307,8 +323,9 @@ parse_line() {
 # load_history <releases.log>: the releases that ran there and passed the checks, oldest
 # first (ok_tags, ok_digests, ok_lines), and the digests rolled back from since their
 # last ok line (revoked). See "Known-good" at the top. Returns 1, with the reason in
-# $history_error, for a malformed line: callers fail on it (read_history), except the
-# image pruning, which then keeps every image instead.
+# $history_error and the line's number in $history_bad_line, for a malformed line:
+# callers fail on it (read_history), except the image pruning, which then keeps every
+# image instead.
 #
 # Its newest floor line (#165) sets floor_start, the index in ok_* of the first ok line
 # after it (0 without one), and floor_note, which names it for messages. Every floor
@@ -316,18 +333,19 @@ parse_line() {
 # holds: it only ever retires releases, so reading it loosely can't widen anything.
 declare -A revoked=() floored=()
 ok_tags=() ok_digests=() ok_lines=()
-history_error=""
+history_error="" history_bad_line=0
 floor_start=0 floor_note=""
 load_history() {
   local line number=0 contract
   local -a contracts
-  ok_tags=() ok_digests=() ok_lines=() revoked=() floored=() history_error=""
+  ok_tags=() ok_digests=() ok_lines=() revoked=() floored=() history_error="" history_bad_line=0
   floor_start=0 floor_note=""
   [[ -f $1 ]] || return 0
   while IFS= read -r line || [[ -n $line ]]; do
     number=$((number + 1))
     [[ -n $line ]] || continue
     if ! parse_line "$line"; then
+      history_bad_line=$number
       history_error="$1 line $number is malformed ($bad): nothing that reads that log runs until it's fixed (see _docs/deployment.md, The release record)"
       return 1
     fi
@@ -679,8 +697,11 @@ write_record() { # <action> [extra fields for the history line...]
 # keep_release_images <env>: add to keep_digests the app images <env> may start again:
 # its record's digest and previous_digest (the next rollback target), and its newest
 # KEEP_KNOWN_GOOD known-good releases at or above its rollback floor (the rollbacks after
-# that; like known_good). Returns 1, with the
-# reason in $prune_error, when that can't be read with certainty.
+# that; like known_good). Returns 1, with the reason in $prune_error, when that can't be
+# read with certainty. prune_error names a malformed releases.log by its path and line
+# number only, never the bad word (#186): pruning reads the other environment's log too,
+# and what that line holds is no business of this key. Its own log can't be malformed
+# here: the deploy or rollback read it first, under the same lock, and stopped on it.
 declare -A keep_digests=()
 prune_error=""
 keep_release_images() {
@@ -709,7 +730,11 @@ keep_release_images() {
     return 1
   fi
   if ! load_history "$dir/releases.log"; then
-    prune_error=${history_error:-cannot read $dir/releases.log}
+    if ((history_bad_line > 0)); then
+      prune_error="$dir/releases.log line $history_bad_line is malformed (see _docs/deployment.md, The release record)"
+    else
+      prune_error="can't read $dir/releases.log"
+    fi
     return 1
   fi
   for ((i = ${#ok_digests[@]} - 1; i >= floor_start && n < KEEP_KNOWN_GOOD; i--)); do
@@ -722,14 +747,21 @@ keep_release_images() {
 }
 
 # app_refs <image id>: that image's IMAGE_REPO references (<repo>:<tag>, <repo>@<digest>),
-# one per line. Fails when they can't be read, or the image is gone.
+# one per line, each once. Fails when they can't be read, or the image is gone. The
+# containerd image store lists an image's digest reference once per name it has (its
+# <repo>@<digest> and each <repo>:<tag>), so the same reference can come twice (#186).
 app_refs() {
   local out ref
+  local -A listed=()
   out=$(clean docker image inspect --format \
     '{{range .RepoTags}}{{println .}}{{end}}{{range .RepoDigests}}{{println .}}{{end}}' "$1") || return 1
   while IFS= read -r ref; do
     case $ref in
-      "$IMAGE_REPO@"* | "$IMAGE_REPO:"*) printf '%s\n' "$ref" ;;
+      "$IMAGE_REPO@"* | "$IMAGE_REPO:"*)
+        [[ -n ${listed[$ref]-} ]] && continue
+        listed[$ref]=1
+        printf '%s\n' "$ref"
+        ;;
     esac
   done <<<"$out"
 }
