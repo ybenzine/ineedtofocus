@@ -88,6 +88,11 @@ ALLOWED_EVENT_ATTRIBUTES = frozenset({"exception.type", "exception.escaped"})
 
 # The request's server span, so code deep in a dependency can tag it (the current span there
 # is a `fastapi.dependencies` child).
+# Set when the server span starts and never reset, which is safe: each request runs in its own
+# task with a fresh copy of the context, so the value cannot leak into another request. It
+# would break if middleware ran the endpoint or its dependencies in a shared or copied context
+# (e.g. a thread or task started before the span): `tag_user` would then tag nothing, or the
+# wrong request's span.
 _server_span: ContextVar[Span | None] = ContextVar("server_span", default=None)
 
 

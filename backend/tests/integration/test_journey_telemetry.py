@@ -306,6 +306,43 @@ def test_a_failure_inside_the_handler_is_counted_once(
     assert _value("focus.history.loads", outcome="invalid") == invalid + 1
 
 
+def test_an_unexpected_failure_inside_the_handler_is_counted_once(
+    traced: tuple[TestClient, InMemorySpanExporter], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 500 path: `observe` counts the failure, then the generic `Exception` handler sees
+    the same request and must not count it again (a sync batch counts one per session)."""
+    c, _ = traced
+    _signed_in(c)
+
+    async def boom(*_: Any, **__: Any) -> Any:
+        raise RuntimeError("database went away")
+
+    monkeypatch.setattr("app.sessions._save", boom)
+    sync_errors = _value("focus.session.saves", kind="sync", outcome="error")
+    single_errors = _value("focus.session.saves", kind="single", outcome="error")
+    batch = {"sessions": [make_session() for _ in range(3)]}
+    assert c.post("/api/sessions/sync", json=batch).status_code == 500
+    assert _value("focus.session.saves", kind="sync", outcome="error") == sync_errors + 3
+    assert c.post("/api/sessions", json=make_session()).status_code == 500
+    assert _value("focus.session.saves", kind="single", outcome="error") == single_errors + 1
+    assert _value("focus.session.saves", kind="sync", outcome="error") == sync_errors + 3
+
+
+def test_an_unexpected_failure_in_a_history_load_is_counted_once(
+    traced: tuple[TestClient, InMemorySpanExporter], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    c, _ = traced
+    _signed_in(c)
+
+    def boom(*_: Any, **__: Any) -> Any:
+        raise RuntimeError("database went away")
+
+    monkeypatch.setattr("app.history_api.resolve_range", boom)
+    errors = _value("focus.history.loads", outcome="error")
+    assert c.get("/api/history?view=all&tz=UTC").status_code == 500
+    assert _value("focus.history.loads", outcome="error") == errors + 1
+
+
 def test_duration_histograms_use_second_buckets() -> None:
     from app.metrics import BATCH_SIZE_BUCKETS, LATENCY_BUCKETS_S
 

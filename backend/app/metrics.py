@@ -70,6 +70,11 @@ HISTORY_LOAD_DURATION = _meter.create_histogram(
 
 
 # Set once `observe` has counted a failure, so the error handlers don't count it again.
+# Never reset, and that is safe: the server runs each request in its own task, which starts
+# from a fresh copy of the context, so a value set here dies with the request. It would break
+# if something ran several requests in one context (or ran the endpoint in a copied context,
+# so the handler never sees the flag): the first failure would silence the next requests'
+# counts, or the failure would be counted twice.
 _counted: ContextVar[bool] = ContextVar("journey_failure_counted", default=False)
 
 # The journey routes have fixed paths, so the error handlers can tell them from other requests.
