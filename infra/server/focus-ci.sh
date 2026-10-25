@@ -69,6 +69,14 @@
 #                  environment's key (no reviewer, so on-call can use it). It can only
 #                  start a known-good release from prod's own releases.log: no deploy, no
 #                  migration, no digest chosen by the client.
+# Every profile's deploy and rollback also prunes (see Pruning), and that crosses
+# environments on purpose: it reads both environments' release and releases.log (the
+# dev key reads prod's, the rollback key dev's) and removes app images neither keeps,
+# whichever environment ran them. So the dev key can remove a prod release's image, but
+# only one outside prod's window (current, previous, newest known-good), which a prod
+# rollback would pull again by digest. No key can make pruning keep less: the window
+# comes from the records, which only focus-ci writes. Nothing of the other
+# environment's records reaches the client but the references of the images removed.
 # Add a profile in the `case` below, and keep each one to the verbs its key needs.
 #
 # Anything else is refused with exit status 2, before anything runs. That covers

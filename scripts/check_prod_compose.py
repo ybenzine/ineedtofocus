@@ -26,8 +26,9 @@ them. Exits non-zero, listing every broken rule:
     digest, `name:tag@sha256:<64 hex>`, so the deploys pull exactly those bytes (#170);
   - host resources (#117): every service of prod and dev has a positive pids_limit,
     drops every capability (cap_drop ALL, no cap_add, not privileged) and runs with
-    no-new-privileges; the app and the collector have a read-only root filesystem, and
-    every tmpfs of theirs has a size, so a container can't fill the shared disk;
+    no-new-privileges; the app and the collector have a read-only root filesystem, every
+    tmpfs of theirs has a size and every other volume of theirs is read-only, so a
+    container can't fill the shared disk;
   - with --tag, the app image is ghcr.io/ybenzine/ineedtofocus:<tag>.
 
 Stdlib only.
@@ -181,6 +182,14 @@ def hardening_errors(where: str, name: str, service: Config) -> list[str]:
         for mount in service.get("tmpfs") or []:
             if "size=" not in str(mount):
                 errors.append(f"{where}: tmpfs {mount!r} needs a size (e.g. /tmp:size=16m)")
+        # A writable volume or bind mount would undo the bound on the root filesystem.
+        for volume in service.get("volumes") or []:
+            target = volume.get("target")
+            if volume.get("type") == "tmpfs":
+                if not (volume.get("tmpfs") or {}).get("size"):
+                    errors.append(f"{where}: tmpfs volume at {target} needs a size")
+            elif volume.get("read_only") is not True:
+                errors.append(f"{where}: volume at {target} must be read-only (:ro)")
     return errors
 
 

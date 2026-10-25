@@ -67,6 +67,14 @@ def env_config(env: str, app: int, db: int, otel: int, oom: int, cpu: int) -> Co
                 **limits(otel),
                 "image": OTEL,
                 "read_only": True,
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": "/opt/focus/infra/otel-collector",
+                        "target": "/etc/otelcol",
+                        "read_only": True,
+                    }
+                ],
                 "networks": {"default": None},
             },
         },
@@ -333,6 +341,23 @@ def set_key(env: str, name: str, key: str, value: Any) -> Callable[[dict[str, Co
         (set_key("dev", "app", "read_only", False), "dev/app: root filesystem must be read-only"),
         (set_key("prod", "otel-collector", "read_only", None), "prod/otel-collector: root file"),
         (set_key("prod", "app", "tmpfs", ["/tmp"]), "prod/app: tmpfs '/tmp' needs a size"),
+        (
+            set_key("dev", "app", "volumes", [{"type": "volume", "target": "/data"}]),
+            "dev/app: volume at /data must be read-only",
+        ),
+        (
+            set_key(
+                "prod",
+                "otel-collector",
+                "volumes",
+                [{"type": "bind", "source": "/x", "target": "/etc/otelcol", "read_only": False}],
+            ),
+            "prod/otel-collector: volume at /etc/otelcol must be read-only",
+        ),
+        (
+            set_key("prod", "app", "volumes", [{"type": "tmpfs", "target": "/cache"}]),
+            "prod/app: tmpfs volume at /cache needs a size",
+        ),
     ],
 )
 def test_each_rule_catches_its_mistake(
@@ -350,6 +375,15 @@ def test_hardening_accepts_other_spellings() -> None:
     configs["prod"]["services"]["app"]["cap_drop"] = ["all"]
     configs["dev"]["services"]["db"]["security_opt"] = ["no-new-privileges"]
     configs["dev"]["services"]["app"]["security_opt"] = ["no-new-privileges=true"]
+    assert run(configs) == []
+
+
+def test_read_only_volumes_and_sized_tmpfs_volumes_pass() -> None:
+    configs = good()
+    configs["prod"]["services"]["app"]["volumes"] = [
+        {"type": "tmpfs", "target": "/cache", "tmpfs": {"size": 8 * MiB}},
+        {"type": "bind", "source": "/x", "target": "/etc/x", "read_only": True},
+    ]
     assert run(configs) == []
 
 

@@ -164,7 +164,7 @@ Every merge deploys agent-written code to dev, on the Droplet prod shares. Memor
 - **The exception: Postgres' root filesystem stays writable.** Outside its volume it writes its socket and lock file (`/var/run/postgresql`), and its data, the one thing that grows, lives in the volume whatever the root filesystem is. Making it read-only would add tmpfs mounts for little.
 - **Caddy** (`compose.edge.yml`, shared by both environments) isn't covered by this issue: changing it recreates Caddy, a few seconds without HTTPS for both sites. It runs no agent-written code.
 
-`scripts/check_prod_compose.py` (`make test-infra`) fails if a service of prod or dev has no positive `pids_limit`, doesn't drop every capability, adds one back, is privileged or lacks `no-new-privileges`, or if the app or the collector isn't read-only or has a tmpfs without a size. `make test-prod-stack` runs the whole stack with these settings (CI's `image` job runs it too).
+`scripts/check_prod_compose.py` (`make test-infra`) fails if a service of prod or dev has no positive `pids_limit`, doesn't drop every capability, adds one back, is privileged or lacks `no-new-privileges`, or if the app or the collector isn't read-only, has a tmpfs without a size or mounts a writable volume (which would undo the disk bound). `make test-prod-stack` runs the whole stack with these settings (CI's `image` job runs it too).
 
 **Reaching the server:** these settings, like every `infra/` change, apply once Yacine installs the merge commit with `install.sh` ([below](#infra-on-the-server-installsh)): a deploy recreates the app, and each environment's next deploy recreates its Postgres (a few seconds of `/readyz` failing, as for an image bump) and its collector.
 
@@ -292,7 +292,7 @@ infra_revision=<sha>           # /opt/focus/infra/REVISION when it ran
 | GitHub environment `dev` (deployment branches: `main` only, no reviewer) | `DEPLOY_SSH_KEY`: the private half of the `focus-ci-dev` key. `DEPLOY_KNOWN_HOSTS`: the Droplet's host key line | Yacine |
 | `/etc/ssh/authorized_keys/deploy` | `restrict,command="/opt/focus/bin/focus-ci dev" ssh-ed25519 … focus-ci-dev` | Yacine (sudo) |
 
-Nothing is stored at repo level. The key can only run the `dev` profile: deploy, roll back or read dev's release. Even if it leaked, it can't open a shell, touch prod's project or change the compose files. What the image checks do and don't guarantee:
+Nothing is stored at repo level. The key can only run the `dev` profile: deploy, roll back or read dev's release. Even if it leaked, it can't open a shell, deploy, roll back or start anything in prod's project, or change the compose files. Its deploys and rollbacks do [prune](#old-images-pruning-117) app images across both environments: focus-ci reads prod's records on the server for that, and can remove a prod release's image only outside prod's window (current, previous and newest 5 known-good), one a prod rollback would pull again by digest. What the image checks do and don't guarantee:
 
 - `deploy` pulls only from `ghcr.io/ybenzine/ineedtofocus`, by digest, so the bytes deployed and recorded are the ones requested. A re-pushed tag can't swap them.
 - The revision label check only proves the image *claims* to be built from `<sha>`. Anyone able to push to that package can set any label, and any workflow run in this repo that asks for `packages: write` can push there, including runs on PR branches. So the checks don't prove an image was built on `main`. That guarantee comes from the workflow: `deploy-dev` deploys only the digest `publish` pushed for a `main` commit that passed CI. The key itself is held only by the `main`-only `dev` environment.
@@ -379,7 +379,7 @@ What each key can do:
 
 - **Prod key** (`focus-ci prod`): deploy to prod a release dev ran successfully (and didn't roll back from), read prod's record, and read dev's record and log (`candidate`). It can't deploy or roll back dev, roll prod back (the [rollback key](#credentials-2) does that), open a shell or change the compose files. If it leaked, the worst it could do is redeploy to prod a release dev once ran (an older one stops at `migrate` once prod's schema is newer). That's not new code, but only as long as dev runs only `publish`'s images, and the server doesn't enforce that (next point).
 - **What the approval binds: a commit, not bytes.** Yacine approves a commit. The digest comes from dev's `releases.log`, which records whatever the dev key asked for. The dev key is usable without a reviewer by any `dev`-environment job on `main`. Any run that asks for `packages: write` can push an image labelled with any commit, PR-branch runs included. So an agent-merged workflow change could deploy to dev an image built outside `publish` and labelled with commit X. Approving X for prod would then deploy those bytes. Build provenance attestations from `publish`, verified before the prod deploy, close this: #128.
-- **Dev key** (`focus-ci dev`): can't do anything on prod. `candidate` is refused, and its `deploy`, `rollback` and `status` act only on `focus-dev` and `/opt/focus/dev/`.
+- **Dev key** (`focus-ci dev`): can't deploy, roll back or read anything on prod. `candidate` is refused, and its `deploy`, `rollback` and `status` act only on `focus-dev` and `/opt/focus/dev/`. The one exception is pruning after its deploys and rollbacks, which reads prod's records on the server and may remove prod's images outside prod's window ([Old images](#old-images-pruning-117)).
 
 `make test-server` checks both directions behind the real sshd, along with hostile requests, the promotion check, the re-tagging of a `:<sha>` that dev moved, the lock, the clean environment and the record.
 
@@ -461,7 +461,7 @@ A **known-good release** of an environment is a release (tag and digest) with an
 
 ### Old images: pruning (#117)
 
-Every deploy pulls a new `ghcr.io/ybenzine/ineedtofocus` image. So after every successful deploy or rollback, still under `/opt/focus/deploy.lock`, `focus-ci` removes the app images neither environment may start again. Whichever profile runs (`dev`, `prod` or `rollback-prod`), it keeps, for **both** environments:
+Every deploy pulls a new `ghcr.io/ybenzine/ineedtofocus` image. So after every successful deploy or rollback, still under `/opt/focus/deploy.lock`, `focus-ci` removes the app images neither environment may start again. The image store is one for the host, so this crosses environments on purpose: whichever profile runs (`dev`, `prod` or `rollback-prod`), it reads both environments' `release` and `releases.log`, and an image goes when neither keeps it, whichever environment ran it. A dev deploy can therefore remove an old prod release's image, but never one in prod's window. It keeps, for **both** environments:
 
 - the current and previous release of `/opt/focus/<env>/release` (`digest`, `previous_digest`): what runs, and what `rollback` and an automatic revert would start;
 - the newest 5 [known-good releases](#known-good-releases) in `/opt/focus/<env>/releases.log` (`KEEP_KNOWN_GOOD` in `focus-ci.sh`): the rollbacks after that.
@@ -522,13 +522,13 @@ Or **Actions** → **rollback** → **Run workflow** → branch `main`, then cho
 
 Nothing is stored at repo level. The environment has no reviewer on purpose, so rolling prod back works at any hour without Yacine. The key is what limits it:
 
-| Key (profile) | deploy | rollback | status | candidate | Environment it acts on |
-|---|---|---|---|---|---|
-| dev (`dev`) | yes | yes | yes | no | dev only |
-| prod (`prod`) | yes, a release dev ran and didn't roll back from | no | yes | yes (reads dev) | prod |
-| prod rollback (`rollback-prod`) | no | yes, prod's own known-good releases | yes | no | prod only |
+| Key (profile) | deploy | rollback | status | candidate | Environment it acts on | Pruning after a deploy or rollback (#117) |
+|---|---|---|---|---|---|---|
+| dev (`dev`) | yes | yes | yes | no | dev only | reads dev's and prod's records; removes app images outside both windows |
+| prod (`prod`) | yes, a release dev ran and didn't roll back from | no | yes | yes (reads dev) | prod | the same |
+| prod rollback (`rollback-prod`) | no | yes, prod's own known-good releases | yes | no | prod only | the same |
 
-- **Prod rollback key** (`focus-ci rollback-prod`): `rollback`, `rollback <sha>` and `status` on prod, nothing else. The client never names a digest: the target comes from prod's own `releases.log`, so the key can only start bytes prod already ran and checked. It can't deploy, migrate, read or change dev, open a shell or change the compose files. (After a rollback, focus-ci also reads dev's records on the server, to keep dev's images when it [prunes](#old-images-pruning-117); the client sees only which images were removed.) If it leaked, the worst it could do is roll prod back to an older known-good release, or step back through several. That's an outage-sized nuisance, fixed by an approved deploy, but never new code.
+- **Prod rollback key** (`focus-ci rollback-prod`): `rollback`, `rollback <sha>` and `status` on prod, nothing else. The client never names a digest: the target comes from prod's own `releases.log`, so the key can only start bytes prod already ran and checked. It can't deploy, migrate, read or change dev, open a shell or change the compose files. (After a rollback, focus-ci also reads dev's records on the server, to keep dev's images when it [prunes](#old-images-pruning-117), and may remove dev's images outside dev's window; the client sees only which images were removed.) If it leaked, the worst it could do is roll prod back to an older known-good release, or step back through several. That's an outage-sized nuisance, fixed by an approved deploy, but never new code.
 - An agent-merged edit of `rollback.yml` can't do more: the key's limits hold whatever the workflow says, and the `rollback` environment accepts only `main`.
 
 `make test-server` checks all three keys behind the real sshd. The rollback key gets the hostile requests plus `deploy` and `candidate`. It's checked to restore only prod's known-good releases (not dev's, not a failed one, not one rolled back from, not the current one) and to leave dev's record, log and container alone. The dev key's rollback touches no prod file, and the prod key still can't roll back.
