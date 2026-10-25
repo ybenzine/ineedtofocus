@@ -69,7 +69,7 @@ export default function App(props: AppProps) {
   const { settings: given } = props
   // Expired at mount (start-up with a timer running): the store is bound to the expired user
   // so it shows their cached settings, but `currentOwner()` is null, so it never fetches,
-  // sends or rewrites the cache (#120).
+  // sends or rewrites the cache.
   const account = useAccount()
   const [mountOwner] = useState(() => (account?.expired ? account.user.id : signedInUserId()))
   const settings = useMemo(
@@ -133,7 +133,7 @@ function AppBody({
   const [audio, setAudio] = useState<AudioSource>('none')
 
   // The sign-in expired mid-session: the timer screen and its summary stay; sign-in follows
-  // as soon as the user is on any other screen (#120).
+  // as soon as the user is on any other screen.
   const account = useAccount()
   const leaveExpired = account?.expired ? account.leaveExpired : null
   useEffect(() => {

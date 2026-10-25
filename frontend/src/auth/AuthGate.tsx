@@ -39,7 +39,7 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
   const [checking, setChecking] = useState(() => !hasPendingLogout())
   const [logoutPending, setLogoutPending] = useState(hasPendingLogout)
   // The sign-in expired while a timer runs: the app (and its timer) stays up, signed out on the
-  // device, until the app calls `leaveExpired` once no timer runs (#120).
+  // device, until the app calls `leaveExpired` once no timer runs.
   const [expired, setExpired] = useState(false)
   // Read by the event handlers, which are set up once: a second 401 never ends the expired state.
   const expiredRef = useRef(false)
@@ -82,7 +82,7 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
           const cached = loadCachedUser()
           forgetCachedUser()
           if (cached && hasActiveTimer()) {
-            // A timer is still running or paused: keep its screen until it ends (#120).
+            // A timer is still running or paused: keep its screen until it ends.
             setExpired(true)
             setUser(cached)
             return
@@ -136,7 +136,7 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
           if (current || expiredRef.current || !userRef.current) return
           forgetCachedUser()
           // Keep the app mounted: it shows sign-in itself (`leaveExpired`) once no timer runs
-          // and no summary is open (#120).
+          // and no summary is open.
           expiredRef.current = true
           setExpired(true)
         },
