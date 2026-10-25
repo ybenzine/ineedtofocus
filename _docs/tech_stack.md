@@ -51,7 +51,7 @@ Prerequisite: the domain's nameservers at Gandi must be the four Route 53 namese
 - **Signals:** traces for every request (FastAPI + SQLAlchemy instrumentation); metrics for session saves (count by outcome, latency) and history loads (count by outcome, latency); JSON logs with `trace_id` and `span_id` on every line so logs, traces and metrics link up in Grafana.
 - **No customer data in telemetry:** emails, passwords, cookies, session goals and YouTube links are never sent to telemetry. Users are referenced only by an opaque internal ID. Enforced by an attribute allowlist and covered by a test.
 - **Where to look:** locally in Grafana from `grafana/otel-lgtm`; deployed in Grafana Cloud (dashboards for the key journey per environment).
-- **Alert on user impact:** fires when the session-save error rate exceeds 5% over 5 minutes (with a minimum number of requests), or when history loads' p95 latency exceeds 2 s. Not on CPU or memory.
+- **Alert on user impact:** fires when the session-save error rate exceeds 5% over 5 minutes (with a minimum number of requests), or when history loads' p95 latency exceeds 2 s over 5 minutes (with at least 5 loads; fewer counts as no data). Not on CPU or memory. The one exception is a DigitalOcean disk-usage alert (above 80% for 10 minutes) that emails Yacine and is not routed to on-call (#202).
 - **Alert trigger for the demo:** a fault-injection setting, off by default and only changeable by the operator, makes a percentage of session saves fail; a small traffic script generates realistic load so the alert fires.
 - **Alert routing:** Grafana alert → webhook → GitHub `repository_dispatch` (through a small relay if Grafana's payload can't call GitHub directly) → on-call agent workflow.
 
