@@ -50,7 +50,6 @@ class UserSettings(Base):
         ),
         CheckConstraint("last_tag IS NULL OR " + in_list("last_tag", TAGS), name="last_tag"),
         CheckConstraint(in_list("theme", THEMES), name="theme"),
-        CheckConstraint(in_list("theme", THEMES), name="theme"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(

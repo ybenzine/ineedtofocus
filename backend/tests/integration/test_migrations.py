@@ -139,6 +139,9 @@ def drift(conn: Connection) -> list[str]:
         in_model = {
             str(c.name): str(c.sqltext) for c in table.constraints if isinstance(c, CheckConstraint)
         }
+        declared = [c.name for c in table.constraints if isinstance(c, CheckConstraint)]
+        for name in sorted({n for n in declared if declared.count(n) > 1}, key=str):
+            problems.append(f"{table.name}: CHECK {name} is declared more than once")
         if set(in_db) != set(in_model):
             names = sorted(set(in_db) ^ set(in_model))
             problems.append(f"{table.name}: CHECK names differ: {names}")
@@ -165,6 +168,18 @@ def test_drift_detects_changed_allowed_tags(
     monkeypatch.setattr(check, "sqltext", text(in_list("tag", (*TAGS, "gaming"))))
     problems = run(_with_conn(test_db_url, drift))
     assert any("ck_focus_sessions_tag" in p for p in problems)
+
+
+def test_drift_detects_a_check_declared_twice(alembic_config: Config, test_db_url: str) -> None:
+    command.upgrade(alembic_config, "head")
+    table = Base.metadata.tables["user_settings"]
+    duplicate = CheckConstraint(in_list("theme", ("system", "dark", "light")), name="theme")
+    table.append_constraint(duplicate)
+    try:
+        problems = run(_with_conn(test_db_url, drift))
+    finally:
+        table.constraints.discard(duplicate)
+    assert any("declared more than once" in p for p in problems)
 
 
 def test_drift_detects_changed_default(
