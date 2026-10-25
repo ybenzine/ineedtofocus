@@ -117,6 +117,15 @@ A main Claude Code session acts as the **lead**. The `/work-issue <n>` command (
 
 Independent issues (e.g. a backend API and an unrelated DevOps task) can run in parallel; dependent ones run in order.
 
+**At most 4 agents run at once per session** (#172). On 2026-10-23 eight or more agents running in parallel kept tripping GitHub's secondary GraphQL rate limit and blocked board moves. The `env` block in [`.claude/settings.json`](../.claude/settings.json) enforces the cap in Claude Code itself:
+
+- `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=4`: with 4 subagents running, spawning another with the Agent tool fails with `Concurrent subagent limit reached`. The spawn is refused, not queued. When that happens the lead **waits for a running agent to finish** and spawns then; it doesn't retry in a loop.
+- `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS=4`: a [workflow](https://code.claude.com/docs/en/workflows) run executes at most 4 agents at once and queues the rest. This cap is per workflow run, not per session, and the Claude Code docs say workflow agents follow their own limit rather than the subagent one.
+- The cap is per session: two sessions in parallel (e.g. one per milestone worktree) mean at most 8 agents in total.
+- A session reads the variables when it starts, so a session started before the change must be restarted to pick them up.
+
+Documented exceptions ([Claude Code docs → Concurrent subagent limit](https://code.claude.com/docs/en/sub-agents#concurrent-subagent-limit)): resuming a subagent that already finished takes a fresh slot without checking the limit, and a `/subtask` fork takes a slot and is never blocked, so both can push the count past 4. Sessions with ultracode on don't enforce the limit at all, so don't turn ultracode on (`/effort ultracode`, `claude --effort ultracode` or the `ultracode` setting).
+
 ## Tracker trail
 
 Every step leaves a trace on the issue and the board, so the board is the record of what each agent did:
