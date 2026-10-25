@@ -1,7 +1,12 @@
 """Structured JSON logs to stdout.
 
+Every line carries `trace_id` and `span_id` (null outside a request) so logs link to
+traces in Grafana (#31).
+
 Privacy: never log emails, passwords, cookies, goals or YouTube links
-(see _docs/observability.md). Extra fields passed via `extra=` are included.
+(see _docs/observability.md). Only the fields in `ALLOWED_EXTRA` are kept from `extra=`
+(and from foreign records such as uvicorn's `color_message`); add a name there only when
+its value can never hold customer data.
 """
 
 import copy
@@ -11,6 +16,13 @@ import re
 import sys
 import traceback
 from datetime import UTC, datetime
+
+from opentelemetry import trace
+
+# Fields a log call may add through `extra=`. Anything else is dropped from stdout and from
+# the OTLP copy, so a new `extra=` can't leak customer data by accident, and uvicorn's
+# `color_message` (the message again, with ANSI colour codes) never ships.
+ALLOWED_EXTRA = frozenset({"version", "error_type", "user_id", "outcome", "batch_size"})
 
 _RESERVED = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 
@@ -26,7 +38,26 @@ _PG_DETAIL = re.compile(r"^DETAIL:.*$", re.MULTILINE)
 _SQL_PARAMETERS = re.compile(r"\[parameters: .*$", re.MULTILINE)
 
 
+# ANSI escape sequences (uvicorn colours its messages when attached to a terminal).
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def trace_fields() -> dict[str, str | None]:
+    """`trace_id` and `span_id` of the active span as the usual hex strings, or nulls."""
+    ctx = trace.get_current_span().get_span_context()
+    if not ctx.is_valid:
+        return {"trace_id": None, "span_id": None}
+    return {"trace_id": format(ctx.trace_id, "032x"), "span_id": format(ctx.span_id, "016x")}
+
+
+# asyncpg quotes a value it can't encode ("invalid input for query argument $1: 'a@b.c' (...)"),
+# and the reason often repeats it. Drop the rest of that line.
+_ASYNCPG_ARGUMENT = re.compile(r"(invalid input for query argument \$\d+:).*$", re.MULTILINE)
+
+
 def scrub(text: str) -> str:
+    text = _ANSI.sub("", text)
+    text = _ASYNCPG_ARGUMENT.sub(r"\1 [redacted]", text)
     text = _PG_DETAIL.sub("DETAIL: [redacted]", text)
     return _SQL_PARAMETERS.sub("[parameters: [redacted]]", text)
 
@@ -38,11 +69,12 @@ class JsonFormatter(logging.Formatter):
             "level": record.levelname,
             "logger": record.name,
             "message": scrub(record.getMessage()),
+            **trace_fields(),
         }
-        # `extra=` values are written as-is, unscrubbed: never put database error text
-        # (str(exc), exception messages) in an `extra=` field; log it via exc_info instead.
+        # Allowlisted `extra=` values are written as-is, unscrubbed: never put database error
+        # text (str(exc), exception messages) in an `extra=` field; log it via exc_info.
         for key, value in record.__dict__.items():
-            if key not in _RESERVED:
+            if key in ALLOWED_EXTRA:
                 payload[key] = value
         if record.exc_info:
             payload["exception"] = scrub(self.formatException(record.exc_info))
@@ -78,7 +110,11 @@ class ScrubFilter(logging.Filter):
                 scrub("".join(traceback.format_exception(exc))),
             )
         for key, value in record.__dict__.items():
-            if key not in _RESERVED and isinstance(value, str):
+            if key in _RESERVED:
+                continue
+            if key not in ALLOWED_EXTRA:
+                del clean.__dict__[key]  # not allowlisted (e.g. uvicorn's color_message)
+            elif isinstance(value, str):
                 setattr(clean, key, scrub(value))
         return clean
 

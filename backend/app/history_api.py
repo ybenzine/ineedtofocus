@@ -24,6 +24,7 @@ from app.history import (
     utc_window,
     within_custom_limit,
 )
+from app.metrics import HISTORY_LOAD_DURATION, HISTORY_LOADS, observe
 from app.models import FocusSession, Tag, UserSettings
 from app.sessions import SessionOut
 
@@ -122,41 +123,47 @@ async def get_history(
     Bars are per day, except per month for All time and custom ranges over 62 days (AC10.3).
     Archived sessions are excluded (AC10.7).
     """
-    try:
-        zone = time_zone(tz)
-    except ValueError:
-        raise _invalid("tz", "Unknown time zone; use an IANA name such as Europe/Paris") from None
-    _check_params(view, anchor, start, end)
-    week_start_day = (
-        await db.scalar(select(UserSettings.week_start_day).where(UserSettings.user_id == user.id))
-        or 0
-    )
-    date_range = resolve_range(view, anchor, start, end, week_start_day)
+    with observe(HISTORY_LOADS, HISTORY_LOAD_DURATION, client_outcome="invalid"):
+        try:
+            zone = time_zone(tz)
+        except ValueError:
+            raise _invalid(
+                "tz", "Unknown time zone; use an IANA name such as Europe/Paris"
+            ) from None
+        _check_params(view, anchor, start, end)
+        week_start_day = (
+            await db.scalar(
+                select(UserSettings.week_start_day).where(UserSettings.user_id == user.id)
+            )
+            or 0
+        )
+        date_range = resolve_range(view, anchor, start, end, week_start_day)
 
-    query = select(FocusSession).where(
-        FocusSession.user_id == user.id, FocusSession.archived_at.is_(None)
-    )
-    if tag:
-        query = query.where(FocusSession.tag.in_({t.value for t in tag}))
-    if date_range is not None:
-        lo, hi = utc_window(date_range)
-        query = query.where(FocusSession.started_at >= lo, FocusSession.started_at < hi)
-    rows = (
-        await db.scalars(query.order_by(FocusSession.started_at.desc(), FocusSession.id.desc()))
-    ).all()
+        query = select(FocusSession).where(
+            FocusSession.user_id == user.id, FocusSession.archived_at.is_(None)
+        )
+        if tag:
+            query = query.where(FocusSession.tag.in_({t.value for t in tag}))
+        if date_range is not None:
+            lo, hi = utc_window(date_range)
+            query = query.where(FocusSession.started_at >= lo, FocusSession.started_at < hi)
+        rows = (
+            await db.scalars(query.order_by(FocusSession.started_at.desc(), FocusSession.id.desc()))
+        ).all()
 
-    summary = summarize(rows, zone, view, date_range)
-    covered = summary.date_range
-    return HistoryOut(
-        view=view,
-        time_zone=tz,
-        week_start_day=week_start_day,
-        start=covered.start if covered else None,
-        end=covered.end if covered else None,
-        bucket=summary.unit,
-        total_focus_seconds=summary.total.focus_seconds,
-        session_count=summary.total.sessions,
-        tags=[TagTotal(tag=Tag(t), **_totals(v)) for t, v in summary.tags],
-        buckets=[Bucket(date=d, **_totals(v)) for d, v in summary.buckets],
-        sessions=[SessionOut.model_validate(r, from_attributes=True) for r in summary.sessions],
-    )
+        summary = summarize(rows, zone, view, date_range)
+        covered = summary.date_range
+        HISTORY_LOADS.add(1, {"outcome": "ok"})
+        return HistoryOut(
+            view=view,
+            time_zone=tz,
+            week_start_day=week_start_day,
+            start=covered.start if covered else None,
+            end=covered.end if covered else None,
+            bucket=summary.unit,
+            total_focus_seconds=summary.total.focus_seconds,
+            session_count=summary.total.sessions,
+            tags=[TagTotal(tag=Tag(t), **_totals(v)) for t, v in summary.tags],
+            buckets=[Bucket(date=d, **_totals(v)) for d, v in summary.buckets],
+            sessions=[SessionOut.model_validate(r, from_attributes=True) for r in summary.sessions],
+        )

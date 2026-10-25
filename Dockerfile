@@ -48,14 +48,17 @@ ENV PATH=/app/.venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     FRONTEND_DIST=/app/frontend/dist \
-    OTEL_SERVICE_NAME=ineedtofocus
+    OTEL_SERVICE_NAME=ineedtofocus \
+    OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=sqlalchemy
 USER 10001:10001
 EXPOSE 8000
 # Runs `alembic upgrade head` first; a failed migration stops the container (#4, #6).
 ENTRYPOINT ["app-entrypoint"]
 # `opentelemetry-instrument` sets up the tracer, meter and logger providers with OTLP
 # exporters (configured by the OTEL_* env vars) and ships Python logs; FastAPI's built-in
-# telemetry traces and meters requests through them (backend/app/telemetry.py).
+# telemetry traces and meters requests through them (backend/app/telemetry.py). The stock
+# SQLAlchemy instrumentation is disabled: app.telemetry.instrument_engine traces our engine
+# (the stock one refuses SQLAlchemy 2.1 and would add a second set of spans once it doesn't).
 # --proxy-headers: X-Forwarded-For/-Proto are honoured only from the addresses in
 # FORWARDED_ALLOW_IPS (uvicorn's default: 127.0.0.1). Deployed, that is Caddy's fixed
 # address (infra/env/<env>.env), never `*` (#8, #27).

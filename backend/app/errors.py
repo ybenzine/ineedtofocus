@@ -15,6 +15,8 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.metrics import count_early_failure
+
 logger = logging.getLogger(__name__)
 
 _CODES = {
@@ -79,7 +81,8 @@ def error_field(loc: tuple[Any, ...], error_type: str) -> str:
 
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
-    async def validation(_: Request, exc: RequestValidationError) -> JSONResponse:
+    async def validation(request: Request, exc: RequestValidationError) -> JSONResponse:
+        count_early_failure(request.method, request.url.path, 422)
         # Only field names and messages: never echo submitted input back.
         details = [
             {
@@ -103,7 +106,8 @@ def register_error_handlers(app: FastAPI) -> None:
         )
 
     @app.exception_handler(Exception)
-    async def unhandled(_: Request, exc: Exception) -> JSONResponse:
+    async def unhandled(request: Request, exc: Exception) -> JSONResponse:
+        count_early_failure(request.method, request.url.path, 500)
         logger.error("unhandled exception", exc_info=exc)
         return JSONResponse(
             status_code=500,
