@@ -76,16 +76,21 @@
 # depends on Docker Hub. Pruning never fails the request, and whatever it can't read
 # with certainty (a malformed log, an image whose references it can't read) keeps
 # images rather than removing them.
-# What pruning prints, to the client and to syslog, whichever environment it concerns
-# (#186): the references (<repo>:<sha>, <repo>@<digest>) of each image it removed, and
-# of each it meant to remove but docker refused, with docker's own error (which can name
-# the container using it); the ID of an image whose references it couldn't read; how
-# many images it removed and kept. The images it keeps on purpose (some environment's
-# window) are only counted, never named. When it doesn't prune: an unreadable directory
-# or file names its path; a malformed record its path and the key (not the value); a
-# malformed releases.log its path and line number only, never what the line holds (the
-# deploy and rollback that read their own log show up to 40 characters of the bad word,
-# but pruning also reads the other environment's).
+# What pruning prints, whichever environment it concerns (#186). To the client only
+# (log, stdout): a `pruned <refs>` line with the references (<repo>:<sha>,
+# <repo>@<digest>) of each image it removed, and a summary of how many it removed and
+# kept. To the client and syslog (warn): the references of each image it meant to
+# remove but docker refused, with docker's own error (which can name the container
+# using it); the ID of an image whose references it couldn't read; and, when it doesn't
+# prune, why: an unreadable directory or file by its path, a malformed record by its
+# path and key (not the value), a malformed releases.log by its path and line number
+# only, never what the line holds, or `docker image ls failed`. To syslog only (audit):
+# `pruned removed=<n> kept=<n>`. Docker's own error output from `image ls` and `image
+# inspect` also reaches the client. The images it keeps on purpose (some environment's
+# window) are only counted, never named. (A deploy, rollback or `candidate` that reads
+# a malformed log shows up to 40 characters of the bad word: those read only logs their
+# key may read anyway, dev's included for the prod key. Pruning reads the other
+# environment's log whichever key runs.)
 #
 # Profiles:
 #   dev            deploy, rollback, status       on focus-dev
