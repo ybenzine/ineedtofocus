@@ -6,7 +6,9 @@
 #
 #   calls.log            one line per call: <epoch> uid=<uid> env=<names> app_tag=<APP_TAG> :: <args>
 #   labels/<digest>      the registry: that digest exists, built from the commit in the file
-#   local/<digest>       pulled to this host
+#                        (empty for the dependency images: Postgres, the collector, Caddy)
+#   local/<digest>       pulled to this host. Starts empty, like a fresh host: the
+#                        dependency images are missing too (#170)
 #   tags/<tag>           the digest a local :<tag> points at (one image store for the
 #                        host, shared by every environment, like the real one)
 #   running-<env>        the digest <env>'s app container was created from: what
@@ -18,8 +20,16 @@
 #                          up [<env>]       never turns healthy (/healthz): `up --wait` fails
 #                          readyz [<env>]   healthy, but /readyz doesn't answer
 #   sleep-up             seconds `compose up` takes
+#   drop-on-up           a digest: that image leaves the host when a start of a broken
+#                        build fails (to test that the revert pulls it again)
 #   probe-lock           while it exists, every `compose up` appends to lock-probe.log
-#                        whether /opt/focus/deploy.lock was held (by its caller)
+#                        whether /opt/focus/deploy.lock was held (by its caller), and
+#                        every `pull` to pull-lock-probe.log
+#
+# Compose reads the images from the -f file (the real, installed compose files):
+# `config --images` lists them, and `run` and `up` fail like the real thing (#28) when
+# one of them other than the app's isn't on the host. With --pull never that's
+# "No such image"; without it, Compose pulls what's missing first.
 set -euo pipefail
 
 state=/tmp/fake-docker
@@ -38,11 +48,43 @@ broken() {
   [[ $how == "$3" && (-z $where || $where == "$2") ]]
 }
 digest_of() { if [[ $1 == *@* ]]; then printf '%s' "${1#*@}"; fi; }
+# images_of <compose file>: each service's image, ${APP_TAG...} filled in.
+images_of() {
+  local line ref
+  while IFS= read -r line; do
+    [[ $line =~ ^[[:space:]]+image:[[:space:]]*([^[:space:]#]+) ]] || continue
+    ref=${BASH_REMATCH[1]}
+    # shellcheck disable=SC2016 # a literal ${APP_TAG...} from the compose file
+    if [[ $ref == *'${APP_TAG'* ]]; then ref=${ref%%\$\{APP_TAG*}${APP_TAG:-}; fi
+    printf '%s\n' "$ref"
+  done <"$1"
+}
+# dependencies_present <compose file> <pull policy>: every image but the app's is on
+# the host. With policy never, a missing one fails as it did on #28; otherwise it's
+# pulled from the registry first, if it's there.
+dependencies_present() {
+  local ref digest
+  while IFS= read -r ref; do
+    [[ $ref != ghcr.io/ybenzine/ineedtofocus:* ]] || continue
+    digest=$(digest_of "$ref")
+    [[ -z $digest || ! -f $state/local/$digest ]] || continue
+    if [[ $2 != never && -n $digest && -f $state/labels/$digest && ! -e $state/fail/pull ]]; then
+      : >"$state/local/$digest"
+      continue
+    fi
+    echo "Error response from daemon: No such image: $ref" >&2
+    return 1
+  done < <(images_of "$1")
+}
 
 case ${1:-} in
   pull)
     ref=${*: -1}
     digest=$(digest_of "$ref")
+    if [[ -e $state/probe-lock ]]; then
+      if flock -n /opt/focus/deploy.lock true; then held=free; else held=held; fi
+      echo "pull $ref lock=$held" >>"$state/pull-lock-probe.log"
+    fi
     [[ ! -e $state/fail/pull ]] || exit 1
     [[ -n $digest && -f $state/labels/$digest ]] || {
       echo "Error response from daemon: manifest unknown" >&2
@@ -86,10 +128,11 @@ case ${1:-} in
     ;;
   compose)
     shift
-    edge=0 env_name=""
+    edge=0 env_name="" file=""
     while (($#)); do
       case $1 in
         -f | --env-file | -p)
+          [[ $1 != -f ]] || file=$2
           [[ $2 == */compose.edge.yml ]] && edge=1
           if [[ $2 =~ ^/opt/focus/(prod|dev)/\.env$ ]]; then env_name=${BASH_REMATCH[1]}; fi
           shift 2
@@ -97,9 +140,19 @@ case ${1:-} in
         *) break ;;
       esac
     done
+    policy=missing
+    [[ " $* " != *" --pull never "* ]] || policy=never
     case ${1:-} in
-      run) [[ " $* " != *" alembic "* || ! -e $state/fail/migrate ]] || exit 1 ;;
+      config)
+        [[ $2 == --images ]] || exit 1
+        images_of "$file"
+        ;;
+      run)
+        dependencies_present "$file" "$policy" || exit 1
+        [[ " $* " != *" alembic "* || ! -e $state/fail/migrate ]] || exit 1
+        ;;
       up)
+        dependencies_present "$file" "$policy" || exit 1
         [[ ! -e $state/fail/up ]] || exit 1
         [[ ! -f $state/sleep-up ]] || sleep "$(cat "$state/sleep-up")"
         if [[ -e $state/probe-lock ]]; then
@@ -111,7 +164,10 @@ case ${1:-} in
           [[ -n $env_name && -f $state/tags/$APP_TAG ]] || exit 1
           cp "$state/tags/$APP_TAG" "$state/running-$env_name"
           # The container is created from a broken image, but never turns healthy.
-          ! broken "$(cat "$state/running-$env_name")" "$env_name" up || exit 1
+          if broken "$(cat "$state/running-$env_name")" "$env_name" up; then
+            [[ ! -f $state/drop-on-up ]] || rm -f "$state/local/$(cat "$state/drop-on-up")"
+            exit 1
+          fi
         fi
         ;;
       ps) echo "container-$env_name-app" ;;
