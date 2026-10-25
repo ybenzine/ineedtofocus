@@ -244,7 +244,14 @@ describe('a session restored on another device (#228)', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
     await waitFor(() => expect(screen.queryByText(/Session archived/)).not.toBeInTheDocument())
     await waitFor(async () => expect((await store.get(record.id))?.archivedAt).toBeNull())
+    // Let the reload that follows Undo finish first, so it cannot repair a stale mark.
+    await act(async () => {
+      await Promise.all(history.answers)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    const forgets = vi.spyOn(store, 'forget')
     release()
+    await waitFor(() => expect(forgets).toHaveBeenCalled())
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
