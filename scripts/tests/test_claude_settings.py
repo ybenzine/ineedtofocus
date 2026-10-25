@@ -1,4 +1,5 @@
-"""The prod-deploy deny rules in .claude/settings.json (#126), read as data.
+""".claude/settings.json read as data: the prod-deploy deny rules (#126) and the concurrent
+agent cap in its `env` block (#172, at the end of this file).
 
 Agents run `gh` as merciful-poseidon (#127), which can't approve a prod deploy: it isn't a
 `production` reviewer or an administrator. These rules are the second line, keeping agents
