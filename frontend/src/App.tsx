@@ -54,6 +54,8 @@ export interface AppProps {
 
 export const PENDING_RETRY_MS = 10_000
 export const PARKED_DRAIN_MS = 60_000
+export const FOREIGN_PENDING_MESSAGE =
+  'A session from the account that used this device before could not be saved yet. We keep trying; you can start a new session once it is saved.'
 
 type View =
   | { name: 'loading' }
@@ -134,6 +136,9 @@ function AppBody({
   const [view, setView] = useState<View>({ name: 'loading' })
   // The audio source is remembered with the active session (sourceStore), so a reload restores it.
   const [notice, setNotice] = useState<string | null>(null)
+  // A different user's finished session that still can't be saved on this device: kept trying in
+  // the background, and the setup screen says so instead of leaving Start to fail without context.
+  const [foreignPending, setForeignPending] = useState(false)
   const [audio, setAudio] = useState<AudioSource>('none')
 
   // The sign-in expired mid-session: the timer screen and its summary stay; sign-in follows
@@ -157,8 +162,11 @@ function AppBody({
   useEffect(() => {
     let cancelled = false
     const foreign = services.isForeignSession?.() ?? false
+    // A different user's running session never reaches the timer screen, whatever is stored.
+    services.discardForeignRunning?.()
     void timer.restore().then(async (update) => {
-      if (update.snapshot) {
+      if (foreign && update.recordPending && !cancelled) setForeignPending(true)
+      if (update.snapshot && !foreign) {
         void settings.refresh() // no wait: sends pending edits, fetches the server copy
         if (!cancelled) {
           setAudio(sourceStore.load())
@@ -235,7 +243,7 @@ function AppBody({
 
   // A finished session that couldn't be saved on the device yet (a stalled IndexedDB) stays in
   // the timer's own store; keep trying, and drop the "not saved yet" note once it is saved.
-  const recordPending = view.name === 'summary' && view.update.recordPending
+  const recordPending = (view.name === 'summary' && view.update.recordPending) || foreignPending
   useEffect(() => {
     if (!recordPending) return
     let busy = false
@@ -246,6 +254,7 @@ function AppBody({
         .retryPending()
         .then((saved) => {
           if (!saved) return
+          setForeignPending(false)
           setView((current) =>
             current.name === 'summary'
               ? { name: 'summary', update: { ...current.update, recordPending: false } }
@@ -365,6 +374,7 @@ function AppBody({
       <AccountBar controller={timer} />
       <ScreenNav current="setup" onNavigate={goTo} />
       {notice && <p role="status">{notice}</p>}
+      {foreignPending && <p role="status">{FOREIGN_PENDING_MESSAGE}</p>}
       <SessionSetup
         preferences={prefs}
         defaultReminderMinutes={values.default_reminder_minutes}
