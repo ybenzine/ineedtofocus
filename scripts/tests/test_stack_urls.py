@@ -99,6 +99,12 @@ def test_app_url_is_the_published_port_while_the_stack_runs(checkout: Path) -> N
         ("# APP_PORT=9999\nAPP_PORT = 8010  # second worktree\n", "8010"),
         ('APP_PORT="8020"\n', "8020"),
         ("POSTGRES_PORT=5442\n", "8000"),
+        # Compose's .env parser also takes `export NAME=value` (#188).
+        ("export APP_PORT=8010\n", "8010"),
+        ("  export   APP_PORT = '8020'  # third worktree\n", "8020"),
+        ("APP_PORT=8010\nexport APP_PORT=8020\n", "8020"),
+        ("export APP_PORT=8010\nAPP_PORT=8020\n", "8020"),
+        ("exportAPP_PORT=8010\nexport OTHER_APP_PORT=8030\n", "8000"),
     ],
 )
 def test_app_url_falls_back_to_the_configured_port(

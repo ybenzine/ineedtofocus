@@ -30,18 +30,23 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
-def setting(name: str, default: str) -> str:
-    """Like Compose: the environment wins, then the repo's .env, then the default."""
+
+def setting(name: str, default: str, env_file: Path = ENV_FILE) -> str:
+    """Like Compose: the environment wins, then the repo's .env (its last line for the name),
+    then the default. Takes `NAME=value` and `export NAME=value` alike, as Compose's .env
+    parser does (#188).
+    """
     if name in os.environ:
         return os.environ[name]
-    env_file = Path(__file__).resolve().parents[1] / ".env"
+    found = default
     if env_file.is_file():
         for line in env_file.read_text().splitlines():
             key, sep, value = line.partition("=")
-            if sep and key.strip() == name:
-                return value.strip().strip("\"'")
-    return default
+            if sep and key.split() in ([name], ["export", name]):
+                found = value.strip().strip("\"'")
+    return found
 
 
 SERVICE = "ineedtofocus"
