@@ -9,6 +9,7 @@ Claude Code reads this file automatically. The project's agent instructions live
 - The agent team is defined in `.claude/agents/` (product-manager, backend, frontend, qa, devops, reviewer, oncall). Delegate an issue to the subagent matching its `agent:*` label (`agent:product_manager` → `product-manager`); run the `reviewer` subagent on every PR before merge and the `product-manager` subagent for final acceptance.
 - `/work-issue <n>` runs the whole loop for one issue: delegate → PR → review → merge → QA → acceptance. `/work-backlog [milestone]` runs it over the whole backlog, stopping only at human gates.
 - Use `gh` for tracker work (comments, PRs, reviews) and `scripts/board-status.sh <n> "<Status>"` to move cards on the board.
+- At most 4 subagents run at once per session (#172): the `env` block in `.claude/settings.json` sets `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` and `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS` (per workflow run) to 4. Restart a session started before the change to be sure the cap is in effect. Details: [_docs/agents.md](_docs/agents.md#orchestration).
 
 ## Permissions for unattended runs
 

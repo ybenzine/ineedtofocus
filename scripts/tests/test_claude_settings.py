@@ -1,4 +1,5 @@
-"""The prod-deploy deny rules in .claude/settings.json (#126), read as data.
+""".claude/settings.json read as data: the prod-deploy deny rules (#126) and the concurrent
+agent cap in its `env` block (#172, at the end of this file).
 
 Agents run `gh` as merciful-poseidon (#127), which can't approve a prod deploy: it isn't a
 `production` reviewer or an administrator. These rules are the second line, keeping agents
@@ -216,3 +217,19 @@ def test_the_branch_rule_check_is_documented_as_run() -> None:
     deployment = (REPO / "_docs" / "deployment.md").read_text()
     assert f"`{BRANCH_RULE_CHECK}`" in deployment
     assert matching("allow", BRANCH_RULE_CHECK) and not matching("ask", BRANCH_RULE_CHECK)
+
+
+# --- At most 4 agents at once per session (#172) ------------------------------------------
+
+ENV: dict[str, str] = json.loads(SETTINGS.read_text()).get("env", {})
+
+
+@pytest.mark.parametrize(
+    "variable",
+    ["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS", "CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS"],
+)
+def test_concurrent_agents_are_capped_at_four(variable: str) -> None:
+    """Eight or more parallel agents kept tripping GitHub's secondary rate limit (#172).
+    Claude Code ignores a subagent cap that isn't a positive whole number in plain digits,
+    so the value is exactly the string "4"."""
+    assert ENV.get(variable) == "4", variable
