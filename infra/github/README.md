@@ -158,4 +158,4 @@ To limit exposure, the key stays on Yacine's machine, a token is minted per revi
 
 **Rotating the key:** generate a new key in the App's settings, replace the file, then delete the old key there. Nothing else holds a copy.
 
-**Headless runs** such as the on-call workflow (#35) don't have the key. Until it's provided to them (for example as a secret of the `oncall` environment), their reviews fall back to comments and their merges wait for Yacine.
+**Headless runs:** the on-call workflow (#35) reads a separate private key of the App from the `oncall` environment's `REVIEWER_APP_KEY` secret, in its `review` job only. It writes the key to a mode-600 file under the runner's temp directory for `REVIEWER_APP_KEY_PATH`, and deletes it in an `always()` step. Without that secret the review falls back to a comment, and the merge waits for Yacine ([deployment.md → On-call workflow](../../_docs/deployment.md#on-call-workflow-35)). To revoke only that copy, delete that key in the App's settings.

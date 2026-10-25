@@ -1,11 +1,11 @@
 # Runbooks
 
-One runbook per alert. The on-call agent (and any human) follows these step by step. Written with #33–#35.
+One runbook per alert. The on-call agent, woken by the alert workflow (`.github/workflows/oncall.yml`, #35), and any person follow them step by step. Written with #33–#35. The alert's `runbook` link points at its runbook here.
 
 | Runbook | Alert |
 |---|---|
-| `session-save-errors.md` | Session saves failing |
-| `history-latency.md` | History slow |
+| [`session-save-errors.md`](session-save-errors.md) | Session saves failing |
+| [`history-latency.md`](history-latency.md) | History slow |
 
 Shared procedures, used by the runbooks above:
 
