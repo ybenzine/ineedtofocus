@@ -446,7 +446,9 @@ describe('App rain', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
     await screen.findByRole('heading', { name: 'Session not saved' })
-    expect(sources[1].stop).toHaveBeenCalled()
+    // The unmounted controls stop the rain in a passive-effect cleanup, which React may run a
+    // moment after the commit that shows the summary: wait for it rather than assume it is done.
+    await vi.waitFor(() => expect(sources[1].stop).toHaveBeenCalled())
   })
 
   it('restores the chosen source and the rain after a reload', async () => {
