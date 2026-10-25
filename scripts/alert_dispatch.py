@@ -25,6 +25,8 @@ agent reads the same fields.
        "status": "firing" | "resolved",
        "title": "Session saves failing (prod)",              # the rule's title
        "summary": "...", "description": "...",               # the rule's annotations
+       # title, summary and description are pinned to the rule (#33, #212): its fixed
+       # text, and its description template with only numbers in the slots
        "started_at": "2026-10-25T08:37:51Z",
        "resolved_at": "" | "2026-10-25T08:43:46Z",           # empty while firing
        "links": {"dashboard": ..., "traces": ..., "runbook": ..., "alert": ...}}}
@@ -33,12 +35,14 @@ Every field is required and nothing else is allowed: an unexpected field is how 
 data would sneak in, so it fails the check. The text never holds an email address or a
 YouTube link (AGENTS.md, telemetry privacy). The payload is untrusted input: whoever holds
 a token with write access to the repo can send one, so a consumer passes it through
-environment variables and files, never `${{ }}` in a script. Stdlib only.
+environment variables and files, never `${{ }}` in a script. Stdlib only, plus the
+rules beside it (grafana_alerts.py, itself stdlib only).
 """
 
 from __future__ import annotations
 
 import contextlib
+import functools
 import hmac
 import http.server
 import json
@@ -48,8 +52,11 @@ import secrets
 import sys
 import urllib.parse
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import grafana_alerts as ga
 
 EVENT_TYPE = "grafana-alert"
 REPOSITORY = "ybenzine/ineedtofocus"
@@ -74,19 +81,99 @@ FIELDS = (
 )
 LINKS = ("dashboard", "traces", "runbook", "alert")
 MAX_LENGTH = {"title": 200, "summary": 500, "description": 1000}
-# The only values `title` and `summary` may take: the rules' title and summary annotation
-# (#33, scripts/grafana_alerts.py; scripts/tests/test_alert_dispatch.py keeps them in
-# step). Both are fixed text, so nothing a sender writes reaches #35's agent through them.
-TITLES = {
-    "session-save-errors": "Session saves failing ({env})",
-    "history-latency": "History slow ({env})",
+# What `title`, `summary` and `description` may say comes from the rules (#33,
+# scripts/grafana_alerts.py), read from grafana_alerts.rules() rather than copied here, so
+# a rule edit can't drift from the check. `title` and `summary` are the rule's fixed text.
+# `description` is the rule's template with a number, percentage or duration in each
+# `{{ … }}` slot (#212). So nothing a sender writes reaches #35's agent through them.
+SLOT = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
+_NUMBER = r"\d+(?:\.\d+)?(?:e[-+]\d+)?"  # Go's %.4g: 19.67, 100, 1.235e+06, 1e-05
+_NOT_FINITE = r"NaN|[-+]Inf"
+# What each template function renders (Prometheus' template functions, which Grafana's
+# alert rule templates use), and the example value a synthetic alert puts in the slot:
+# zero, i.e. nothing failed. Any other function or argument in a slot fails loudly.
+SLOT_VALUES = {
+    # fmt.Sprintf("%.4g%%", v*100)
+    "humanizePercentage": (rf"-?{_NUMBER}%|(?:{_NOT_FINITE})%", "0%"),
+    # fmt.Sprintf("%.0f", v): a whole number, never an exponent
+    'printf "%.0f"': (rf"-?\d+|{_NOT_FINITE}", "0"),
+    # "1d 2h 3m 4s", "2h 0m 5s", "3m 4s", "4.875s", "0s", "500ms", "12.5us", "NaN"
+    "humanizeDuration": (
+        rf"-?(?:\d+d )?(?:\d+h )?\d+m \d+s|-?{_NUMBER}[munpfazy]?s|{_NOT_FINITE}",
+        "0s",
+    ),
 }
-SUMMARIES = {
-    "session-save-errors": "Over 5% of session saves are failing in {env}",
-    "history-latency": "History loads are slow in {env} (p95 over 2 s)",
-}
+_SLOT_CALL = re.compile(
+    r'\s*(?P<function>humanizePercentage|humanizeDuration|printf "%\.0f")'
+    r" \$values\.[A-Z]\.Value\s*"
+)
+
+
+def slot(code: str) -> tuple[str, str]:
+    """(the pattern of what Grafana renders, an example value) for a `{{ code }}` slot."""
+    call = _SLOT_CALL.fullmatch(code)
+    if not call:
+        raise ValueError(
+            f"no pattern for the description slot {{{{{code}}}}}: give its function a "
+            "pattern in scripts/alert_dispatch.py, SLOT_VALUES (#212)"
+        )
+    return SLOT_VALUES[call["function"]]
+
+
+def _literal(text: str) -> str:
+    if "{{" in text or "}}" in text:
+        raise ValueError(f"an unclosed template action in a description: {text!r}")
+    return text
+
+
+def description_pattern(template: str) -> re.Pattern[str]:
+    """The descriptions a rule's description template renders: its literal text exactly,
+    and in each slot only what the slot's function renders. Use it with fullmatch."""
+    parts: list[str] = []
+    at = 0
+    for action in SLOT.finditer(template):
+        parts.append(re.escape(_literal(template[at : action.start()])))
+        parts.append(f"(?:{slot(action[1])[0]})")
+        at = action.end()
+    parts.append(re.escape(_literal(template[at:])))
+    return re.compile("".join(parts))
+
+
+def example_description(template: str) -> str:
+    """The template with each slot's example value (zero): what a synthetic alert says."""
+    return SLOT.sub(lambda action: slot(action[1])[1], template)
+
+
+@dataclass(frozen=True)
+class RuleText:
+    """What one rule lets a dispatch's `title`, `summary` and `description` say."""
+
+    title: str
+    summary: str
+    template: str  # the description template
+    description: re.Pattern[str]
+
+
+@functools.cache
+def rule_text(alert: str, env: str) -> RuleText | None:
+    """The text of the rule for `alert` in `env` (#33), or None if there's no such rule."""
+    if env not in ga.ENVIRONMENTS:
+        return None
+    for rule in ga.rules(env):
+        if rule["labels"]["alert"] == alert:
+            template = rule["annotations"]["description"]
+            return RuleText(
+                title=rule["title"],
+                summary=rule["annotations"]["summary"],
+                template=template,
+                description=description_pattern(template),
+            )
+    return None
+
+
 # Free text never carries a link: the rules' annotations have none, and a link in text an
 # agent reads is the first step of a prompt injection. Links go only in `links`, checked.
+# Pinning the text to the rules already rules links out; this names the problem.
 LINK_IN_TEXT = re.compile(r"https?://|www\.|\]\(", re.IGNORECASE)
 TEXT_FIELDS = ("title", "summary", "description")
 MAX_LINK = 4000
@@ -133,11 +220,16 @@ def problems(
             found.append(f"{name} is empty")
         elif len(payload[name]) > limit:
             found.append(f"{name} is longer than {limit} characters")
-    if alert in ALERTS and env in environments:
-        for name, values in (("title", TITLES), ("summary", SUMMARIES)):
-            expected_text = values[alert].format(env=env)
+    rule = rule_text(alert, env) if alert in ALERTS and env in environments else None
+    if rule:
+        for name, expected_text in (("title", rule.title), ("summary", rule.summary)):
             if payload[name] != expected_text:
                 found.append(f"{name} is not the rule's: {expected_text!r}")
+        if not rule.description.fullmatch(payload["description"]):
+            found.append(
+                "description is not the rule's template with a number, percentage or "
+                f"duration in each slot: {rule.template!r}"
+            )
     for name in TEXT_FIELDS:
         if LINK_IN_TEXT.search(payload[name]):
             found.append(f"{name} holds a link (links belong in `links` only)")
