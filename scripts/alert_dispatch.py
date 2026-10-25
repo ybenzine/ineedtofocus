@@ -87,21 +87,42 @@ MAX_LENGTH = {"title": 200, "summary": 500, "description": 1000}
 # `description` is the rule's template with a number, percentage or duration in each
 # `{{ … }}` slot (#212). So nothing a sender writes reaches #35's agent through them.
 SLOT = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
-_NUMBER = r"\d+(?:\.\d+)?(?:e[-+]\d+)?"  # Go's %.4g: 19.67, 100, 1.235e+06, 1e-05
+# Each slot pattern is exactly what its function can print, and no wider: ASCII digits
+# only ([0-9], never \d, which matches any Unicode digit), with bounded lengths, so a slot
+# can't carry text spelled out in digits. Go's %.4g prints at most 4 significant digits:
+# fixed notation for exponents -4 to 3, else d.ddde±XX.
 _NOT_FINITE = r"NaN|[-+]Inf"
+_G4_1_TO_1000 = (  # %.4g of a value in [1, 1000), or 1000 once rounded: 1, 4.875, 59.99, 999.9
+    r"(?:[1-9](?:\.[0-9]{1,3})?|[1-9][0-9](?:\.[0-9]{1,2})?|[1-9][0-9]{2}(?:\.[0-9])?|1000)"
+)
+_G4 = (  # %.4g of any finite value: 0, 19.67, 1234, 0.001234, 1.235e+06, 1e-05
+    rf"-?(?:0|{_G4_1_TO_1000}|[1-9][0-9]{{3}}|0\.0{{0,3}}[1-9][0-9]{{0,3}}"
+    r"|[1-9](?:\.[0-9]{1,3})?e[-+][0-9]{2,3})"
+)
+_MINUTES = r"(?:[0-9]|[1-5][0-9])"  # 0-59, as %d prints it: no leading zero
+_HOURS = r"(?:[0-9]|1[0-9]|2[0-3])"  # 0-23
+# Prometheus' humanizeDuration (prometheus/common, helpers/templates): NaN and ±Inf as
+# %.4g; 0 as "0s"; from 1 s whole units, "1d 2h 3m 4s", "2h 0m 5s" or "3m 4s", and under
+# a minute %.4g seconds, "4.875s"; under 1 s %.4g of a value scaled into [1, 1000) with a
+# prefix, "500ms", "12.5us". Under 1 ys ("0.5ys", or an exponent): refused, fail closed.
+_DURATION = (
+    rf"-?[1-9][0-9]{{0,4}}d {_HOURS}h {_MINUTES}m {_MINUTES}s"
+    rf"|-?(?:[1-9]|1[0-9]|2[0-3])h {_MINUTES}m {_MINUTES}s"
+    rf"|-?(?:[1-9]|[1-5][0-9])m {_MINUTES}s"
+    r"|-?(?:[1-9](?:\.[0-9]{1,3})?|[1-5][0-9](?:\.[0-9]{1,2})?|60)s"  # 1 s to 59.99 s (60 rounded)
+    rf"|-?{_G4_1_TO_1000}[munpfazy]s"
+    rf"|0s|{_NOT_FINITE}"
+)
 # What each template function renders (Prometheus' template functions, which Grafana's
 # alert rule templates use), and the example value a synthetic alert puts in the slot:
 # zero, i.e. nothing failed. Any other function or argument in a slot fails loudly.
 SLOT_VALUES = {
     # fmt.Sprintf("%.4g%%", v*100)
-    "humanizePercentage": (rf"-?{_NUMBER}%|(?:{_NOT_FINITE})%", "0%"),
-    # fmt.Sprintf("%.0f", v): a whole number, never an exponent
-    'printf "%.0f"': (rf"-?\d+|{_NOT_FINITE}", "0"),
-    # "1d 2h 3m 4s", "2h 0m 5s", "3m 4s", "4.875s", "0s", "500ms", "12.5us", "NaN"
-    "humanizeDuration": (
-        rf"-?(?:\d+d )?(?:\d+h )?\d+m \d+s|-?{_NUMBER}[munpfazy]?s|{_NOT_FINITE}",
-        "0s",
-    ),
+    "humanizePercentage": (rf"(?:{_G4}|{_NOT_FINITE})%", "0%"),
+    # fmt.Sprintf("%.0f", v): a whole number, never an exponent; 15 digits is far beyond
+    # any count of sessions or loads in 5 minutes
+    'printf "%.0f"': (rf"-?[0-9]{{1,15}}|{_NOT_FINITE}", "0"),
+    "humanizeDuration": (_DURATION, "0s"),
 }
 _SLOT_CALL = re.compile(
     r'\s*(?P<function>humanizePercentage|humanizeDuration|printf "%\.0f")'
@@ -136,7 +157,8 @@ def description_pattern(template: str) -> re.Pattern[str]:
         parts.append(f"(?:{slot(action[1])[0]})")
         at = action.end()
     parts.append(re.escape(_literal(template[at:])))
-    return re.compile("".join(parts))
+    # ASCII: the patterns already spell digits [0-9]; this keeps any \s or \w ASCII too.
+    return re.compile("".join(parts), re.ASCII)
 
 
 def example_description(template: str) -> str:
@@ -221,6 +243,9 @@ def problems(
         elif len(payload[name]) > limit:
             found.append(f"{name} is longer than {limit} characters")
     rule = rule_text(alert, env) if alert in ALERTS and env in environments else None
+    if alert in ALERTS and env in environments and rule is None:
+        # Fail closed: with no rule to pin them to, the text fields are unchecked prose.
+        found.append(f"no rule for {alert} in {env} in scripts/grafana_alerts.py")
     if rule:
         for name, expected_text in (("title", rule.title), ("summary", rule.summary)):
             if payload[name] != expected_text:
