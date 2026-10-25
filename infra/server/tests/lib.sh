@@ -30,6 +30,14 @@ not_contains() {
   return 1
 }
 mode_owner() { stat -c '%a %U:%G' "$1"; }
+# `… | first_line`: the first line of stdin, read to the end. Never `| head -n1` (or any
+# reader that stops early: `grep -q`, `grep -m`, awk's `exit`): it exits after one line,
+# and a writer with more left to write then dies of SIGPIPE. tail writes a file 8 KiB at
+# a time, so `new_calls | head -n1` did whenever the new calls crossed an 8 KiB boundary
+# of calls.log and head won the race between two of tail's writes. Under pipefail that
+# made the pipeline's status 141, and in an assignment set -e stopped the whole harness
+# with it, right after a passing check (#256).
+first_line() { sed -n 1p; }
 
 finish() {
   echo

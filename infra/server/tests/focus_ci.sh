@@ -64,7 +64,7 @@ SSH_PORT=2223
 REPO=ghcr.io/ybenzine/ineedtofocus
 RECORD=/opt/focus/dev/release
 HISTORY=/opt/focus/dev/releases.log
-# shellcheck source=/dev/null # lib.sh: check, eq, contains, not_contains, mode_owner, finish
+# shellcheck source=/dev/null # lib.sh: check, eq, contains, not_contains, mode_owner, first_line, finish
 . "$SRC/server/tests/lib.sh"
 
 value() { sed -n "s/^$1=//p" "$RECORD"; }
@@ -72,7 +72,7 @@ mark() { mark=$(wc -l <"$FAKE/calls.log"); }
 new_calls() { tail -n "+$((mark + 1))" "$FAKE/calls.log"; }
 no_new_calls() { eq "$(new_calls)" ""; }
 # line_of <text> <pattern>: number of the first line containing pattern (0 if none).
-line_of() { grep -nF -- "$2" <<<"$1" | head -n1 | cut -d: -f1 || echo 0; }
+line_of() { grep -nF -- "$2" <<<"$1" | first_line | cut -d: -f1 || echo 0; }
 before() { # <text> <first> <second>: first appears, and before second
   local a b
   a=$(line_of "$1" "$2")
@@ -481,8 +481,8 @@ deploy_fails() { # <description> <step> <sha> <digest> <must not appear>
   check "$desc: says at which step" contains "$out" "failed at '$step'"
   check "$desc: stops before $absent" not_contains "$(new_calls)" "$absent"
   check "$desc: record unchanged" eq "$(cat "$RECORD")" "$before_record"
-  check "$desc: logged as failed" contains "$(new_history | head -n1)" "action=deploy outcome=failed tag=$tag digest=$dig"
-  check "$desc: logged step" contains "$(new_history | head -n1)" "step=$step"
+  check "$desc: logged as failed" contains "$(new_history | first_line)" "action=deploy outcome=failed tag=$tag digest=$dig"
+  check "$desc: logged step" contains "$(new_history | first_line)" "step=$step"
   check "$desc: prunes nothing (#117)" not_contains "$(new_calls)" ":: image ls"
 }
 # Before `up`, the running app is untouched: nothing to revert.
@@ -551,7 +551,7 @@ ci "deploy $S2 $D2"
 wait "$holder"
 check "deploy succeeds once the lock is free" eq "$rc" 0
 check "deploy said it was waiting" contains "$out" "waiting up to 900s"
-first=$(new_calls | head -n1 | cut -d' ' -f1)
+first=$(new_calls | first_line | cut -d' ' -f1)
 check "no docker call while another holder had the lock" \
   awk -v a="$first" -v b="$(cat /tmp/released)" 'BEGIN { exit !(a >= b) }'
 
@@ -740,7 +740,7 @@ check "prod runs another image: fails (status 1)" eq "$rc" 1
 check "prod runs another image: at start" contains "$out" "failed at 'start'"
 check "prod runs another image: says so" contains "$out" "the app runs image"
 check "prod runs another image: record unchanged" eq "$(cat "$PROD_RECORD")" "$before_record"
-check "prod runs another image: logged" contains "$(new_history "$PROD_HISTORY" | head -n1)" "outcome=failed tag=$S1 digest=$D1 previous_tag=$S2"
+check "prod runs another image: logged" contains "$(new_history "$PROD_HISTORY" | first_line)" "outcome=failed tag=$S1 digest=$D1 previous_tag=$S2"
 check "prod runs another image: the revert to S2 was tried, and failed the same way" \
   contains "$(new_history "$PROD_HISTORY" | sed -n 2p)" "env=prod action=revert outcome=failed tag=$S2 digest=$D2"
 # An older release on a newer schema: alembic can't locate the revision, before any DDL.
@@ -771,7 +771,7 @@ prod "deploy $S1 $D1"
 wait "$holder"
 check "prod deploy succeeds once the lock is free" eq "$rc" 0
 check "prod deploy said it was waiting" contains "$out" "waiting up to 900s"
-first=$(new_calls | head -n1 | cut -d' ' -f1)
+first=$(new_calls | first_line | cut -d' ' -f1)
 check "prod: no docker call while another holder had the lock" \
   awk -v a="$first" -v b="$(cat /tmp/released)" 'BEGIN { exit !(a >= b) }'
 check "dev's state still untouched by every prod request" eq "$(cat "$RECORD" "$HISTORY" "$FAKE/running-dev")" "$dev_state"
@@ -1074,7 +1074,7 @@ calls=$(new_calls)
 check "rollback key: rollback succeeds once the lock is free" eq "$rc" 0
 check "rollback key: prints the result" contains "$out" "result from_tag=$S1 from_digest=$D1 tag=$S2 digest=$D2"
 check "rollback key: said it was waiting" contains "$out" "waiting up to 900s"
-first=$(new_calls | head -n1 | cut -d' ' -f1)
+first=$(new_calls | first_line | cut -d' ' -f1)
 check "rollback key: no docker call while another holder had the lock" \
   awk -v a="$first" -v b="$(cat /tmp/released)" 'BEGIN { exit !(a >= b) }'
 check "rollback key: prod rolled back to S2, prod's release before S1" eq "$(pvalue tag) $(pvalue digest) $(pvalue action)" "$S2 $D2 rollback"
@@ -1296,7 +1296,7 @@ check "a last line without a newline still counts" eq "$rc" 0
 check "it's that line's digest" contains "$out" "digest=$D14"
 ci "deploy $S10 $D14"
 check "the next deploy succeeds" eq "$rc" 0
-check "and doesn't glue its line onto the last one" eq "$(tail -n 2 "$HISTORY" | head -n 1)" "$hand_line"
+check "and doesn't glue its line onto the last one" eq "$(tail -n 2 "$HISTORY" | first_line)" "$hand_line"
 check "its own line is whole" contains "$(last_history)" "action=deploy outcome=ok tag=$S10 digest=$D14"
 
 echo "--- The schema step: what a deploy can't read stops it before migrating (#165)"
@@ -1356,8 +1356,8 @@ check "it says it sets dev's rollback floor" contains "$out" "contract migration
 check "the floor line comes first, then the deploy's" \
   eq "$(new_history | sed 's/^time=[^ ]* //' | cut -d' ' -f1-5)" \
   "env=dev action=floor outcome=set tag=$C1 digest=$EC"$'\n'"env=dev action=deploy outcome=ok tag=$C1 digest=$EC"
-check "the floor line names the schema and the contract revisions" contains "$(new_history | head -n1)" " schema=0003 contracts=0003"
-check "the floor line names no rollback target" contains "$(new_history | head -n1)" "previous_tag=- previous_digest=-"
+check "the floor line names the schema and the contract revisions" contains "$(new_history | first_line)" " schema=0003 contracts=0003"
+check "the floor line names no rollback target" contains "$(new_history | first_line)" "previous_tag=- previous_digest=-"
 check "the deploy line records the schema" contains "$(last_history)" " schema=0003"
 check "it migrates as usual" contains "$calls" "app_tag=$C1 $migrate"
 check "record: no rollback target, everything before is below the floor" eq "$(value previous_tag)$(value previous_digest)" ""
@@ -1396,7 +1396,7 @@ mark
 hmark "$PROD_HISTORY"
 prod "deploy $C1 $EC"
 check "prod's contract deploy succeeds" eq "$rc" 0
-check "it sets prod's own floor" contains "$(new_history "$PROD_HISTORY" | head -n1)" "env=prod action=floor outcome=set tag=$C1 digest=$EC"
+check "it sets prod's own floor" contains "$(new_history "$PROD_HISTORY" | first_line)" "env=prod action=floor outcome=set tag=$C1 digest=$EC"
 check "prod record: no rollback target below it" eq "$(pvalue previous_tag)$(pvalue previous_digest)" ""
 check "prod's deploy: no dev file in any docker call" not_contains "$(new_calls)" "/opt/focus/dev/"
 check "dev's log still has its one floor line" eq "$(floor_lines "$HISTORY")" 1
@@ -1439,7 +1439,7 @@ ci "deploy $K $EK"
 calls=$(new_calls)
 check "it fails (status 1)" eq "$rc" 1
 check "the floor line was written first, with both contract revisions" \
-  contains "$(new_history | head -n1)" "action=floor outcome=set tag=$K digest=$EK previous_tag=- previous_digest=- infra=$D schema=0005 contracts=0003,0005"
+  contains "$(new_history | first_line)" "action=floor outcome=set tag=$K digest=$EK previous_tag=- previous_digest=- infra=$D schema=0005 contracts=0003,0005"
 check "then the failed deploy" contains "$(new_history | sed -n 2p)" "action=deploy outcome=failed tag=$K digest=$EK previous_tag=- previous_digest=- infra=$D step=start schema=0005"
 check "it says C1 is below the new floor, so it isn't started again" \
   contains "$out" "$C1, the release that ran before, is below dev's rollback floor (contract migration 0003,0005 ran with the deploy of $K"
