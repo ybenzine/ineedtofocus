@@ -4,12 +4,12 @@ from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request
-from opentelemetry import trace
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import AuthSession, User
 from app.security import token_hash
+from app.telemetry import tag_user
 
 SESSION_COOKIE = "focus_session"
 
@@ -41,7 +41,7 @@ async def current_user(request: Request, db: DbSession) -> User:
         )
         if user is not None:
             # The opaque internal id only (never the email) lets a trace be tied to a user.
-            trace.get_current_span().set_attribute("enduser.id", str(user.id))
+            tag_user(str(user.id))
             return user
     raise HTTPException(status_code=401, detail="Not signed in")
 

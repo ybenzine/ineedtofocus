@@ -39,4 +39,14 @@ describe('tracedFetch', () => {
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(new Headers(init.headers).get('traceparent')).toBe(own)
   })
+
+  it('keeps the headers of a Request input', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}'))
+    vi.stubGlobal('fetch', fetchMock)
+    await tracedFetch(new Request('http://localhost/api/history', { headers: { 'X-Test': '1' } }))
+    const [, init] = fetchMock.mock.calls[0] as unknown as [Request, RequestInit]
+    const headers = new Headers(init.headers)
+    expect(headers.get('x-test')).toBe('1')
+    expect(headers.get('traceparent')).toMatch(TRACEPARENT)
+  })
 })

@@ -10,10 +10,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from opentelemetry import trace
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.trace import NoOpTracerProvider, SpanKind
+from opentelemetry.trace import NoOpTracerProvider, SpanKind, Status, StatusCode
 
 from app.config import Settings
 from app.main import app_factory, create_app
@@ -194,3 +195,48 @@ def test_app_factory_installs_the_scrubber(monkeypatch: pytest.MonkeyPatch) -> N
     assert len(server) == 1
     assert (server[0].attributes or {})["url.query"] == "REDACTED"
     assert "someone" not in repr([dict(s.attributes or {}) for s in spans])
+
+
+def test_allowlist_runs_before_an_exporter_registered_first() -> None:
+    """Production order: the distro registers the exporter, then the app installs the filters."""
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    assert install_privacy_filters(provider) is True
+    span = provider.get_tracer("t").start_span(
+        "s", attributes={"http.route": "/r", "goal": "Write the report"}
+    )
+    span.set_status(Status(StatusCode.ERROR, "invalid input for query argument $1: 'a@b.c'"))
+    span.end()
+    (done,) = exporter.get_finished_spans()
+    assert dict(done.attributes or {}) == {"http.route": "/r"}
+    assert done.status.status_code == StatusCode.ERROR
+    assert done.status.description is None
+
+
+def test_instrument_engine_traces_the_engine_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from app import telemetry
+
+    calls: list[object] = []
+    monkeypatch.setattr(telemetry, "EngineTracer", lambda *a, **k: calls.append(a))
+    engine = create_async_engine("postgresql+asyncpg://u:p@localhost/db")
+    provider = TracerProvider()
+    assert telemetry.instrument_engine(engine, provider) is True
+    assert len(calls) == 1
+    # The stock instrumentor active (it patches create_engine itself): no second set of spans.
+    monkeypatch.setattr(
+        SQLAlchemyInstrumentor,
+        "is_instrumented_by_opentelemetry",
+        property(lambda _: True),
+    )
+    assert telemetry.instrument_engine(engine, provider) is False
+    assert len(calls) == 1
+
+
+def test_the_image_disables_the_stock_sqlalchemy_instrumentation() -> None:
+    dockerfile = Path(__file__).resolve().parents[3] / "Dockerfile"
+    if not dockerfile.is_file():
+        pytest.skip("Dockerfile not available")
+    assert "OTEL_PYTHON_DISABLED_INSTRUMENTATIONS=sqlalchemy" in dockerfile.read_text()

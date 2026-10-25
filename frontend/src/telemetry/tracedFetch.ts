@@ -19,7 +19,10 @@ export function newTraceparent(): string {
 }
 
 export const tracedFetch: typeof fetch = (input, init) => {
-  const headers = new Headers(init?.headers)
+  // `init.headers` replaces a Request's own headers in fetch(), so start from whichever applies.
+  const headers = new Headers(
+    init?.headers ?? (input instanceof Request ? input.headers : undefined),
+  )
   if (!headers.has('traceparent')) headers.set('traceparent', newTraceparent())
   return globalThis.fetch(input, { ...init, headers })
 }

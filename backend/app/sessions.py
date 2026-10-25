@@ -319,7 +319,9 @@ async def save_session(
             raise HTTPException(409, "A session id is already in use")
         if not created:
             response.status_code = 200
-        SESSION_SAVES.add(1, {"kind": "single", "outcome": "created" if created else "existing"})
+        outcome = "created" if created else "existing"
+        SESSION_SAVES.add(1, {"kind": "single", "outcome": outcome})
+        logger.info("session saved", extra={"outcome": outcome})
         return _out(rows[body.id])
 
 
@@ -403,6 +405,7 @@ async def sync_sessions(body: SyncRequest, user: CurrentUser, db: DbSession) -> 
         for outcome in ("created", "existing", "rejected"):
             if count[outcome]:
                 SESSION_SAVES.add(count[outcome], {"kind": "sync", "outcome": outcome})
+        logger.info("sessions synced", extra={"batch_size": len(body.sessions)})
         return SyncResult(
             created=count["created"],
             existing=count["existing"],

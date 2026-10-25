@@ -13,6 +13,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
+from fastapi import APIRouter
 from fastapi.testclient import TestClient
 from opentelemetry import metrics
 from opentelemetry.sdk.metrics import MeterProvider
@@ -20,8 +21,10 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from sqlalchemy import text
 
 from app.config import Settings
+from app.deps import DbSession
 from app.logging_config import configure_logging
 from app.main import create_app
 from app.telemetry import install_privacy_filters
@@ -74,7 +77,7 @@ def traced(app_url: str) -> Iterator[tuple[TestClient, InMemorySpanExporter]]:
     assert install_privacy_filters(provider) is True
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     app = create_app(Settings(database_url=app_url, cookie_secure=False), tracer_provider=provider)
-    with TestClient(app) as c:
+    with TestClient(app, raise_server_exceptions=False) as c:
         yield c, exporter
 
 
@@ -136,12 +139,23 @@ def test_no_customer_data_in_any_exported_attribute_event_or_name(
     sent = [make_session(goal=GOAL), make_session(goal=GOAL, focus_seconds=-5)]
     assert c.post("/api/sessions/sync", json={"sessions": sent}).status_code == 200
     assert c.get(f"/api/history?view=all&tz=UTC&tag=work&email={EMAIL}").status_code == 200
-    # Unmatched paths and a duplicate sign-up (a database error quoting the email).
+    # Unmatched paths, and a statement that fails on a bound customer value: asyncpg's error
+    # text quotes the value, and the SQLAlchemy instrumentation puts it in the span status.
+    failing = APIRouter()
+
+    @failing.get("/api/_boom")
+    async def boom(db: DbSession) -> dict[str, str]:
+        await db.execute(text("SELECT CAST(:v AS uuid)"), {"v": EMAIL})
+        return {}
+
+    c.app.include_router(failing)  # type: ignore[attr-defined]
+    assert c.get("/api/_boom").status_code == 500
     assert c.get(f"/api/nope/{EMAIL}").status_code == 404
     assert c.get(f"/api/nope/{YOUTUBE.replace('/', '%2F')}").status_code == 404
     assert c.get(f"/api/sessions/{uuid.uuid4()}?goal={GOAL}").status_code in (404, 405)
-    dup = c.post("/api/auth/signup", json={"email": EMAIL, "password": PASSWORD})
-    assert dup.status_code == 409
+    assert (
+        c.post("/api/auth/signup", json={"email": EMAIL, "password": PASSWORD}).status_code == 409
+    )
 
     spans = exporter.get_finished_spans()
     dumped = repr(
@@ -150,6 +164,7 @@ def test_no_customer_data_in_any_exported_attribute_event_or_name(
                 s.name,
                 dict(s.attributes or {}),
                 [(e.name, dict(e.attributes or {})) for e in s.events],
+                (s.status.status_code.name, s.status.description),
             )
             for s in spans
         ]
@@ -162,8 +177,14 @@ def test_no_customer_data_in_any_exported_attribute_event_or_name(
     assert "UNMATCHED" in paths
     assert "/api/sessions/{session_id}" in paths
     assert not any("nope" in str(p) for p in paths)
-    # The only user reference is the opaque id.
+    errors = [s for s in spans if s.status.status_code.name == "ERROR"]
+    assert errors, "expected the failing statement to leave an error span"
+    assert all(s.status.description is None for s in spans)
+    # The only user reference is the opaque id, on the server span (not a child).
     assert user_id in dumped
+    users = [s for s in spans if (s.attributes or {}).get("enduser.id") == user_id]
+    assert users
+    assert all(s.kind.name == "SERVER" for s in users)
     allowed_keys = {k for s in spans for k in (s.attributes or {})}
     assert not allowed_keys & {
         "http.user_agent",
@@ -182,8 +203,6 @@ def test_logs_carry_trace_and_span_ids_of_the_request(
     capsys.readouterr()
     exporter.clear()
     logging.getLogger("app.test").info("outside any request")
-
-    from fastapi import APIRouter
 
     router = APIRouter()
 
@@ -258,3 +277,45 @@ def test_history_load_metrics(traced: tuple[TestClient, InMemorySpanExporter]) -
     assert _value("focus.history.loads", outcome="invalid") == invalid + 1
     assert _count("focus.history.load.duration", outcome="ok") == latency + 1
     assert _count("focus.history.load.duration", outcome="client_error") >= 1
+
+
+def test_failures_before_the_handler_are_counted(
+    traced: tuple[TestClient, InMemorySpanExporter],
+) -> None:
+    """FastAPI's 422s happen before the handler; they are counted by the error handlers."""
+    c, _ = traced
+    _signed_in(c)
+    rejected = _value("focus.session.saves", kind="single", outcome="rejected")
+    sync_rejected = _value("focus.session.saves", kind="sync", outcome="rejected")
+    invalid = _value("focus.history.loads", outcome="invalid")
+    assert c.post("/api/sessions", json={"nonsense": True}).status_code == 422
+    assert c.post("/api/sessions/sync", json={"sessions": []}).status_code == 422
+    assert c.get("/api/history?view=all").status_code == 422  # tz is required
+    assert _value("focus.session.saves", kind="single", outcome="rejected") == rejected + 1
+    assert _value("focus.session.saves", kind="sync", outcome="rejected") == sync_rejected + 1
+    assert _value("focus.history.loads", outcome="invalid") == invalid + 1
+
+
+def test_a_failure_inside_the_handler_is_counted_once(
+    traced: tuple[TestClient, InMemorySpanExporter],
+) -> None:
+    c, _ = traced
+    _signed_in(c)
+    invalid = _value("focus.history.loads", outcome="invalid")
+    assert c.get("/api/history?view=all&tz=Not/AZone").status_code == 422
+    assert _value("focus.history.loads", outcome="invalid") == invalid + 1
+
+
+def test_duration_histograms_use_second_buckets() -> None:
+    from app.metrics import BATCH_SIZE_BUCKETS, LATENCY_BUCKETS_S
+
+    assert 2 in LATENCY_BUCKETS_S  # the history alert threshold is a bucket edge
+    assert max(LATENCY_BUCKETS_S) <= 10 and min(LATENCY_BUCKETS_S) < 0.01
+    for name, bounds in (
+        ("focus.session.save.duration", LATENCY_BUCKETS_S),
+        ("focus.history.load.duration", LATENCY_BUCKETS_S),
+        ("focus.sync.batch.size", BATCH_SIZE_BUCKETS),
+    ):
+        points = _points(name)
+        assert points, f"no data points for {name}"
+        assert all(list(p.explicit_bounds) == bounds for p in points.values())

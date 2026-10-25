@@ -16,15 +16,18 @@ attributes only at span start, which is what makes `on_start` enough (#31).
 """
 
 from collections.abc import MutableMapping
+from contextvars import ContextVar
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi.telemetry import TelemetryConfig
 from opentelemetry import trace
 from opentelemetry.context import Context
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.instrumentation.sqlalchemy.engine import EngineTracer
 from opentelemetry.metrics import NoOpMeter
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor, TracerProvider
+from opentelemetry.trace import SpanKind, Status
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 # Attributes that may carry a full URL (stable and old HTTP semantic conventions).
@@ -83,6 +86,18 @@ ALLOWED_SPAN_ATTRIBUTES = frozenset(
 ALLOWED_EVENT_ATTRIBUTES = frozenset({"exception.type", "exception.escaped"})
 
 
+# The request's server span, so code deep in a dependency can tag it (the current span there
+# is a `fastapi.dependencies` child).
+_server_span: ContextVar[Span | None] = ContextVar("server_span", default=None)
+
+
+def tag_user(user_id: str) -> None:
+    """Record the opaque user id on the request's server span."""
+    span = _server_span.get()
+    if span is not None and span.is_recording():
+        span.set_attribute("enduser.id", user_id)
+
+
 def strip_query(url: str) -> str:
     """`https://h/p?a=b#f` -> `https://h/p` (also works for a bare `/p?a=b`)."""
     parts = urlsplit(url)
@@ -102,6 +117,8 @@ class QueryStringScrubber(SpanProcessor):
     """
 
     def on_start(self, span: Span, parent_context: Context | None = None) -> None:
+        if span.kind == SpanKind.SERVER:
+            _server_span.set(span)
         attributes = span.attributes or {}
         for key in URL_KEYS:
             value = attributes.get(key)
@@ -144,6 +161,9 @@ class AttributeAllowlist(SpanProcessor):
                 if isinstance(value, str):
                     clean[key] = _with_path(value, route)
         span._attributes = clean
+        # A status description is free text (the SQLAlchemy instrumentation puts `str(exc)`
+        # there, which can quote a bound value): keep the code, drop the words.
+        span._status = Status(span.status.status_code)
         for event in span._events:
             event._attributes = {
                 k: v for k, v in (event.attributes or {}).items() if k in ALLOWED_EVENT_ATTRIBUTES
@@ -188,6 +208,8 @@ def instrument_engine(engine: AsyncEngine, tracer_provider: TracerProvider | Non
     provider = tracer_provider if tracer_provider is not None else trace.get_tracer_provider()
     if not isinstance(provider, TracerProvider):
         return False
+    if SQLAlchemyInstrumentor().is_instrumented_by_opentelemetry:
+        return False  # the stock instrumentor already traces new engines: no second set of spans
     # `EngineTracer` is what `SQLAlchemyInstrumentor` attaches to an engine. Using it directly
     # instruments only this engine (the instrumentor is a process-wide singleton that also
     # patches `create_engine`) and skips its version check, which refuses SQLAlchemy 2.1.

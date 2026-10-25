@@ -86,3 +86,14 @@ def test_otlp_copy_drops_extra_and_color_message(
     assert attrs.get("version") == "1"
     assert "goal" not in attrs
     assert "Secret" not in repr(attrs)
+
+
+def test_asyncpg_argument_values_are_scrubbed() -> None:
+    text = (
+        "invalid input for query argument $1: 'boom-person@example.com' "
+        "(invalid UUID 'boom-person@example.com': length must be 32)\nnext line"
+    )
+    out = scrub(text)
+    assert "boom-person" not in out
+    assert "invalid input for query argument $1: [redacted]" in out
+    assert "next line" in out

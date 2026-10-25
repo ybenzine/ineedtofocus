@@ -50,8 +50,14 @@ def trace_fields() -> dict[str, str | None]:
     return {"trace_id": format(ctx.trace_id, "032x"), "span_id": format(ctx.span_id, "016x")}
 
 
+# asyncpg quotes a value it can't encode ("invalid input for query argument $1: 'a@b.c' (...)"),
+# and the reason often repeats it. Drop the rest of that line.
+_ASYNCPG_ARGUMENT = re.compile(r"(invalid input for query argument \$\d+:).*$", re.MULTILINE)
+
+
 def scrub(text: str) -> str:
     text = _ANSI.sub("", text)
+    text = _ASYNCPG_ARGUMENT.sub(r"\1 [redacted]", text)
     text = _PG_DETAIL.sub("DETAIL: [redacted]", text)
     return _SQL_PARAMETERS.sub("[parameters: [redacted]]", text)
 
