@@ -40,7 +40,7 @@ Write every issue comment, PR body and review body to a file under `/tmp` (outsi
 - `gh issue create --body-file <file>` and `gh issue edit <n> --body-file <file>`
 - REST fallback: `gh api -X POST <path> -F body=@<file>`
 
-Name each body file with a per-issue prefix, `<agent-abbrev><n>-` (`do34-pr.md`, `fe203-comment.md`), where `<agent-abbrev>` is `pm`, `be`, `fe`, `qa`, `do`, `rev` or `oc`; never a generic `pr.md`. `/tmp` is shared by every session, and a session's scratchpad by all of that session's subagents, so a generic name once posted another issue's body (#206 went up with #199's `Closes #199`). Before posting, check that the body names the right issue (`Closes #<n>` in a PR body).
+Name each body file with a per-issue prefix, `<agent-abbrev><n>-` (`do34-pr.md`, `fe203-comment.md`), where `<agent-abbrev>` is `pm`, `be`, `fe`, `qa`, `do`, `rev` or `oc`, or `lead` for the lead session's own bodies; never a generic `pr.md`. `/tmp` is shared by every session, and a session's scratchpad by all of that session's subagents, so a generic name once posted another issue's body (#206 went up with #199's `Closes #199`). Before posting, check that the body names the right issue (`Closes #<n>` in a PR body).
 
 Never pass a body inline (`--body "…"`, `-b "…"`, `-f body=…`). The permission rules in `.claude/settings.json` match the whole command text, so a word such as "protection", "environments", "dispatches" or "private=" in an inline body triggers an ask or deny rule and stalls an unattended run.
 
