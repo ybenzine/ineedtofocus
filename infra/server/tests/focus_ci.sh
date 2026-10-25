@@ -7,15 +7,21 @@
 #   installer   refuses non-root, malformed shas, commits not on main and trees with
 #               symlinks; writes the full diff and installs nothing without a typed
 #               "yes" on a terminal; installs root-owned files the deploy user can't
-#               change; starts the edge; on a change, recreates Caddy and the collectors
+#               change; pulls the pinned images it starts first, and installs nothing
+#               when a pull fails (#170); starts the edge; on a change, recreates Caddy
+#               and the collectors
 #   refusals    anything but `deploy <sha> sha256:<digest>`, `rollback [<sha>]` or
 #               `status` is refused with exit status 2 before any docker call (shells,
 #               scp, sftp, injection, case, spacing, length, an unknown profile)
-#   deploy      pull by digest, revision label check, migrate, then up, then the
-#               running-image, /healthz and /readyz checks; clean environment; the record
+#   deploy      pull the missing dependency images (Postgres, the collector) by their
+#               pinned digests, as on dev's first deploy (#28, #170), and the app by
+#               digest; revision label check, migrate, then up, then the running-image,
+#               /healthz and /readyz checks; clean environment; the record
 #   rollback    no migration; walks back through previous releases
-#   failures    each failing step stops the deploy, keeps the record and logs it; a
-#               failure at start reverts, and says so when the revert fails too
+#   failures    each failing step stops the deploy, keeps the record and logs it (a
+#               dependency image that can't be pulled or isn't pinned stops it at pull,
+#               before anything runs); a failure at start reverts, and says so when the
+#               revert fails too
 #   lock        a deploy waits for /opt/focus/deploy.lock
 #   prod        (#29) the prod key: hostile inputs; it can't roll back or touch dev, and
 #               the dev key can't touch prod; `candidate` reads dev's records only; a
@@ -24,10 +30,11 @@
 #               a failing check or migration leaves the record and the running app alone
 #   revert      (#30) a deliberately broken build (never healthy, or no /readyz) on dev,
 #               and one broken on prod only: the deploy fails, and the release that ran
-#               before starts again by its digest, without migrating, under the same lock
+#               before starts again by its digest, without migrating, under the same lock,
+#               pulling a dependency image the host lost meanwhile
 #   known-good  (#30) rollback picks the newest release that passed the checks there and
-#               wasn't rolled back from, re-tags it from its own digest (pulling it if
-#               needed), never migrates; `rollback <sha>` takes only a known-good release;
+#               wasn't rolled back from, re-tags it from its own digest (pulling it and
+#               any pruned dependency image if needed, under the lock), never migrates; `rollback <sha>` takes only a known-good release;
 #               a release dev rolled back from isn't promotable until dev runs it again; a
 #               rollback whose target fails starts the release it left again
 #   rollback-prod (#30) the prod rollback key: hostile inputs; only rollback and status;
@@ -88,8 +95,26 @@ apt-get update -q >/dev/null
 apt-get install -y -q --no-install-recommends git >/dev/null
 mv /usr/bin/docker /usr/bin/docker.real
 install -m 0755 "$SRC/server/tests/fake_docker.sh" /usr/bin/docker
-install -d -m 1777 "$FAKE" "$FAKE/labels" "$FAKE/local" "$FAKE/tags" "$FAKE/fail" "$FAKE/broken"
+install -d -m 1777 "$FAKE" "$FAKE/labels" "$FAKE/tags" "$FAKE/fail" "$FAKE/broken"
+# Not sticky: root (install.sh) and the deploy user (focus-ci) both pull, and the tests
+# remove images from the host whoever pulled them.
+install -d -m 0777 "$FAKE/local"
 install -m 0666 /dev/null "$FAKE/calls.log"
+
+# The images the real compose files pin besides the app's (#170): in the fake registry
+# but not on the host, like on a fresh Droplet.
+pinned() { sed -n 's/^[[:space:]]*image:[[:space:]]*\([^[:space:]#]*@sha256:[0-9a-f]\{64\}\).*/\1/p' "$1"; }
+PG=$(pinned "$SRC/compose.prod.yml" | grep '^postgres:' || true)
+OTEL=$(pinned "$SRC/compose.prod.yml" | grep '^otel/opentelemetry-collector-contrib:' || true)
+CADDY=$(pinned "$SRC/compose.edge.yml" | grep '^caddy:' || true)
+check "sanity: compose.prod.yml pins Postgres by tag and digest" [ -n "$PG" ]
+check "sanity: compose.prod.yml pins the collector by tag and digest" [ -n "$OTEL" ]
+check "sanity: compose.edge.yml pins Caddy by tag and digest" [ -n "$CADDY" ]
+for ref in "$PG" "$OTEL" "$CADDY"; do
+  install -m 0644 /dev/null "$FAKE/labels/${ref#*@}"
+done
+on_host() { [[ -f $FAKE/local/${1#*@} ]]; }
+prune() { rm -f "$FAKE/local/${1#*@}"; } # <image>: it leaves the host
 
 # Upstream "GitHub": main has the working tree's infra/ (A), then a commit with a
 # symlink (B), then a change to the Caddyfile and the collector config (D). Branch
@@ -158,6 +183,15 @@ check "typing anything but yes: stops" [ "$rc" -ne 0 ]
 check "typing no: says nothing was installed" contains "$out" "stopped: nothing installed"
 check "nothing installed so far" [ ! -e /opt/focus/infra ]
 check "no forced command so far" [ ! -e /opt/focus/bin/focus-ci ]
+touch "$FAKE/fail/pull" # Docker Hub unreachable
+mark
+install_at "$A"
+rm "$FAKE/fail/pull"
+check "Caddy's image can't be pulled: install fails" eq "$rc" 1
+check "it names the image and says nothing was installed" contains "$out" "couldn't pull $CADDY (the edge): nothing installed"
+check "a failed pull installs nothing" [ ! -e /opt/focus/infra ]
+check "a failed pull installs no forced command" [ ! -e /opt/focus/bin/focus-ci ]
+check "a failed pull starts nothing" not_contains "$(new_calls)" " up "
 
 echo "--- Installer installs a commit on main, root-owned"
 mark
@@ -174,6 +208,11 @@ check "forced command is the repo's focus-ci.sh" cmp -s /opt/focus/bin/focus-ci 
 check "deploy lock is root 644" eq "$(mode_owner /opt/focus/deploy.lock)" "644 root:root"
 calls=$(new_calls)
 check "edge started" contains "$calls" ":: compose -f /opt/focus/infra/compose.edge.yml up -d --wait"
+check "installer pulls Caddy's image by its pinned digest (#170)" contains "$calls" ":: pull --quiet $CADDY"
+check "before starting the edge" before "$calls" ":: pull --quiet $CADDY" "compose.edge.yml up -d --wait"
+check "the edge starts with --pull never (only what was pulled)" contains "$calls" "compose.edge.yml up -d --wait --pull never"
+check "Caddy's image is on the host" on_host "$CADDY"
+check "nothing deployed yet: the environments' images aren't pulled by the installer" not_contains "$calls" ":: pull --quiet $PG"
 check "first install doesn't recreate Caddy" not_contains "$calls" "--force-recreate"
 check "installer calls docker with a clean environment" clean_env_only "$calls"
 for path in /opt/focus/infra/compose.sh /opt/focus/infra/env/dev.env /opt/focus/bin/focus-ci /opt/focus/deploy.lock; do
@@ -322,6 +361,16 @@ ci rollback
 check "rollback with no release: fails (status 1)" eq "$rc" 1
 check "rollback with no release: says so" contains "$out" "nothing to roll back to"
 
+echo "--- Dependency images missing, as on dev's first deploy (#28, #170)"
+check "sanity: Postgres' image isn't on the host" bash -c "! [ -e '$FAKE/local/${PG#*@}' ]"
+check "sanity: the collector's image isn't on the host" bash -c "! [ -e '$FAKE/local/${OTEL#*@}' ]"
+rc=0
+out=$(env -i PATH=/usr/bin:/bin APP_TAG="$S1" docker compose -f /opt/focus/infra/compose.prod.yml \
+  --env-file /opt/focus/dev/.env --env-file /opt/focus/infra/env/dev.env \
+  run --rm --pull never app alembic upgrade head 2>&1) || rc=$?
+check "sanity: without them, the fake fails migrate as dev did on #28" eq "$rc" 1
+check "sanity: with Docker's message" contains "$out" "No such image: $PG"
+
 echo "--- Deploy"
 mark
 ci_as dev -o 'SetEnv=LC_FOCUS=leak LANG=C.UTF-8' -- "deploy $S1 $D1"
@@ -332,6 +381,12 @@ compose_args="compose -f /opt/focus/infra/compose.prod.yml --env-file /opt/focus
 migrate=":: $compose_args run --rm --pull never app alembic upgrade head"
 start=":: $compose_args up -d --wait --wait-timeout 180 --pull never"
 check "pulls by digest" contains "$calls" ":: pull --quiet $REPO@$D1"
+check "lists the project's images (#170)" contains "$calls" "app_tag=$S1 :: $compose_args config --images"
+check "pulls Postgres' missing image by its pinned digest" contains "$calls" ":: pull --quiet $PG"
+check "pulls the collector's missing image by its pinned digest" contains "$calls" ":: pull --quiet $OTEL"
+check "pulls them before migrate" before "$calls" ":: pull --quiet $OTEL" "$migrate"
+check "never touches Caddy's image (the edge is install.sh's)" not_contains "$calls" "$CADDY"
+check "Postgres' and the collector's images are on the host now" bash -c "[ -e '$FAKE/local/${PG#*@}' ] && [ -e '$FAKE/local/${OTEL#*@}' ]"
 check "checks the revision label" contains "$calls" "org.opencontainers.image.revision\" }} $REPO@$D1"
 check "tags the digest :<sha> locally" contains "$calls" ":: tag $REPO@$D1 $REPO:$S1"
 check "pull before migrate" before "$calls" ":: pull --quiet" "$migrate"
@@ -358,8 +413,11 @@ check "deploy output shows the record" contains "$out" "deployed_at="
 ci status
 check "status prints the record" eq "$out" "$(cat "$RECORD")"
 
+mark
 ci "deploy $S2 $D2"
 check "second deploy succeeds" eq "$rc" 0
+check "second deploy: checks the dependency images are on the host" contains "$(new_calls)" ":: image inspect $PG"
+check "second deploy: pulls only the app, the rest is on the host" eq "$(new_calls | grep -c ':: pull ')" 1
 check "record: tag after the second deploy" eq "$(value tag)" "$S2"
 check "record: previous release is the first" eq "$(value previous_tag) $(value previous_digest)" "$S1 $D1"
 ci "deploy $S2 $D2"
@@ -412,10 +470,27 @@ check "image built from another commit: says so" contains "$out" "was built from
 no_revert "image built from another commit"
 deploy_fails "digest not in the registry" pull "$S2" "$D4" "alembic"
 no_revert "digest not in the registry"
+running_before=$(cat "$FAKE/running-dev")
+prune "$PG"                   # Postgres' image left the host (#117's pruning, a bump)
+touch "$FAKE/fail/pull"       # and Docker Hub is unreachable
+deploy_fails "a dependency image that can't be pulled" pull "$S2" "$D2" "alembic"
+rm "$FAKE/fail/pull"
+check "a dependency image that can't be pulled: names it (#170)" contains "$out" "could not pull $PG, which focus-dev needs"
+no_revert "a dependency image that can't be pulled"
+check "a dependency image that can't be pulled: the app isn't re-tagged" not_contains "$(new_calls)" ":: tag "
+check "a dependency image that can't be pulled: dev runs the same image" eq "$(cat "$FAKE/running-dev")" "$running_before"
+cp -p /opt/focus/infra/compose.prod.yml /tmp/compose.prod.yml.installed
+sed -i "s|$PG|postgres:17-alpine|" /opt/focus/infra/compose.prod.yml
+deploy_fails "a dependency image pinned by tag only" pull "$S2" "$D2" "alembic"
+cp -p /tmp/compose.prod.yml.installed /opt/focus/infra/compose.prod.yml
+check "a dependency image pinned by tag only: says so" contains "$out" "postgres:17-alpine in /opt/focus/infra/compose.prod.yml is not pinned by tag and digest"
+check "a dependency image pinned by tag only: never pulled by tag" not_contains "$(new_calls)" ":: pull --quiet postgres:17-alpine"
+no_revert "a dependency image pinned by tag only"
 touch "$FAKE/fail/migrate"
 deploy_fails "failed migration" migrate "$S2" "$D2" " up -d"
 rm "$FAKE/fail/migrate"
 no_revert "failed migration"
+check "the next deploy pulled Postgres' image again" contains "$(new_calls)" ":: pull --quiet $PG"
 # These fail every start, the revert's too (a broken host rather than a broken build;
 # the broken builds come with #30's tests below): the revert is tried and fails.
 revert_fails_too() { # <description>
@@ -463,17 +538,30 @@ diff_text=$(cat "/root/focus-install-$D.diff")
 check "the diff shows the Caddyfile change" contains "$diff_text" "+# changed"
 check "the diff is against the installed files" contains "$diff_text" "--- a/caddy/Caddyfile"
 check "the diff has no symlink in it" not_contains "$diff_text" "b/link"
+prune "$OTEL" # the collector's image left the host
+touch "$FAKE/fail/pull"
+mark
+install_at "$D"
+rm "$FAKE/fail/pull"
+check "a pull fails for dev's images: install fails (#170)" eq "$rc" 1
+check "a pull fails for dev's images: names the image" contains "$out" "couldn't pull $OTEL (focus-dev): nothing installed"
+check "a pull fails for dev's images: still the old revision" eq "$(cat /opt/focus/infra/REVISION)" "$A"
+check "a pull fails for dev's images: nothing started or recreated" not_contains "$(new_calls)" " up "
 mark
 install_typing yes "$D"
 printf '%s\n' "$out" | sed 's/^/     | /'
 check "second install succeeds once yes is typed" eq "$rc" 0
 calls=$(new_calls)
+check "install pulls the collector image dev needs and the host lacks" contains "$calls" ":: pull --quiet $OTEL"
+check "it lists dev's images from the new files, before they're installed" \
+  contains "$calls" "/stage/infra/compose.prod.yml --env-file /opt/focus/dev/.env"
+check "it pulls before recreating dev's collector" before "$calls" ":: pull --quiet $OTEL" "--force-recreate otel-collector"
 check "REVISION updated" eq "$(cat /opt/focus/infra/REVISION)" "$D"
 check "previous copy kept" eq "$(cat /opt/focus/infra.previous/REVISION)" "$A"
 check "shows the commits since the installed revision" contains "$out" "changes to infra/ from $A to $D"
-check "Caddyfile changed: Caddy recreated" contains "$calls" "compose.edge.yml up -d --wait --force-recreate caddy"
+check "Caddyfile changed: Caddy recreated" contains "$calls" "compose.edge.yml up -d --wait --pull never --force-recreate caddy"
 check "collector config changed: dev's collector recreated at dev's tag" \
-  contains "$calls" "app_tag=$S2 :: $compose_args up -d --wait --no-deps --force-recreate otel-collector"
+  contains "$calls" "app_tag=$S2 :: $compose_args up -d --wait --pull never --no-deps --force-recreate otel-collector"
 check "prod (nothing deployed) left alone" not_contains "$calls" "/opt/focus/prod/.env"
 check "installer: clean environment" clean_env_only "$calls"
 ci status
@@ -689,6 +777,8 @@ broken_deploy() { # <description> <digest> <what the output says failed>
   check "$desc: then re-tags :S1 from dev's own digest D5" before "$calls" "app_tag=$S4 $start" ":: tag $REPO@$D5 $REPO:$S1"
   check "$desc: then starts S1 again" before "$calls" ":: tag $REPO@$D5 $REPO:$S1" "app_tag=$S1 $start"
   check "$desc: the revert doesn't migrate" not_contains "$(after "$calls" "app_tag=$S4 $start")" "alembic"
+  check "$desc: the revert checks the dependency images (#170)" \
+    contains "$(after "$calls" "app_tag=$S4 $start")" "app_tag=$S1 :: $compose_args config --images"
   check "$desc: the revert checks the running image" contains "$(after "$calls" "app_tag=$S1 $start")" ":: inspect --format {{.Image}} container-dev-app"
   check "$desc: the revert checks /healthz and /readyz" \
     contains "$(after "$calls" "app_tag=$S1 $start")" "app_tag=$S1 :: $compose_args exec -T app python -c import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz'"
@@ -714,6 +804,21 @@ check "never healthy: no endpoint check on the broken build (up --wait failed)" 
 broken_deploy "no /readyz" "$D8" "/readyz doesn't answer inside the app container"
 check "no /readyz: /healthz passed on the broken build, /readyz retried 3 times" \
   eq "$(new_calls | grep "app_tag=$S4 " | grep -c "8000/readyz")" 3
+
+echo "--- The revert pulls a dependency image the host lost meanwhile (#170)"
+put "$FAKE/drop-on-up" "${OTEL#*@}" # the collector's image leaves the host as the start fails
+mark
+hmark
+ci "deploy $S4 $D7"
+rm "$FAKE/drop-on-up"
+calls=$(new_calls)
+check "lost image: the deploy fails and reverts" contains "$out" "failed at 'start' (its checks failed): reverted to $S1"
+check "lost image: the revert pulls the collector's image by its pinned digest" \
+  contains "$(after "$calls" "app_tag=$S4 $start")" ":: pull --quiet $OTEL"
+check "lost image: before starting S1 again" \
+  before "$(after "$calls" "app_tag=$S4 $start")" ":: pull --quiet $OTEL" "app_tag=$S1 $start"
+check "lost image: the revert is logged ok" contains "$(new_history | sed -n 2p)" "action=revert outcome=ok tag=$S1 digest=$D5"
+check "lost image: dev runs D5 again" eq "$(cat "$FAKE/running-dev")" "$D5"
 
 echo "--- A dropped SSH session doesn't stop the revert (#30 review)"
 before_record=$(cat "$RECORD")
@@ -779,6 +884,7 @@ done
 check "record: S8, rollback target S7" eq "$(value tag) $(value previous_tag)" "$S8 $S7"
 put "$FAKE/tags/$S7" "$D10" # the host-wide :S7 moved
 rm "$FAKE/local/$D11"         # and S7's image was pruned from the host
+prune "$OTEL"                 # and the collector's (#117's pruning, #170)
 before_record=$(cat "$RECORD")
 mark
 hmark
@@ -788,9 +894,16 @@ check "rollback expect: says a deploy or rollback ran in between" contains "$out
 check "rollback expect: no docker call" no_new_calls
 check "rollback expect: record unchanged, nothing logged" eq "$(cat "$RECORD")$(new_history)" "$before_record"
 mark
+touch "$FAKE/probe-lock"
+rm -f "$FAKE/pull-lock-probe.log"
 ci "rollback expect $D12"
+rm "$FAKE/probe-lock"
 calls=$(new_calls)
 check "rollback succeeds" eq "$rc" 0
+check "rollback: pulls the collector's pruned image by its pinned digest (#170)" contains "$calls" ":: pull --quiet $OTEL"
+check "rollback: before starting" before "$calls" ":: pull --quiet $OTEL" "app_tag=$S7 $start"
+check "rollback: both pulls ran under the deploy lock" \
+  eq "$(cat "$FAKE/pull-lock-probe.log")" "pull $OTEL lock=held"$'\n'"pull $REPO@$D11 lock=held"
 check "rollback prints what it left and what runs now" contains "$out" "result from_tag=$S8 from_digest=$D12 tag=$S7 digest=$D11"
 check "rollback: to S7, the release before S8" eq "$(value tag) $(value digest) $(value action)" "$S7 $D11 rollback"
 check "rollback: pulls S7 by its recorded digest" contains "$calls" ":: pull --quiet $REPO@$D11"
@@ -921,6 +1034,7 @@ prod_rollback_refused "a commit nobody deployed" "$(sha 0xbad)"
 
 dev_state=$(cat "$RECORD" "$HISTORY" "$FAKE/running-dev")
 rm "$FAKE/local/$D2" # pruned from the host: the rollback pulls it by its recorded digest
+prune "$PG"          # and Postgres' image (#170)
 put "$FAKE/tags/$S2" "$D5"
 rm -f /tmp/released
 flock /opt/focus/deploy.lock bash -c 'sleep 3; date +%s.%N > /tmp/released' &
@@ -939,6 +1053,8 @@ check "rollback key: no docker call while another holder had the lock" \
   awk -v a="$first" -v b="$(cat /tmp/released)" 'BEGIN { exit !(a >= b) }'
 check "rollback key: prod rolled back to S2, prod's release before S1" eq "$(pvalue tag) $(pvalue digest) $(pvalue action)" "$S2 $D2 rollback"
 check "rollback key: pulls S2 by prod's recorded digest" contains "$calls" ":: pull --quiet $REPO@$D2"
+check "rollback key: pulls Postgres' pruned image by its pinned digest" contains "$calls" ":: pull --quiet $PG"
+check "rollback key: before starting" before "$calls" ":: pull --quiet $PG" "app_tag=$S2 $prod_start"
 check "rollback key: re-tags :S2 from it" before "$calls" ":: tag $REPO@$D2 $REPO:$S2" "app_tag=$S2 $prod_start"
 check "rollback key: runs no migration" not_contains "$calls" "alembic"
 check "rollback key: prod runs D2" eq "$(cat "$FAKE/running-prod")" "$D2"

@@ -116,6 +116,25 @@ Three Compose projects ([tech_stack.md §2](tech_stack.md#2-environments-and-hos
 
 Compose refuses to start an environment without `APP_TAG`, `POSTGRES_PASSWORD` or any committed setting. All containers use `restart: unless-stopped`, so they come back after a reboot.
 
+### Dependency images (#170)
+
+Every image but the app's is pinned by tag **and** digest, `name:tag@sha256:<digest>`: Postgres and the OpenTelemetry Collector in `compose.prod.yml`, Caddy in `compose.edge.yml`. The digest is the multi-platform index digest, so a pull can't change the bytes under a deploy, and neither can a re-pushed tag on Docker Hub. `make test-infra` fails on an image without both (`scripts/check_prod_compose.py`). `compose.yaml` and CI's Postgres service keep the plain tag (`postgres:17-alpine`), the same tag as prod.
+
+| Image | Pinned |
+|---|---|
+| `postgres:17-alpine` | `sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb` (PostgreSQL 17.11 on Alpine 3.24; linux/amd64 built 2026-10-21) |
+| `otel/opentelemetry-collector-contrib:0.162.0` | `sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6` (linux/amd64 built 2026-09-29) |
+| `caddy:2.11.4-alpine` | `sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b` (linux/amd64 built 2026-09-17) |
+
+**Who pulls them.** Compose never pulls on the server: deploys and `install.sh` start everything with `--pull never`, so what starts is what was pulled, by digest. Before that:
+
+- `focus-ci` (deploy, rollback and the automatic revert, under the deploy lock and with the clean environment) lists the environment's images with `compose config --images`. In the `pull` step, before any migration or start, it pulls each one other than the app's that the host lacks, by its pinned digest, then the app's by its digest as before. A failed pull stops at `pull` with `could not pull <image>, which focus-<env> needs`. Nothing has run then: the running app, the host-wide `:<sha>` tag and the record are unchanged. An image that isn't pinned is refused there too, never pulled by tag. Dev's first deploy failed at `migrate` before this (#28): Compose found no collector image and wasn't allowed to pull one.
+- `install.sh`, also under the lock, pulls Caddy's image and, for each environment with a release, Postgres' and the collector's. It reads them from the new `infra/` before installing it, so a failed pull installs nothing.
+
+**Bumping one** (a Postgres minor or Alpine rebuild, a collector or Caddy release) is a PR that changes the tag and digest together. Read the digest with `docker buildx imagetools inspect <name>:<tag>` (the `Digest:` line at the top, the index). After the merge, `install.sh` pulls the new image (Caddy is recreated then), and each environment's next deploy recreates its Postgres and collector from it. A Postgres image change restarts the database: a clean shutdown and start on the same volume, a few seconds of `/readyz` failing for the app that runs. Stay within one Postgres major: a new major can't open the old data directory and needs a dump and restore, which is its own issue. A new minor or an Alpine rebuild within a major is safe. Postgres' on-disk format is fixed within a major. The databases use the default libc collation, and musl's (Alpine's libc) is plain code point order, so a rebuild doesn't reorder text indexes.
+
+**Pruning (#117)** must keep these images, the pinned ones of the installed `infra/`. A rollback's target uses today's installed compose files, so it needs exactly those. If one is pruned anyway, the next deploy or rollback pulls it again by digest, but only while Docker Hub answers.
+
 ### Memory: dev can't starve prod
 
 | Container | prod | dev |
@@ -141,9 +160,11 @@ One image (root `Dockerfile`, multi-stage: Vite build, locked uv dependencies, s
 The server runs a root-owned copy of `infra/` in `/opt/focus/infra`, installed by Yacine with `infra/server/install.sh` ([Infra on the server](#infra-on-the-server-installsh)). The deploy keys run only the forced command `/opt/focus/bin/focus-ci`, which runs these steps for one environment ([Deploy to dev](#deploy-to-dev-28)):
 
 ```bash
+export APP_TAG=<sha>                                            # passed with env -i, nothing else
+infra/compose.sh dev config --images                            # each one but the app's: pinned (#170)
+docker pull postgres:17-alpine@sha256:<digest>                  # each one the host lacks, by digest
 docker pull ghcr.io/ybenzine/ineedtofocus@sha256:<digest>      # public package: no login needed
 docker tag ghcr.io/ybenzine/ineedtofocus@sha256:<digest> ghcr.io/ybenzine/ineedtofocus:<sha>
-export APP_TAG=<sha>                                            # passed with env -i, nothing else
 infra/compose.sh dev run --rm --pull never app alembic upgrade head   # one-shot migration
 infra/compose.sh dev up -d --wait --pull never                  # app starts with MIGRATE_ON_START=0
 ```
@@ -175,8 +196,8 @@ The deploy keys run Docker, and the `docker` group is root-equivalent. So whoeve
 
 1. Clones `main` from GitHub over HTTPS (bare, that branch only) and checks that `<sha>` is on `main`. `infra/` at `<sha>` must hold regular files only.
 2. Writes the full diff between the installed files and `infra/` at `<sha>` to `/root/focus-install-<sha>.diff` (root, 600). It lists the commits and the changed files, then asks: type `yes` to install, `diff` to page through the whole diff first, or anything else to stop with nothing changed. With no terminal (no `ssh -t`) it stops too. `--yes` skips the question, for the test harness only.
-3. Under `/opt/focus/deploy.lock`, so it never swaps files under a running deploy: replaces `/opt/focus/infra` with `infra/` at `<sha>` plus a `REVISION` file, all `root:root` with nothing group- or world-writable. The previous copy stays in `/opt/focus/infra.previous`. Then it installs `infra/server/focus-ci.sh` as `/opt/focus/bin/focus-ci` (root, 755).
-4. Starts or updates the edge. Caddy is recreated when the Caddyfile changed, because a running container keeps seeing the old file: a few seconds without HTTPS for both sites. When `infra/otel-collector/` changed, it also recreates each deployed environment's collector.
+3. Under `/opt/focus/deploy.lock`, so it never swaps files under a running deploy: first pulls, by digest, the [pinned images](#dependency-images-170) the new `infra/` starts that the host lacks. That's Caddy's, and Postgres' and the collector's for each environment with a release. A failed pull stops here with `couldn't pull <image> (…): nothing installed`. Then it replaces `/opt/focus/infra` with `infra/` at `<sha>` plus a `REVISION` file, all `root:root` with nothing group- or world-writable. The previous copy stays in `/opt/focus/infra.previous`. Then it installs `infra/server/focus-ci.sh` as `/opt/focus/bin/focus-ci` (root, 755).
+4. Starts or updates the edge, with `--pull never`. Caddy is recreated when its image or the Caddyfile changed, because a running container keeps seeing the old file: a few seconds without HTTPS for both sites. When `infra/otel-collector/` changed, it also recreates each deployed environment's collector.
 5. Prints the installed revision and the `sha256` of `focus-ci`.
 
 It never touches the deploy keys, the `.env` files, the databases or the apps.
@@ -202,7 +223,7 @@ Every push to `main` runs CI. Once the five required checks and `image` pass, `p
 | Step | Where | What |
 |---|---|---|
 | Gate | runner | Neither `DEPLOY_SSH_KEY` nor `DEPLOY_KNOWN_HOSTS` set in the `dev` environment: skips with a notice, green (not set up yet). Only one of them set: fails red, since the environment is half configured. Both: deploys |
-| Deploy | server, `focus-ci dev` | `ssh deploy@159.223.188.176 "deploy <sha> sha256:<digest>"`: waits for the deploy lock, notes the current release, pulls by digest, checks the image's `org.opencontainers.image.revision` label is `<sha>`, tags it `:<sha>`, migrates (`run --rm`), starts (`up -d --wait`, the `/healthz` healthcheck), checks that the app container runs exactly that image and that `/healthz` and `/readyz` answer inside it, then records the release. If the start or a check fails, it starts the release that ran before again and fails ([Automatic revert](#automatic-revert)) |
+| Deploy | server, `focus-ci dev` | `ssh deploy@159.223.188.176 "deploy <sha> sha256:<digest>"`: waits for the deploy lock, notes the current release, pulls the [dependency images](#dependency-images-170) the host lacks, pulls the app by digest, checks the image's `org.opencontainers.image.revision` label is `<sha>`, tags it `:<sha>`, migrates (`run --rm`), starts (`up -d --wait`, the `/healthz` healthcheck), checks that the app container runs exactly that image and that `/healthz` and `/readyz` answer inside it, then records the release. If the start or a check fails, it starts the release that ran before again and fails ([Automatic revert](#automatic-revert)) |
 | Record | runner | `ssh … status` reads the record back; the job fails if it doesn't show this tag and digest |
 | Smoke | runner | `scripts/smoke_deploy.py https://dev.ineedtofoc.us`: `/healthz` and `/readyz` answer `{"status":"ok"}`, `/` serves the frontend, `http://` redirects to `https://`, the certificate verifies. Retried for up to 90 s |
 | Summary | runner | Tag, image digest, server time of the deploy, rollback target, infra revision, smoke results |
@@ -280,7 +301,7 @@ The `main`-only branch policy keeps workflows on other branches from reading the
 ### Upkeep
 
 - **Infra changed in a merge:** run `install.sh` with the merge commit (see above), read the diff, type `yes`; the next deploy records the new `infra_revision`.
-- **Host disk:** nothing prunes old app images yet. Until #117 lands, check `df -h /` and `docker system df` now and then.
+- **Host disk:** nothing prunes old app images yet. Until #117 lands, check `df -h /` and `docker system df` now and then. Never prune the pinned [dependency images](#dependency-images-170) of the installed `infra/`. A deploy would pull them again, but a rollback then depends on Docker Hub.
 - **Rotate the key:** repeat steps 2–6, then remove the old line from `/etc/ssh/authorized_keys/deploy`.
 - **Roll dev back:** `gh workflow run rollback.yml -f env=dev` ([Rollback](#rollback-rollbackyml)).
 
@@ -378,7 +399,7 @@ Dev must be deployed first ([Deploy to dev → One-time setup](#one-time-setup-y
 `focus-ci`'s `deploy`, the same code for dev and prod, under the deploy lock:
 
 1. **Note the current release** (the record's `tag` and `digest`): the one to go back to. Work out the next rollback target from the log ([Known-good releases](#known-good-releases)).
-2. **Pull** the new image by digest, check its revision label, re-tag `:<sha>` from the digest.
+2. **Pull** each [dependency image](#dependency-images-170) the host lacks (Postgres, the collector) by its pinned digest, then the new app image by digest. Check its revision label and re-tag `:<sha>` from the digest. A failed pull stops here, before anything runs.
 3. **Migrate** as a one-shot container (`run --rm … alembic upgrade head`).
 4. **Start** with `up -d --wait`, which waits for the `/healthz` healthcheck (`--wait-timeout 180`). Then check that the app container runs exactly that digest, and that `GET /healthz` (the process) and `GET /readyz` (the database) answer inside it, three tries each, 2 s apart.
 5. **Record** the release (`release`, plus an ok line in `releases.log`).
@@ -389,7 +410,7 @@ A failure before the start (`promote`, `pull`, `migrate`) leaves the running app
 
 A failure at the start (not healthy within the timeout, the wrong image, `/healthz` or `/readyz` not answering) means the app may now run the new release unhealthy. So, still under the lock, `focus-ci` starts **the release that ran before** again:
 
-- by its recorded digest, re-tagged `:<sha>` from it (dev or prod may have moved that tag), pulled if the host no longer has it;
+- by its recorded digest, re-tagged `:<sha>` from it (dev or prod may have moved that tag), pulled if the host no longer has it, along with any dependency image it lost;
 - without migrating: the older release runs on the newer schema ([Schema compatibility](#schema-compatibility));
 - with the same checks (running image, `/healthz`, `/readyz`).
 
@@ -401,7 +422,7 @@ If the revert fails too (for example the database is down, so no release passes 
 
 The smoke tests that run afterwards from the runner (`scripts/smoke_deploy.py`, through Caddy) don't trigger a revert. When they fail after the server's own checks passed, the cause is usually the edge (Caddy, DNS, the certificate), and undoing the release wouldn't fix it. A release that failed its smoke tests on dev is never offered to prod (deploy-prod's plan requires a dev deployment that reached `success`). To undo it anyway, run the [rollback workflow](#rollback-rollbackyml).
 
-`make test-server` runs this with deliberately broken images: one never turns healthy, one has no `/readyz`, and one is broken on prod only. Each deploy fails, the release before it runs again by its own digest without migrating, and a probe checks the lock is held through both starts.
+`make test-server` runs this with deliberately broken images: one never turns healthy, one has no `/readyz`, and one is broken on prod only. Each deploy fails, the release before it runs again by its own digest without migrating, and a probe checks the lock is held through both starts. One more loses the collector's image as its start fails, and the revert pulls it again before starting the release before it (#170).
 
 ### Known-good releases
 
@@ -438,7 +459,7 @@ Or **Actions** → **rollback** → **Run workflow** → branch `main`, then cho
 | Environment | job | `env=dev` → environment `dev` (its deploy key, `focus-ci dev`). `env=prod` → environment `rollback` (the prod rollback key, `focus-ci rollback-prod`). Never `production`. `deployment: false`: the job reads the environment's secrets, and its branch rule still applies, but no GitHub deployment is created. deploy-prod's plan reads dev's deployments as "what dev runs", and a rollback run's deployment would carry main's head, not the release it restored |
 | Gate | runner | Both `DEPLOY_SSH_KEY` and `DEPLOY_KNOWN_HOSTS` set, or the job **fails red**. Unlike a deploy, a rollback that can't run never skips green, so it can't be mistaken for one that happened |
 | Read what runs now | server: `status` (and `candidate` for prod) | The record must name that environment, so a key in the wrong environment stops here, before anything changes. For prod, the key must also be refused `candidate` (exit 2). Only the rollback profile refuses it, so a prod *deploy* key put in `rollback` by mistake fails red (that refusal shows in syslog as `refused: candidate isn't allowed`) |
-| Roll back | server: `rollback [<sha>] expect <digest just read>` | Under the deploy lock: if the current release isn't that digest (a deploy or rollback ran in between), it refuses and nothing changes. Then the [known-good](#known-good-releases) target, pulled by its recorded digest if the host lacks it, label checked, re-tagged `:<sha>`, `up -d --wait`, running image, `/healthz`, `/readyz`. No migration. If the target fails its checks, the release it left starts again ([Automatic revert](#automatic-revert)) and the job fails |
+| Roll back | server: `rollback [<sha>] expect <digest just read>` | Under the deploy lock: if the current release isn't that digest (a deploy or rollback ran in between), it refuses and nothing changes. Then the [known-good](#known-good-releases) target, pulled by its recorded digest if the host lacks it (and any [dependency image](#dependency-images-170) the host lacks), label checked, re-tagged `:<sha>`, `up -d --wait`, running image, `/healthz`, `/readyz`. No migration. If the target fails its checks, the release it left starts again ([Automatic revert](#automatic-revert)) and the job fails |
 | Record | runner: `status` | The server's `result` line gives what it left and what runs now. The record must show `action=rollback` with that digest, and `tag` when one was given. Then the key is deleted, before any repository code runs |
 | Smoke | runner | `scripts/smoke_deploy.py` against https://ineedtofoc.us or https://dev.ineedtofoc.us |
 | Summary | runner | From (the release left) and To (what runs now), both from the server's `result` line, written under the lock, plus the next rollback target, infra revision and smoke results. For dev: the release left is no longer promotable |
