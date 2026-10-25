@@ -33,6 +33,9 @@ export default function ArchiveScreen({
 }: ArchiveScreenProps) {
   const tz = timeZone ?? deviceTimeZone()
   const owner = ownerId === undefined ? signedInUserId() : ownerId
+  // Rejected sessions archived on this device only: the server never had them, so they are read
+  // from the device and never sent anywhere.
+  const [deviceOnly, setDeviceOnly] = useState<ArchivedSession[]>([])
   const [load, setLoad] = useState<Load>({ kind: 'loading' })
   const [reload, setReload] = useState(0)
   const [notice, setNotice] = useState('')
@@ -74,6 +77,35 @@ export default function ArchiveScreen({
     }
   }, [api, reload, store, owner])
 
+  useEffect(() => {
+    if (owner === null || !store) return
+    let cancelled = false
+    void store
+      .list(owner)
+      .then((all) => {
+        if (cancelled) return
+        setDeviceOnly(
+          all
+            .filter((d) => d.syncState === 'rejected' && d.archivedAt !== null)
+            .map((d) => ({
+              id: d.record.id,
+              mode: d.record.mode,
+              tag: d.record.tag,
+              goal: d.record.goal,
+              startedAt: d.record.startedAt,
+              focusSeconds: d.record.focusSeconds,
+              status: d.record.status,
+              archivedAt: d.archivedAt ?? '',
+            }))
+            .sort((a, b) => b.archivedAt.localeCompare(a.archivedAt)),
+        )
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [store, owner, reload])
+
   const fail = useCallback((kind: string, action: string) => {
     if (kind === 'unauthorized') notifySessionExpired()
     if (kind === 'not_found') {
@@ -106,6 +138,24 @@ export default function ArchiveScreen({
     }
   }
 
+  /** Puts a device-only archived session back in History, still "Couldn't sync". No request. */
+  async function restoreOnDevice(session: ArchivedSession) {
+    if (owner === null || !store) return
+    setProblem('')
+    setNotice('')
+    setBusy(true)
+    try {
+      await store.restoreOnDevice(owner, session.id)
+      setDeviceOnly((current) => current.filter((s) => s.id !== session.id))
+      setNotice('Session restored to History.')
+      heading.current?.focus()
+    } catch {
+      setProblem('Couldn’t restore the session on this device. Try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function deleteAll() {
     setProblem('')
     setBusy(true)
@@ -123,8 +173,10 @@ export default function ArchiveScreen({
         await store?.removeArchived(owner, ids).catch(() => undefined)
       }
       setLoad({ kind: 'ready', sessions: [] })
+      setDeviceOnly([])
       heading.current?.focus()
-      const n = result.value
+      // The device-only ones are deleted from the device with the rest and counted with them.
+      const n = result.value + deviceOnly.length
       setNotice(`Deleted ${n} archived ${n === 1 ? 'session' : 'sessions'}.`)
     } finally {
       setBusy(false)
@@ -132,7 +184,34 @@ export default function ArchiveScreen({
   }
 
   const sessions = load.kind === 'ready' ? load.sessions : []
-  const count = sessions.length
+  const count = sessions.length + deviceOnly.length
+
+  function row(s: ArchivedSession, onDeviceOnly: boolean) {
+    return (
+      <li key={s.id} className="history-row">
+        <p className="history-row-when">
+          <span>{formatDate(s.startedAt, tz)}</span> <span>{formatTime(s.startedAt, tz)}</span>
+        </p>
+        <p className="history-row-main">
+          <span>{MODE_LABEL[s.mode]}</span>
+          <span className="timer-tag">{s.tag}</span>
+          <span>{formatDuration(s.focusSeconds)}</span>
+          <span>{STATUS_LABEL[s.status]}</span>
+        </p>
+        {s.goal && <p className="history-row-goal">{s.goal}</p>}
+        {onDeviceOnly && <p className="history-badge">Only on this device</p>}
+        <p className="field-hint">Archived {formatDate(s.archivedAt, tz)}</p>
+        <button
+          type="button"
+          disabled={busy}
+          aria-label={`Restore session from ${formatDate(s.startedAt, tz)} ${formatTime(s.startedAt, tz)}`}
+          onClick={() => void (onDeviceOnly ? restoreOnDevice(s) : restore(s))}
+        >
+          Restore
+        </button>
+      </li>
+    )
+  }
 
   return (
     <section className="history archive" aria-labelledby="archive-title">
@@ -155,36 +234,17 @@ export default function ArchiveScreen({
           <button type="button" onClick={() => setReload((n) => n + 1)}>
             Try again
           </button>
+          {deviceOnly.length > 0 && (
+            <ul className="history-list">{deviceOnly.map((s) => row(s, true))}</ul>
+          )}
         </div>
       ) : count === 0 ? (
         <p>No archived sessions.</p>
       ) : (
         <>
           <ul className="history-list">
-            {sessions.map((s) => (
-              <li key={s.id} className="history-row">
-                <p className="history-row-when">
-                  <span>{formatDate(s.startedAt, tz)}</span>{' '}
-                  <span>{formatTime(s.startedAt, tz)}</span>
-                </p>
-                <p className="history-row-main">
-                  <span>{MODE_LABEL[s.mode]}</span>
-                  <span className="timer-tag">{s.tag}</span>
-                  <span>{formatDuration(s.focusSeconds)}</span>
-                  <span>{STATUS_LABEL[s.status]}</span>
-                </p>
-                {s.goal && <p className="history-row-goal">{s.goal}</p>}
-                <p className="field-hint">Archived {formatDate(s.archivedAt, tz)}</p>
-                <button
-                  type="button"
-                  disabled={busy}
-                  aria-label={`Restore session from ${formatDate(s.startedAt, tz)} ${formatTime(s.startedAt, tz)}`}
-                  onClick={() => void restore(s)}
-                >
-                  Restore
-                </button>
-              </li>
-            ))}
+            {sessions.map((s) => row(s, false))}
+            {deviceOnly.map((s) => row(s, true))}
           </ul>
           <button
             type="button"
