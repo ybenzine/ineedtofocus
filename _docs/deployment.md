@@ -509,7 +509,7 @@ Don't start an app container with `compose.sh … up` by hand: the local `:<sha>
 
 ### Demonstration
 
-AC: "Rollback demonstrated once with a deliberately broken build". **Status: not yet run.** It needs dev's one-time setup ([Deploy to dev](#one-time-setup-yacine), #28) and step 1 above. The lead runs it then and records it on #30 (links to the runs and the before and after state).
+AC: "Rollback demonstrated once with a deliberately broken build". **Status: run on 2026-10-25.** Dev was rolled back from the demo build `e18aafb` (#167) to `4588fa7` with [run 40160362879](https://github.com/ybenzine/ineedtofocus/actions/runs/40160362879), and prod refused `e18aafb` as a candidate. The demo was then reverted (#168). The record, with links to the runs and the `releases.log` tail before and after, is on [#30](https://github.com/ybenzine/ineedtofocus/issues/30#issuecomment-6393315329). To run it again, dev's one-time setup ([Deploy to dev](#one-time-setup-yacine), #28) and step 1 above must be done.
 
 **Automatic revert.** Tested in `make test-server` with deliberately broken images (above). It can't be shown on dev through a merge, and that's by design. CI's `image` job runs the same health and readiness checks on the image (`make test-prod-stack`: migrate, `up --wait`, `/healthz`, `/readyz`), and `publish` needs it. So a build that fails them is never published and never reaches the server. On the server it guards against what CI can't reproduce: dev's or prod's own data and history, and the host.
 
