@@ -42,6 +42,8 @@ export interface AppProps {
   preferences?: PreferencesStore
   /** How often a finished session that couldn't be saved on the device is tried again. */
   pendingRetryMs?: number
+  /** How often parked sessions are moved into the device store while the app is open. */
+  parkedDrainMs?: number
   /** Injectable for tests; plays the chime and the end bell (#16). */
   alerts?: AlertPlayer
   /** Injectable for tests; plays the background rain (#17). */
@@ -51,6 +53,7 @@ export interface AppProps {
 }
 
 export const PENDING_RETRY_MS = 10_000
+export const PARKED_DRAIN_MS = 60_000
 
 type View =
   | { name: 'loading' }
@@ -105,6 +108,7 @@ function AppBody({
   rain,
   audioStore,
   pendingRetryMs = PENDING_RETRY_MS,
+  parkedDrainMs = PARKED_DRAIN_MS,
 }: AppProps & { settings: SettingsStore }) {
   const services = useMemo<AppServices>(
     () => given ?? (controller ? { controller, sync: null, hook: null } : createAppServices()),
@@ -152,6 +156,7 @@ function AppBody({
   // while the app was closed finished (AC6.5).
   useEffect(() => {
     let cancelled = false
+    const foreign = services.isForeignSession?.() ?? false
     void timer.restore().then(async (update) => {
       if (update.snapshot) {
         void settings.refresh() // no wait: sends pending edits, fetches the server copy
@@ -159,7 +164,7 @@ function AppBody({
           setAudio(sourceStore.load())
           setView({ name: 'timer' })
         }
-      } else if (update.outcome) {
+      } else if (update.outcome && !foreign) {
         sourceStore.clear()
         void settings.refresh()
         if (!cancelled) setView({ name: 'summary', update })
@@ -186,7 +191,7 @@ function AppBody({
     return () => {
       cancelled = true
     }
-  }, [timer, settings, sourceStore])
+  }, [timer, services, settings, sourceStore])
 
   // Sync settings whenever the connection returns; at launch `refresh()` runs in the restore
   // effect above (waited for only when the setup screen opens).
@@ -219,6 +224,14 @@ function AppBody({
   // Send what is on the device now, when the connection returns, and on backoff (AC13.3).
   // Runs only while someone is signed in: AuthGate renders the app only then (#9).
   useEffect(() => services.sync?.start(), [services])
+
+  // Sessions parked during a sign-in change go into the device store while the app is open too,
+  // not only at start-up (a save also triggers a pass).
+  useEffect(() => {
+    if (!services.drainParked) return
+    const id = window.setInterval(() => void services.drainParked?.(), parkedDrainMs)
+    return () => window.clearInterval(id)
+  }, [services, parkedDrainMs])
 
   // A finished session that couldn't be saved on the device yet (a stalled IndexedDB) stays in
   // the timer's own store; keep trying, and drop the "not saved yet" note once it is saved.

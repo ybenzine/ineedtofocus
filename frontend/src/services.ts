@@ -22,8 +22,17 @@ export interface AppServices {
   sessions?: SessionStore | null
   /** Sign-out hook (#9) for the session store; `main.tsx` registers it before anything renders. */
   hook: LocalDataHook | null
-  /** Moves sessions parked by a failed quarantine into the store; run at start-up. */
+  /**
+   * Moves sessions parked by a failed quarantine into the store. Run at start-up, on a timer
+   * while the app is open, and after each successful save.
+   */
   drainParked?: () => Promise<void>
+  /**
+   * True if the stored session was started by a different user than the one signed in now: its
+   * summary is not shown to them (the record stays filed under its owner). Ask before restoring,
+   * which clears the owner once the record is handed over.
+   */
+  isForeignSession?: () => boolean
 }
 
 export interface SessionHookOptions {
@@ -52,7 +61,7 @@ export function sessionDataHook({
       const owner = currentOwner()
       // Unknown user: clear nothing rather than someone else's (or nobody's) sessions.
       if (owner === null) return
-      clearParked(owner)
+      await clearParked(owner)
       await sessions.clearOwner(owner)
     },
     quarantine: (previousOwnerId) => quarantinePendingRecord(active, sessions, previousOwnerId),
@@ -68,6 +77,19 @@ export function createAppServices(currentOwner: () => string | null = signedInUs
     // The sign-in expired: AuthGate re-checks it and shows sign-in, keeping the data (AC1.3).
     onUnauthorized: notifySessionExpired,
   })
+  let draining: Promise<void> | null = null
+  const drain = (): Promise<void> => {
+    // One pass at a time in this tab; other tabs are kept apart by the parked list's lock.
+    draining ??= drainParked(sessions)
+      .then((moved) => {
+        if (moved > 0) void sync.syncNow()
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        draining = null
+      })
+    return draining
+  }
   const active = new OwnedActiveSessionStore(new LocalActiveSessionStore(), currentOwner)
   const controller = new TimerController({
     store: active,
@@ -79,7 +101,10 @@ export function createAppServices(currentOwner: () => string | null = signedInUs
         const owner = active.ownerOf(record.id)
         return owner === undefined ? currentOwner() : owner
       },
-      afterSave: () => void sync.syncNow(),
+      afterSave: () => {
+        void sync.syncNow()
+        void drain()
+      },
     }),
   })
   return {
@@ -87,9 +112,15 @@ export function createAppServices(currentOwner: () => string | null = signedInUs
     sync,
     sessions,
     hook: sessionDataHook({ sessions, sync, active, currentOwner }),
-    // Start-up: sessions parked during an earlier sign-in go into the store under their owners.
-    drainParked: async () => {
-      if ((await drainParked(sessions)) > 0) void sync.syncNow()
+    // Sessions parked during an earlier sign-in go into the store under their owners.
+    drainParked: drain,
+    isForeignSession: () => {
+      const stored = active.load()
+      if (stored === null) return false
+      const sessionId = stored.pendingRecord?.id ?? stored.session.id
+      const recorded = active.ownerOf(sessionId)
+      const now = currentOwner()
+      return typeof recorded === 'string' && now !== null && recorded !== now
     },
   }
 }

@@ -89,7 +89,7 @@ export async function quarantinePendingRecord(
   try {
     await withTimeout(sessions.save(record, ownerId), timeoutMs)
   } catch {
-    parkSession(ownerId, record, storage)
+    await parkSession(ownerId, record, storage)
   }
   const stored = active.load()
   const still = stored?.pendingRecord?.id ?? stored?.session.id
