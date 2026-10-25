@@ -13,6 +13,7 @@ import {
   YT_ENDED,
   YT_PLAYING,
   SKIPPED_ITEM_MESSAGE,
+  SKIP_NOTE_MS,
   loadYoutubeApi,
   type YtNamespace,
   type YtPlayer,
@@ -38,6 +39,7 @@ function fakeYoutube() {
       setVolume: vi.fn(),
       setLoop: vi.fn(),
       nextVideo: vi.fn(),
+      getPlaylistIndex: vi.fn(() => undefined as number | undefined),
       getPlaylist: vi.fn(() => [ID, ID2, 'ccccccccccc'] as string[] | null),
       destroy: vi.fn(),
     }
@@ -268,8 +270,60 @@ describe('problems leave the session alone (AC8.5)', () => {
       expect(p.destroy).not.toHaveBeenCalled()
       expect(screen.getByRole('status')).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
       expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    it('shows the note for about 5 s, then clears it, and not past a new link', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        const { events } = await playlist()
+        await act(async () => events.onStateChange({ data: YT_PLAYING }))
+        await act(async () => events.onError({ data: 150 }))
+        expect(screen.getByRole('status')).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
+        await act(async () => vi.advanceTimersByTime(SKIP_NOTE_MS - 100))
+        expect(screen.getByRole('status')).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
+        await act(async () => vi.advanceTimersByTime(200))
+        expect(screen.getByRole('status')).toBeEmptyDOMElement()
+        // The same container carries every later note.
+        await act(async () => events.onError({ data: 150 }))
+        expect(screen.getByRole('status')).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('clears the note timer when the screen goes away', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        const { t, events } = await playlist()
+        await act(async () => events.onStateChange({ data: YT_PLAYING }))
+        await act(async () => events.onError({ data: 150 }))
+        expect(vi.getTimerCount()).toBeGreaterThan(0)
+        const before = vi.getTimerCount()
+        t.unmount()
+        expect(vi.getTimerCount()).toBeLessThan(before)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('keeps going past the last item: the wrap is left to the looping player', async () => {
+      const { events, p } = await playlist()
       await act(async () => events.onStateChange({ data: YT_PLAYING }))
-      expect(screen.queryByRole('status')).not.toBeInTheDocument()
+      vi.mocked(p.getPlaylistIndex).mockReturnValue(2) // the last of 3
+      await act(async () => events.onError({ data: 150 }))
+      expect(p.nextVideo).toHaveBeenCalledTimes(1)
+      expect(p.destroy).not.toHaveBeenCalled()
+      expect(p.setLoop).toHaveBeenCalledWith(true)
+    })
+
+    it('does not skip twice for the same item', async () => {
+      const { events, p } = await playlist()
+      await act(async () => events.onStateChange({ data: YT_PLAYING }))
+      vi.mocked(p.getPlaylistIndex).mockReturnValue(1)
+      await act(async () => events.onError({ data: 150 }))
+      await act(async () => events.onError({ data: 150 }))
+      expect(p.nextVideo).toHaveBeenCalledTimes(1)
+      expect(p.destroy).not.toHaveBeenCalled()
     })
 
     it('removes the player after as many errors in a row as items, playing nothing between', async () => {
@@ -307,11 +361,12 @@ describe('problems leave the session alone (AC8.5)', () => {
       expect(p.destroy).toHaveBeenCalled()
     })
 
-    it('removes the player on error 2, or on an error before anything played', async () => {
+    it('removes the player on an error before anything played', async () => {
       const a = await playlist()
       await act(async () => a.events.onError({ data: 150 }))
       expect(a.p.nextVideo).not.toHaveBeenCalled()
       expect(a.p.destroy).toHaveBeenCalled()
+      expect(screen.getByRole('alert')).toHaveTextContent(PLAYER_ERROR_MESSAGE)
     })
 
     it('removes the player on error 2 even after playing', async () => {
@@ -320,6 +375,7 @@ describe('problems leave the session alone (AC8.5)', () => {
       await act(async () => events.onError({ data: 2 }))
       expect(p.nextVideo).not.toHaveBeenCalled()
       expect(p.destroy).toHaveBeenCalled()
+      expect(screen.getByRole('alert')).toHaveTextContent(PLAYER_ERROR_MESSAGE)
     })
 
     it('leaves a single video as it was: any error removes the player', async () => {

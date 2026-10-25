@@ -10,6 +10,7 @@ import {
   PLAYER_LOAD_MESSAGE,
   SKIPPABLE_ERRORS,
   SKIPPED_ITEM_MESSAGE,
+  SKIP_NOTE_MS,
   UNKNOWN_PLAYLIST_LENGTH,
   YT_ENDED,
   YT_PLAYING,
@@ -58,6 +59,8 @@ export default function YoutubePlayer({
     let created: YtPlayer | null = null
     let hasPlayed = false
     let failuresInARow = 0
+    let lastSkippedIndex: number | undefined
+    let noteTimer: number | undefined
     const fail = (text: string) => {
       if (cancelled) return
       setMessage(text)
@@ -94,7 +97,7 @@ export default function YoutubePlayer({
               if (event.data === YT_PLAYING) {
                 hasPlayed = true
                 failuresInARow = 0
-                setNote(null)
+                lastSkippedIndex = undefined
               }
               // Backs up `loop` for a single video: start over while the timer runs.
               // A playlist moves on by itself (`setLoop`); restarting here would repeat an item.
@@ -118,6 +121,15 @@ export default function YoutubePlayer({
                 !cancelled &&
                 SKIPPABLE_ERRORS.includes(event.data)
               ) {
+                // The same item reported twice, or already left behind: don't skip a good one.
+                let index: number | undefined
+                try {
+                  index = created.getPlaylistIndex()
+                } catch {
+                  // Index unknown.
+                }
+                if (index !== undefined && index === lastSkippedIndex) return
+                lastSkippedIndex = index
                 failuresInARow += 1
                 let total = UNKNOWN_PLAYLIST_LENGTH
                 try {
@@ -127,6 +139,8 @@ export default function YoutubePlayer({
                 }
                 if (failuresInARow < total) {
                   setNote(SKIPPED_ITEM_MESSAGE)
+                  window.clearTimeout(noteTimer)
+                  noteTimer = window.setTimeout(() => setNote(null), SKIP_NOTE_MS)
                   created.nextVideo()
                   return
                 }
@@ -152,6 +166,8 @@ export default function YoutubePlayer({
     )
     return () => {
       cancelled = true
+      window.clearTimeout(noteTimer)
+      setNote(null)
       ready.current = false
       player.current = null
       try {
@@ -176,11 +192,9 @@ export default function YoutubePlayer({
   return (
     <>
       <div className="youtube-player" ref={wrapper} hidden={message !== null} />
-      {note !== null && message === null && (
-        <p className="field-hint" role="status">
-          {note}
-        </p>
-      )}
+      <p className="field-hint" role="status">
+        {message === null ? note : null}
+      </p>
       {message !== null && (
         <p className="field-error" role="alert">
           {message}

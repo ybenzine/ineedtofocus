@@ -10,6 +10,7 @@ export interface YtPlayer {
   setLoop(loop: boolean): void
   nextVideo(): void
   getPlaylist(): string[] | null | undefined
+  getPlaylistIndex(): number | undefined
   destroy(): void
 }
 
@@ -86,6 +87,8 @@ export const loadYoutubeApi: LoadYoutubeApi = () => {
 
 export const PLAYER_ERROR_MESSAGE =
   "This video can't be played. It may be unavailable, private or not allowed to be embedded. Your session carries on."
-export const SKIPPED_ITEM_MESSAGE = "One video in the playlist can't be played, so it was skipped."
+/** How long the skip note stays. */
+export const SKIP_NOTE_MS = 5000
+export const SKIPPED_ITEM_MESSAGE = "Skipped a video that can't be played here."
 export const PLAYER_LOAD_MESSAGE =
   "The YouTube player couldn't load. Check your connection or try Rain. Your session carries on."
