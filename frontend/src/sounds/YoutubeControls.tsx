@@ -62,10 +62,18 @@ export default function YoutubeControls({
   const usedSinceMount = useRef(false)
 
   function showRecent(urls: string[]) {
+    // One entry per video or playlist id, the newest (first) one: the server's rule (#249).
+    const seen = new Set<string>()
     setRecent(
       urls
         .map((url) => parseYoutubeLink(url))
-        .filter((parsed): parsed is YoutubeLink => parsed !== null)
+        .filter((parsed): parsed is YoutubeLink => {
+          if (parsed === null) return false
+          const key = `${parsed.target.kind}:${parsed.target.id}`
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
         .slice(0, 5),
     )
   }

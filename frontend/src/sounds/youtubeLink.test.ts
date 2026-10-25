@@ -95,6 +95,8 @@ interface FixtureCase {
   server_ok: boolean | null
   client_ok: boolean
   sent: string | null
+  /** The id the player plays, `video:<id>` or `playlist:<id>`; the server derives the same key. */
+  key: string | null
   reason: string
 }
 // Resolved from this file, not the cwd, so it works however Vitest is started.
@@ -108,8 +110,13 @@ describe('shared client/server fixture', () => {
   it.each(SHARED.map((c) => [c.reason, c] as const))('%s', (_reason, c) => {
     const result = checkYoutubeLink(c.url)
     expect(result.ok).toBe(c.client_ok)
-    if (result.ok) expect(result.link.url).toBe(c.sent)
-    else expect(c.sent).toBeNull()
+    if (result.ok) {
+      expect(result.link.url).toBe(c.sent)
+      expect(`${result.link.target.kind}:${result.link.target.id}`).toBe(c.key)
+    } else {
+      expect(c.sent).toBeNull()
+      expect(c.key).toBeNull()
+    }
   })
 
   it('sends the server nothing but ASCII', () => {

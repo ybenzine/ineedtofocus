@@ -1971,7 +1971,7 @@
     },
     "/api/youtube-links": {
       "get": {
-        "description": "The user's 5 most recently used YouTube links, newest first (AC8.6).",
+        "description": "The user's 5 most recently used YouTube links, newest first, one per video or\nplaylist id (AC8.6).",
         "operationId": "list_youtube_links_api_youtube_links_get",
         "responses": {
           "200": {
@@ -2001,7 +2001,7 @@
         ]
       },
       "post": {
-        "description": "Record a link as just used (moves it to the top if known) and drop all but the 5\nnewest. Returns the updated list.",
+        "description": "Record a link as just used and drop all but the 5 newest ids. A link whose video or\nplaylist id is already listed replaces that entry and moves to the top, with the URL just\nused. Returns the updated list.",
         "operationId": "use_youtube_link_api_youtube_links_post",
         "requestBody": {
           "content": {
