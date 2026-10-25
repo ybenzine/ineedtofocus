@@ -83,12 +83,33 @@ MAX_COMMENT = 20_000
 MAX_FIX_FILES = 20
 MAX_FIX_LINES = 1000
 # A fix may not touch what guards the agents: the workflows (the App can't push them
-# anyway), the Claude Code settings and agent definitions, or this workflow's own logic.
-PROTECTED_PATHS = ("^\\.github/", "^\\.claude/", "^scripts/oncall", "^infra/github/")
+# anyway), the Claude Code settings and agent definitions, this workflow's own logic and
+# every module it imports, and the App token scripts the write steps run.
+PROTECTED_PATHS = (
+    "^\\.github/",
+    "^\\.claude/",
+    "^infra/github/",
+    "^scripts/oncall",
+    # oncall.py's imports, transitively (grafana_*.py import check_local_stack lazily)
+    "^scripts/alert_dispatch\\.py$",
+    "^scripts/alert_routing\\.py$",
+    "^scripts/check_local_stack\\.py$",
+    "^scripts/grafana_alerts\\.py$",
+    "^scripts/grafana_dashboards\\.py$",
+    "^scripts/reviewer_token\\.py",
+    "^scripts/reviewer-review\\.sh$",
+)
 VERDICTS = ("approve", "request-changes")
 RUN_URL = re.compile(rf"https://github\.com/{re.escape(d.REPOSITORY)}/actions/runs/[0-9]+")
 RUN_RESULTS = ("success", "failure", "skipped-recent", "not-run")
-CLOSING = re.compile(r"\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\b(\s*:)?\s+#", re.IGNORECASE)
+# GitHub's closing keywords before any issue reference it links: `#5`, `owner/repo#5` or
+# an issue URL. Matched up to the reference, which stays.
+CLOSING = re.compile(
+    r"\b(close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b(?:\s*:)?\s+"
+    r"(?=(?:[\w.-]+/[\w.-]+)?#[0-9]"
+    r"|https?://(?:www\.)?github\.com/[\w.-]+/[\w.-]+/issues/[0-9])",
+    re.IGNORECASE,
+)
 
 
 class Invalid(Exception):
@@ -442,19 +463,19 @@ def check_fix(branch: str, number: str) -> list[str]:
     if commits == "0":
         problems.append("the branch has no commits")
     # --no-renames: a rename then lists its old path too, so moving a protected file out
-    # of its place is refused like deleting or editing it.
-    files = [
-        f
-        for f in _git("diff", "--no-renames", "--name-only", f"origin/main...{branch}").splitlines()
-        if f
-    ]
+    # of its place is refused like deleting or editing it. -z: paths come raw, not quoted
+    # (git quotes a non-ASCII path, which would slip past the patterns).
+    diff = ("diff", "--no-renames", "-z")
+    files = [f for f in _git(*diff, "--name-only", f"origin/main...{branch}").split("\0") if f]
     for f in files:
         if any(re.search(p, f) for p in PROTECTED_PATHS):
             problems.append(f"the fix may not change {f}")
     if len(files) > MAX_FIX_FILES:
         problems.append(f"the fix changes {len(files)} files (at most {MAX_FIX_FILES})")
     lines = 0
-    for row in _git("diff", "--no-renames", "--numstat", f"origin/main...{branch}").splitlines():
+    for row in _git(*diff, "--numstat", f"origin/main...{branch}").split("\0"):
+        if row.count("\t") < 2:
+            continue
         added, removed, _ = row.split("\t", 2)
         lines += int(added) + int(removed) if added.isdigit() and removed.isdigit() else 0
     if lines > MAX_FIX_LINES:
@@ -462,7 +483,7 @@ def check_fix(branch: str, number: str) -> list[str]:
     messages = _git("log", "--format=%B", f"origin/main..{branch}")
     if CLOSING.search(messages):
         problems.append(
-            "a commit message has a closing keyword (Closes/Fixes/Resolves #n): use Refs"
+            "a commit message has a closing keyword (Closes/Fixes/Resolves and an issue): use Refs"
         )
     if not any(re.search(r"(^|/)tests?/|(^|/)test_[^/]*\.py$|\.test\.tsx?$", f) for f in files):
         problems.append("the fix has no test file (a regression test comes with it)")
@@ -472,7 +493,7 @@ def check_fix(branch: str, number: str) -> list[str]:
 def pr_body(text: str, number: int) -> str:
     """The fix PR's body: the agent's text with closing keywords disarmed, and `Refs`.
     The incident closes when the alert resolves, not when the fix reaches dev."""
-    disarmed = CLOSING.sub(lambda m: f"{m.group(1)} (ref) #", text.strip())
+    disarmed = CLOSING.sub(lambda m: f"{m.group(1)} (ref) ", text.strip())
     return f"{disarmed}\n\nRefs #{number}\n\nOpened by the on-call workflow (#35).\n"
 
 

@@ -55,7 +55,8 @@ case "$1 $2" in
     for ((i = 0; i < ${#args[@]}; i++)); do
       [[ ${args[i]} == --body-file ]] && cp "${args[i + 1]}" "$SIM/comments/$((n + 1))-$3.md"
     done ;;
-  "issue lock" | "issue edit" | "issue close" | "label create" | "pr merge" | "pr checks") ;;
+  "pr merge") [[ -f $SIM/fail-pr-merge ]] && { echo "merge failed: HTTP 405" >&2; exit 1; } ;;
+  "issue lock" | "issue edit" | "issue close" | "label create" | "pr checks") ;;
   "workflow run") touch "$SIM/dispatched" ;;
   "run watch") exit "$(cat "$SIM/watch-exit" 2> /dev/null || echo 0)" ;;
   "pr view") answer "$SIM/pr.json" ;;

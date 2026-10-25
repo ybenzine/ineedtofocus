@@ -657,7 +657,7 @@ jobs:
           ONCALL_APP_KEY: ${{ secrets.ONCALL_APP_KEY }}
         run: |
           [[ -n $ONCALL_APP_KEY && -n $ONCALL_APP_ID && -n $ONCALL_INSTALLATION_ID ]] ||
-            { echo "merged=false" >> "$GITHUB_OUTPUT"; exit 0; }
+            { echo "merged=false" >> "$GITHUB_OUTPUT"; echo "app=missing" >> "$GITHUB_OUTPUT"; exit 0; }
           dir=$RUNNER_TEMP/oncall-app
           install -d -m 700 "$dir"
           (umask 077 && printf '%s\n' "$ONCALL_APP_KEY" > "$dir/key.pem")
@@ -675,11 +675,12 @@ jobs:
           echo "merged=true" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - name: Post the result
-        if: ${{ !cancelled() }}
+        # A failed check or merge step is reported once, by the step below.
+        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.merge.outcome != 'failure' }}
         env:
-          OK: ${{ steps.check.outputs.ok }}
-          REASON: ${{ steps.check.outputs.reason || 'the merge conditions could not be read' }}
+          REASON: ${{ steps.check.outputs.reason }}
           MERGED: ${{ steps.merge.outputs.merged }}
+          APP: ${{ steps.merge.outputs.app }}
           SHA: ${{ steps.merge.outputs.sha }}
         run: |
           if [[ $MERGED == true ]]; then
@@ -687,7 +688,7 @@ jobs:
             gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/merged.md"
             if [[ $ALERT_ENV == prod ]]; then gh issue edit "$INCIDENT" --add-label needs-yacine; fi
           else
-            [[ $OK == true ]] && REASON="the on-call App isn't set up (ONCALL_APP_KEY and its IDs)"
+            if [[ $APP == missing ]]; then REASON="the on-call App isn't set up (ONCALL_APP_KEY and its IDs)"; fi
             python3 scripts/oncall.py not-merged-body "$INCIDENT" "$PR" "$REASON" "$POSTED" > "$RUNNER_TEMP/not-merged.md"
             gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/not-merged.md"
             gh issue edit "$INCIDENT" --add-label needs-yacine

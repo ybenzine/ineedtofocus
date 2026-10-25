@@ -469,14 +469,94 @@ def test_moving_or_deleting_a_protected_file_is_refused(
     assert f"the fix may not change {says}" in problems, problems
 
 
-def test_a_closing_keyword_in_a_commit_message_is_refused(repo: Path) -> None:
+CLOSING_FORMS = [
+    "Fixes #7",
+    "closes: #7",
+    "Resolved  #7",
+    "Closes ybenzine/ineedtofocus#5",
+    "fixed other-owner/other.repo#12",
+    "Fixes https://github.com/ybenzine/ineedtofocus/issues/5",
+    "Resolves: http://www.github.com/ybenzine/ineedtofocus/issues/5",
+]
+
+
+@pytest.mark.parametrize("message", CLOSING_FORMS)
+def test_a_closing_keyword_in_a_commit_message_is_refused(repo: Path, message: str) -> None:
     subprocess.run(["git", "switch", "-q", "-c", "oncall/7-x", "origin/main"], check=True)
     Path("backend/tests").mkdir(parents=True)
     Path("backend/tests/test_x.py").write_text("x\n")
     subprocess.run(["git", "add", "backend"], check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "fix: x\n\nFixes #7"], check=True)
+    subprocess.run(["git", "commit", "-q", "-m", f"fix: x\n\n{message}"], check=True)
     problems = o.check_fix("oncall/7-x", "7")
     assert any("closing keyword" in p for p in problems), problems
+
+
+@pytest.mark.parametrize("text", CLOSING_FORMS)
+def test_every_closing_form_is_disarmed_in_the_pr_body(text: str) -> None:
+    assert o.CLOSING.search(text)
+    body = o.pr_body(f"Cause: x. {text}.", 7)
+    assert not o.CLOSING.search(body), body
+    assert "(ref)" in body
+
+
+@pytest.mark.parametrize(
+    "text", ["Refs #7", "fix the bug near #7", "closes the door", "Fixes the issue page"]
+)
+def test_plain_words_are_left_alone(text: str) -> None:
+    assert not o.CLOSING.search(text)
+
+
+def test_a_non_ascii_path_under_a_protected_folder_is_refused(repo: Path) -> None:
+    """git quotes non-ASCII paths (`"\\303\\251…"`) unless -z: the quote would slip past ^."""
+    subprocess.run(["git", "switch", "-q", "-c", "oncall/7-x", "origin/main"], check=True)
+    for path in (".claude/agents/réviewer.md", "backend/tests/test_x.py"):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text("x\n")
+    subprocess.run(["git", "add", "-A", ".claude", "backend"], check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "fix"], check=True)
+    problems = o.check_fix("oncall/7-x", "7")
+    assert "the fix may not change .claude/agents/réviewer.md" in problems, problems
+
+
+def local_imports(module: str, seen: set[str] | None = None) -> set[str]:
+    """The repo's own modules `scripts/<module>.py` imports, transitively."""
+    import ast
+
+    seen = seen if seen is not None else set()
+    tree = ast.parse((o.REPO / "scripts" / f"{module}.py").read_text())
+    for node in ast.walk(tree):
+        names = (
+            [a.name for a in node.names]
+            if isinstance(node, ast.Import)
+            else [node.module or ""]
+            if isinstance(node, ast.ImportFrom)
+            else []
+        )
+        for name in names:
+            if (o.REPO / "scripts" / f"{name}.py").is_file() and name not in seen:
+                seen.add(name)
+                local_imports(name, seen)
+    return seen
+
+
+def test_what_the_write_steps_run_is_protected() -> None:
+    """A fix may not change oncall.py, any module it imports, or the App token scripts."""
+    modules = local_imports("oncall")
+    assert {
+        "alert_dispatch",
+        "grafana_alerts",
+        "grafana_dashboards",
+        "check_local_stack",
+    } <= modules
+    paths = [f"scripts/{m}.py" for m in modules | {"oncall", "oncall_grafana", "reviewer_token"}]
+    paths += [
+        "scripts/reviewer-review.sh",
+        "scripts/reviewer_token.py.lock",
+        "scripts/oncall-claude.sh",
+    ]
+    for path in paths:
+        assert any(re.search(p, path) for p in o.PROTECTED_PATHS), path
+    assert not any(re.search(p, "scripts/traffic.py") for p in o.PROTECTED_PATHS)
 
 
 def test_the_squash_body_is_the_workflows() -> None:

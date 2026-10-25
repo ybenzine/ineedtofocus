@@ -874,3 +874,19 @@ def test_simulated_squash_message_is_the_workflows(tmp_path: Path, grafana: str)
     assert "--subject fix(oncall): incident #500 (#600) --body-file" in merge
     body = (sim.tmp / "jobs" / "merge" / "runner" / "squash.md").read_text()
     assert "Refs #500" in body and not re.search(r"(?i)\b(close|fix|resolve)[sd]?\b\s+#", body)
+
+
+def test_simulated_failed_merge_asks_once(tmp_path: Path, grafana: str) -> None:
+    """A failed `gh pr merge` posts one ⛔ Needs Yacine:, and doesn't blame the App's setup."""
+    sim = simulation(tmp_path, grafana, dev_dispatch())
+    sim.write("pr.json", approved_pr())
+    sim.write("fail-pr-merge", "")
+    sim.session("oncall", fix_session(), nth=1)
+    sim.session("reviewer", REVIEW)
+    sim.session("oncall", write_files(comment_md="Not merged."), nth=3)
+    jobs = sim.run()
+    assert jobs["merge"]["result"] == "failure"
+    merge_comments = [b for _, b in sim.comments() if "merge" in b and b.startswith("⛔")]
+    assert len(merge_comments) == 1, merge_comments
+    assert "a step of the merge job failed" in merge_comments[0]
+    assert not [b for _, b in sim.comments() if "isn't set up" in b]
