@@ -389,7 +389,7 @@ What each key can do:
 
 Dev must be deployed first ([Deploy to dev → One-time setup](#one-time-setup-yacine)), since prod takes its releases from dev.
 
-**Done on 2026-10-25**, after #126 (the deny rules for starting and approving prod deploys) and #127 (the agent account that can't approve) merged; the first deploy-prod run succeeded that day. The steps stay as the record, and for redoing the setup (e.g. a new Droplet). Without the secrets, the deploy job skips and nothing reaches prod.
+**Done on 2026-10-25**, after #126 (the deny rules for starting and approving prod deploys) merged; the first deploy-prod run succeeded that day. #127 (the agent account that can't approve) followed a few hours later. The steps stay as the record, and for redoing the setup (e.g. a new Droplet). Without the secrets, the deploy job skips and nothing reaches prod.
 
 1. **Install `infra/` at the merge commit of #29**, which updates `focus-ci`: `ssh -t yacine@159.223.188.176 'sudo /opt/focus/infra/server/install.sh <merge sha>'`. The diff shows `server/focus-ci.sh` and `server/install.sh`. Read it, then type `yes`.
 2. **Create the key pair** on your machine, for CI only: `ssh-keygen -t ed25519 -N '' -C focus-ci-prod -f /tmp/focus-ci-prod`
