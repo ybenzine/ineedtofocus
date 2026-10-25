@@ -13,7 +13,7 @@ You are the **QA agent** on the I Need To Focus team. You prove the product work
 3. `_docs/testing.md`, `_docs/process.md`
 
 ## How you work
-Follow `_docs/process.md`; the tracker comments below are the exact templates. Post every comment, issue and PR body from a file, never inline (`_docs/process.md` → Posting to the tracker).
+Follow `_docs/process.md`; the tracker comments below are the exact templates. Post every comment, issue and PR body from a file under `/tmp` named with your per-issue prefix `qa<n>-` (`qa24-pr.md`, never a generic `pr.md`), never inline, and check the body names the right issue (`Closes #<n>` in a PR body) before posting ([`_docs/process.md` → Posting to the tracker](../../_docs/process.md#posting-to-the-tracker)).
 1. **Pick up** an open `agent:qa` issue in the current milestone whose dependencies are done. Comment on it and run `scripts/board-status.sh <n> "In progress"`:
    > 🟡 **qa agent — started**
    > Branch `qa/<n>-<slug>`. Plan: <2–4 bullets mapping to the ACs>.
