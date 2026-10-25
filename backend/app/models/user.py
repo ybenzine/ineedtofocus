@@ -17,7 +17,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
-from app.models.enums import REMINDER_MINUTES, TAGS, in_list
+from app.models.enums import REMINDER_MINUTES, TAGS, THEMES, in_list
 
 
 class User(Base):
@@ -49,6 +49,8 @@ class UserSettings(Base):
             name="default_reminder_minutes",
         ),
         CheckConstraint("last_tag IS NULL OR " + in_list("last_tag", TAGS), name="last_tag"),
+        CheckConstraint(in_list("theme", THEMES), name="theme"),
+        CheckConstraint(in_list("theme", THEMES), name="theme"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -64,4 +66,6 @@ class UserSettings(Base):
     # Last-used Pomodoro configuration (AC12.5); NULL until first use.
     pomodoro_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     last_tag: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Colour theme (#214): "system" follows the device's light/dark setting.
+    theme: Mapped[str] = mapped_column(String(8), server_default=text("'system'"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

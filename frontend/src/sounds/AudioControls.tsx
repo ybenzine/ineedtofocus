@@ -12,6 +12,7 @@ import type { YoutubeLinkStore } from './audioSource.ts'
 import YoutubeControls from './YoutubeControls.tsx'
 import type { LoadYoutubeApi } from './ytApi.ts'
 import type { YoutubeLinksApi } from './youtubeLinksApi.ts'
+import RangeInput from '../RangeInput.tsx'
 
 /** AC8.7: YouTube needs a connection, rain doesn't. */
 export function OfflineRainSuggestion({ onUseRain }: { onUseRain: () => void }) {
@@ -66,9 +67,8 @@ export default function AudioControls({
       {source === 'rain' && (
         <div className="timer-volume">
           <label htmlFor={volumeId}>Rain volume</label>
-          <input
+          <RangeInput
             id={volumeId}
-            type="range"
             min={0}
             max={100}
             value={volume}

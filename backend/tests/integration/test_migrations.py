@@ -84,6 +84,29 @@ def test_upgrade_is_repeatable_and_idempotent_at_head(
     assert run(_tables(test_db_url)) == TABLES
 
 
+def test_theme_column_is_added_to_existing_rows_as_system(
+    alembic_config: Config, test_db_url: str
+) -> None:
+    """0003 (#214) is expand-only: existing rows get the default; it rolls back."""
+    command.upgrade(alembic_config, "0002")
+    run(
+        _exec(
+            test_db_url,
+            "INSERT INTO users (id, email, password_hash) VALUES (:u, 'a@b.c', 'x')",
+            u=USER,
+        )
+    )
+    run(_exec(test_db_url, "INSERT INTO user_settings (user_id) VALUES (:u)", u=USER))
+    command.upgrade(alembic_config, "head")
+
+    def theme(conn: Connection) -> Any:
+        return conn.execute(text("SELECT theme FROM user_settings")).scalar_one()
+
+    assert run(_with_conn(test_db_url, theme)) == "system"
+    command.downgrade(alembic_config, "0002")
+    command.upgrade(alembic_config, "head")
+
+
 def test_single_migration_head(alembic_config: Config) -> None:
     assert len(ScriptDirectory.from_config(alembic_config).get_heads()) == 1
 
@@ -272,17 +295,26 @@ def test_settings_defaults_and_ranges(db: str) -> None:
         return conn.execute(
             text(
                 "SELECT week_start_day, alert_volume, background_volume, keep_screen_awake, "
-                "default_reminder_minutes FROM user_settings"
+                "default_reminder_minutes, theme FROM user_settings"
             )
         ).one()
 
     row = run(_with_conn(db, read))
-    assert tuple(row) == (0, 80, 50, False, None)  # Sunday, reminders Off (AC10.6, AC4.2)
+    assert tuple(row) == (
+        0,
+        80,
+        50,
+        False,
+        None,
+        "system",
+    )  # Sunday, reminders Off, follow the device
     for bad in (
         "week_start_day = 7",
         "alert_volume = 101",
         "default_reminder_minutes = 20",
         "last_tag = 'Gaming'",
+        "theme = 'sepia'",
+        "theme = NULL",
     ):
         with pytest.raises((IntegrityError, DBAPIError)):
             run(_exec(db, f"UPDATE user_settings SET {bad}"))

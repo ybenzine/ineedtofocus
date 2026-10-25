@@ -542,6 +542,10 @@
             ],
             "description": "null until first use"
           },
+          "theme": {
+            "$ref": "#/components/schemas/Theme",
+            "description": "system follows the device's light/dark setting (#214)"
+          },
           "updated_at": {
             "format": "date-time",
             "title": "Updated At",
@@ -561,6 +565,7 @@
           "default_reminder_minutes",
           "pomodoro_config",
           "last_tag",
+          "theme",
           "updated_at"
         ],
         "title": "SettingsOut",
@@ -624,6 +629,9 @@
                 "type": "null"
               }
             ]
+          },
+          "theme": {
+            "$ref": "#/components/schemas/Theme"
           },
           "week_start_day": {
             "maximum": 6.0,
@@ -825,6 +833,16 @@
         ],
         "title": "TagTotal",
         "type": "object"
+      },
+      "Theme": {
+        "description": "Colour theme (#214); \"system\" follows the device's light/dark setting.",
+        "enum": [
+          "system",
+          "dark",
+          "light"
+        ],
+        "title": "Theme",
+        "type": "string"
       },
       "UnlimitedConfig": {
         "additionalProperties": false,

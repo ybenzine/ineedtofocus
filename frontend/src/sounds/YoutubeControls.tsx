@@ -14,6 +14,7 @@ import {
   type YoutubeLink,
 } from './youtubeLink.ts'
 import { httpYoutubeLinksApi, type YoutubeLinksApi } from './youtubeLinksApi.ts'
+import RangeInput from '../RangeInput.tsx'
 
 export const INVALID_LINK_MESSAGE =
   "That doesn't look like a YouTube link. Paste a link from youtube.com or youtu.be."
@@ -115,9 +116,8 @@ export default function YoutubeControls({
           />
           <div className="timer-volume">
             <label htmlFor={volumeId}>YouTube volume</label>
-            <input
+            <RangeInput
               id={volumeId}
-              type="range"
               min={0}
               max={100}
               value={volume}
