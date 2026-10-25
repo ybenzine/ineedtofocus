@@ -13,6 +13,10 @@ export interface ApiPomodoroConfig {
 
 export type ReminderSetting = 15 | 30 | 45 | 60 | 90 | 120 | null
 
+/** Colour theme (#214): System follows the device's light/dark setting. */
+export type ThemeSetting = 'system' | 'dark' | 'light'
+export const THEME_SETTINGS: readonly ThemeSetting[] = ['system', 'dark', 'light']
+
 export interface Settings {
   /** 0 = Sunday ... 6 = Saturday (AC12.1) */
   week_start_day: number
@@ -28,6 +32,8 @@ export interface Settings {
   pomodoro_config: ApiPomodoroConfig | null
   /** AC12.5; null means Work */
   last_tag: Tag | null
+  /** #214 */
+  theme: ThemeSetting
 }
 
 export type SettingsPatch = Partial<Settings>
@@ -40,6 +46,7 @@ export const SETTINGS_KEYS = [
   'default_reminder_minutes',
   'pomodoro_config',
   'last_tag',
+  'theme',
 ] as const satisfies readonly (keyof Settings)[]
 
 /** Defaults for a new user (decision log 2026-10-21, AC12.x). */
@@ -51,6 +58,7 @@ export const DEFAULT_SETTINGS: Settings = {
   default_reminder_minutes: null,
   pomodoro_config: null,
   last_tag: null,
+  theme: 'system',
 }
 
 export type SettingsErrorKind = 'network' | 'unauthorized' | 'invalid' | 'server'
@@ -114,6 +122,9 @@ export function parseSettings(value: unknown): Settings {
     last_tag: (TAGS as readonly unknown[]).includes(value.last_tag)
       ? (value.last_tag as Tag)
       : null,
+    theme: (THEME_SETTINGS as readonly unknown[]).includes(value.theme)
+      ? (value.theme as ThemeSetting)
+      : d.theme,
   }
 }
 
