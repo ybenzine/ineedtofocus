@@ -150,6 +150,22 @@ def test_the_template_builds_the_whole_contract() -> None:
     assert "data.ToJSON" in text  # every value JSON-escaped, never pasted in by hand
 
 
+@pytest.mark.parametrize("env", (*d.DEPLOYED, "local"))
+@pytest.mark.parametrize("alert", d.ALERTS)
+@pytest.mark.parametrize("status", d.STATUSES)
+def test_a_synthetic_alert_says_what_its_rule_says(alert: str, env: str, status: str) -> None:
+    """`verify` and `test` send it through the check, which pins the text to the rule
+    (#212): the rule's title and summary, and its description with zero in every slot."""
+    sample = r.synthetic_alert("https://example.test/", env, alert, status)
+    text = d.rule_text(alert, env)
+    assert text is not None
+    assert sample["labels"]["alertname"] == text.title
+    assert sample["annotations"]["summary"] == text.summary
+    assert text.description.fullmatch(sample["annotations"]["description"])
+    zero = "0% of the 0 sessions" if alert == "session-save-errors" else "percentile of the 0 "
+    assert zero in sample["annotations"]["description"]
+
+
 @pytest.mark.parametrize("alert", d.ALERTS)
 def test_the_traces_link_opens_the_alerts_requests(alert: str) -> None:
     assert r.TRACES[alert] in template()

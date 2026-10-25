@@ -303,7 +303,9 @@ def synthetic_alert(
     grafana: str, env: str, alert: str, status: str, now: datetime | None = None
 ) -> dict[str, Any]:
     """An alert as the rules (#33) raise it, for the template preview and `test`: the
-    rule's own labels, title and summary; the description says it's synthetic."""
+    rule's own labels, title and summary, and its description with zero in every slot
+    ("0% of the 0 sessions submitted …"): nothing failed. The check pins the description to
+    the rule's template (#212), so a synthetic alert can't say anything else."""
     now = now or datetime.now(UTC).replace(microsecond=0)
     starts = now - timedelta(minutes=12 if status == "resolved" else 2)
     ends = now - timedelta(minutes=1) if status == "resolved" else now + timedelta(hours=1)
@@ -316,7 +318,7 @@ def synthetic_alert(
         },
         "annotations": {
             "summary": rule["annotations"]["summary"],
-            "description": "A synthetic alert sent by scripts/alert_routing.py: nothing failed.",
+            "description": d.example_description(rule["annotations"]["description"]),
             "runbook_url": rule["annotations"]["runbook_url"],
         },
         "startsAt": starts.isoformat().replace("+00:00", "Z"),
