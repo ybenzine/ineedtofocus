@@ -47,6 +47,13 @@
 #               known-good release is pulled again by a rollback; a failed deploy prunes
 #               nothing; a failed removal, a malformed log or unreadable references keep
 #               images and never fail the deploy
+#   floor       (#165) each deploy reads its release's schema (the installed
+#               migration_info.py, fed to a one-shot container) before migrating, and
+#               logs schema=<head>; output it can't read stops it there. A contract
+#               migration writes a floor line first: rollback, rollback <sha>, the
+#               record's previous release, the automatic revert and pruning stop at it;
+#               dev's floor doesn't move prod's, or stop promotion; it survives a revert
+#               and later rollbacks; a failed contract deploy still sets it
 set -euo pipefail
 
 SRC=/src
@@ -400,6 +407,12 @@ check "tags the digest :<sha> locally" contains "$calls" ":: tag $REPO@$D1 $REPO
 check "pull before migrate" before "$calls" ":: pull --quiet" "$migrate"
 check "migrates with a one-shot container" contains "$calls" "$migrate"
 check "migrate before up" before "$calls" "$migrate" "$start"
+read_schema=":: $compose_args run --rm -T --pull never --no-deps app python -"
+check "reads the release's schema in a one-shot container, no database (#165)" contains "$calls" "app_tag=$S1 $read_schema"
+check "after the pull and the re-tag" before "$calls" ":: tag $REPO@$D1 $REPO:$S1" "$read_schema"
+check "before migrate" before "$calls" "$read_schema" "$migrate"
+check "it feeds the container the installed migration_info.py" cmp -s "$FAKE/run-stdin" /opt/focus/infra/app/migration_info.py
+check "no contract migration: no floor line" not_contains "$(cat "$HISTORY")" "action=floor"
 check "checks the running image after up" before "$calls" "$start" ":: inspect --format {{.Image}} container-dev-app"
 check "checks /healthz in the app" contains "$calls" "exec -T app python -c import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz'"
 check "checks /readyz in the app" contains "$calls" "exec -T app python -c import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz'"
@@ -417,6 +430,7 @@ check "record: infra revision" eq "$(value infra_revision)" "$A"
 check "record is deploy's, 640" eq "$(mode_owner "$RECORD")" "640 deploy:deploy"
 check "history: one ok line" eq "$(grep -c ' outcome=ok ' "$HISTORY")" 1
 check "history line names the release" contains "$(last_history)" "action=deploy outcome=ok tag=$S1 digest=$D1"
+check "history line records the alembic head it migrated to (#165)" contains "$(last_history)" " schema=0002"
 check "deploy output shows the record" contains "$out" "deployed_at="
 ci status
 check "status prints the record" eq "$out" "$(cat "$RECORD")"
@@ -1257,6 +1271,179 @@ ci "deploy $S10 $D14"
 check "the next deploy succeeds" eq "$rc" 0
 check "and doesn't glue its line onto the last one" eq "$(tail -n 2 "$HISTORY" | head -n 1)" "$hand_line"
 check "its own line is whole" contains "$(last_history)" "action=deploy outcome=ok tag=$S10 digest=$D14"
+
+echo "--- The schema step: what a deploy can't read stops it before migrating (#165)"
+install -d -m 0755 "$FAKE/schema"
+schema() { printf '%s\n' "$2" >"$FAKE/schema/$1"; } # <digest> <what migration_info prints>
+SY=$(sha 0xb0) EY=$(digest 0x1b0)
+echo "$SY" >"$FAKE/labels/$EY"
+touch "$FAKE/fail/schema"
+deploy_fails "the schema step fails" schema "$SY" "$EY" "alembic"
+rm "$FAKE/fail/schema"
+no_revert "the schema step fails"
+schema "$EY" $'schema=0002\nschema=0003\ncontracts=-'
+deploy_fails "two schema lines" schema "$SY" "$EY" "alembic"
+check "two schema lines: says what it got" contains "$out" "can't read $SY's schema"
+schema "$EY" $'schema=0002\ncontracts=0003;id'
+deploy_fails "a contract list that isn't revision ids" schema "$SY" "$EY" "alembic"
+schema "$EY" "contracts=-"
+deploy_fails "no schema line" schema "$SY" "$EY" "alembic"
+rm "$FAKE/schema/$EY"
+mv /opt/focus/infra/app/migration_info.py /tmp/migration_info.py
+deploy_fails "migration_info.py isn't installed" schema "$SY" "$EY" "alembic"
+mv /tmp/migration_info.py /opt/focus/infra/app/migration_info.py
+check "migration_info.py isn't installed: says to run install.sh" contains "$out" "/opt/focus/infra/app/migration_info.py is missing: run infra/server/install.sh"
+
+echo "--- Rollback floor: a contract migration retires older releases (#165)"
+F1=$(sha 0xb1) F2=$(sha 0xb2) C1=$(sha 0xb3) Z=$(sha 0xb4) G=$(sha 0xb5) K=$(sha 0xb6) L=$(sha 0xb7) M=$(sha 0xb8)
+EF1=$(digest 0x1b1) EF2=$(digest 0x1b2) EC=$(digest 0x1b3) EZ=$(digest 0x1b4)
+EG=$(digest 0x1b5) EK=$(digest 0x1b6) EL=$(digest 0x1b7) EM=$(digest 0x1b8)
+for release in "$F1 $EF1" "$F2 $EF2" "$C1 $EC" "$Z $EZ" "$G $EG" "$K $EK" "$L $EL" "$M $EM"; do
+  read -r s d <<<"$release"
+  echo "$s" >"$FAKE/labels/$d"
+done
+schema "$EC" $'schema=0003\ncontracts=0003' # C1 drops what F1 and F2 may still use
+schema "$EZ" $'schema=0003\ncontracts=0003'
+schema "$EG" $'schema=0004\ncontracts=0003'
+schema "$EK" $'schema=0005\ncontracts=0003,0005'
+schema "$EL" $'schema=0005\ncontracts=0003,0005'
+schema "$EM" $'schema=0006\ncontracts=0003,0005,0006'
+floor_lines() { grep -c ' action=floor ' "$1" || true; }
+for release in "$F1 $EF1" "$F2 $EF2"; do
+  ci "deploy $release"
+  check "dev deploys ${release%% *}" eq "$rc" 0
+  prod "deploy $release"
+  check "prod deploys ${release%% *}" eq "$rc" 0
+done
+check "sanity: dev and prod run F2, with F1 as their rollback target" \
+  eq "$(value tag) $(value previous_tag) $(pvalue tag) $(pvalue previous_tag)" "$F2 $F1 $F2 $F1"
+check "sanity: no floor line in either log yet" eq "$(floor_lines "$HISTORY") $(floor_lines "$PROD_HISTORY")" "0 0"
+
+mark
+hmark
+ci "deploy $C1 $EC"
+printf '%s\n' "$out" | sed 's/^/     | /'
+calls=$(new_calls)
+check "contract deploy on dev succeeds" eq "$rc" 0
+check "it says it sets dev's rollback floor" contains "$out" "contract migration 0003: dev's rollback floor is now $C1"
+check "the floor line comes first, then the deploy's" \
+  eq "$(new_history | sed 's/^time=[^ ]* //' | cut -d' ' -f1-5)" \
+  "env=dev action=floor outcome=set tag=$C1 digest=$EC"$'\n'"env=dev action=deploy outcome=ok tag=$C1 digest=$EC"
+check "the floor line names the schema and the contract revisions" contains "$(new_history | head -n1)" " schema=0003 contracts=0003"
+check "the floor line names no rollback target" contains "$(new_history | head -n1)" "previous_tag=- previous_digest=-"
+check "the deploy line records the schema" contains "$(last_history)" " schema=0003"
+check "it migrates as usual" contains "$calls" "app_tag=$C1 $migrate"
+check "record: no rollback target, everything before is below the floor" eq "$(value previous_tag)$(value previous_digest)" ""
+check "prod's log has no floor line" eq "$(floor_lines "$PROD_HISTORY")" 0
+check "prod still runs and may start F1 and F2: their images stay" bash -c "[ -e '$FAKE/local/$EF1' ] && [ -e '$FAKE/local/$EF2' ]"
+
+FLOOR1="contract migration 0003 ran with the deploy of $C1 at"
+at_floor() { # <description> <request> <message> <floor note>
+  local before_record
+  before_record=$(cat "$RECORD")
+  mark
+  hmark
+  ci "$2"
+  check "$1: fails (status 1)" eq "$rc" 1
+  check "$1: says why" contains "$out" "$3"
+  check "$1: names the floor" contains "$out" "$4"
+  check "$1: says to fix forward" contains "$out" "fix forward"
+  check "$1: no docker call" no_new_calls
+  check "$1: record unchanged, nothing logged" eq "$(cat "$RECORD")$(new_history)" "$before_record"
+}
+at_floor "rollback after the contract deploy" rollback "nothing to roll back to above dev's rollback floor" "$FLOOR1"
+at_floor "rollback <sha> to the release just before the floor" "rollback $F2" "$F2 is below dev's rollback floor" "$FLOOR1"
+at_floor "rollback <sha> further back" "rollback $F1" "$F1 is below dev's rollback floor" "$FLOOR1"
+at_floor "rollback <sha> with expect" "rollback $F2 expect $EC" "$F2 is below dev's rollback floor" "$FLOOR1"
+ci "rollback $(sha 0xbad)"
+check "a sha never deployed: still 'no known-good release'" contains "$out" "no known-good release of $(sha 0xbad) is recorded on dev"
+
+echo "--- The floor is per environment"
+prod "candidate $F2"
+check "prod may still take a release from below dev's floor (promotion reads dev's log whole)" eq "$rc" 0
+rb rollback
+check "prod, without the contract migration, still rolls back to F1" eq "$rc $(pvalue tag) $(pvalue digest)" "0 $F1 $EF1"
+prod "deploy $F2 $EF2"
+check "and prod deploys F2, from below dev's floor, again" eq "$rc $(pvalue previous_tag)" "0 $F1"
+mark
+hmark "$PROD_HISTORY"
+prod "deploy $C1 $EC"
+check "prod's contract deploy succeeds" eq "$rc" 0
+check "it sets prod's own floor" contains "$(new_history "$PROD_HISTORY" | head -n1)" "env=prod action=floor outcome=set tag=$C1 digest=$EC"
+check "prod record: no rollback target below it" eq "$(pvalue previous_tag)$(pvalue previous_digest)" ""
+check "prod's deploy: no dev file in any docker call" not_contains "$(new_calls)" "/opt/focus/dev/"
+check "dev's log still has its one floor line" eq "$(floor_lines "$HISTORY")" 1
+check "pruning follows the floors: F1 and F2, below both, leave the host" \
+  bash -c "! [ -e '$FAKE/local/$EF1' ] && ! [ -e '$FAKE/local/$EF2' ]"
+check "with their tags" bash -c "! [ -e '$FAKE/tags/$F1' ] && ! [ -e '$FAKE/tags/$F2' ]"
+check "C1 stays" on_host "$EC"
+rb rollback
+check "prod's rollback stops at prod's floor (status 1)" eq "$rc" 1
+check "it says so" contains "$out" "nothing to roll back to above prod's rollback floor: every known-good release other than the current one ($C1) is below it"
+rb "rollback $F2"
+check "rollback <sha> below prod's floor: refused" contains "$out" "$F2 is below prod's rollback floor"
+check "prod still runs C1" eq "$(pvalue tag) $(cat "$FAKE/running-prod")" "$C1 $EC"
+
+echo "--- The floor survives a revert and later rollbacks"
+echo up >"$FAKE/broken/$EZ"
+mark
+hmark
+ci "deploy $Z $EZ"
+check "a broken build after the floor: fails" eq "$rc" 1
+check "it reverts to C1, the release at the floor" contains "$out" "reverted to $C1"
+check "no new floor line: 0003 is recorded already" eq "$(new_history | grep -c ' action=floor ' || true)" 0
+check "dev runs C1 again" eq "$(cat "$FAKE/running-dev")" "$EC"
+at_floor "rollback after the revert" rollback "nothing to roll back to above dev's rollback floor" "$FLOOR1"
+ci "deploy $G $EG"
+check "a later release with the same contract revision deploys" eq "$rc" 0
+check "its rollback target is C1, at the floor" eq "$(value previous_tag)" "$C1"
+check "still one floor line in dev's log" eq "$(floor_lines "$HISTORY")" 1
+ci rollback
+check "rollback from it goes to C1" eq "$rc $(value tag) $(value digest)" "0 $C1 $EC"
+check "and the next target is none: G is rolled back from, the rest below the floor" eq "$(value previous_tag)" ""
+at_floor "a second rollback" rollback "nothing to roll back to above dev's rollback floor" "$FLOOR1"
+at_floor "rollback <sha> below the floor after rollbacks" "rollback $F2" "$F2 is below dev's rollback floor" "$FLOOR1"
+
+echo "--- A contract deploy that fails at start doesn't revert below its floor"
+echo up >"$FAKE/broken/$EK"
+mark
+hmark
+ci "deploy $K $EK"
+calls=$(new_calls)
+check "it fails (status 1)" eq "$rc" 1
+check "the floor line was written first, with both contract revisions" \
+  contains "$(new_history | head -n1)" "action=floor outcome=set tag=$K digest=$EK previous_tag=- previous_digest=- infra=$D schema=0005 contracts=0003,0005"
+check "then the failed deploy" contains "$(new_history | sed -n 2p)" "action=deploy outcome=failed tag=$K digest=$EK previous_tag=- previous_digest=- infra=$D step=start schema=0005"
+check "it says C1 is below the new floor, so it isn't started again" \
+  contains "$out" "$C1, the release that ran before, is below dev's rollback floor (contract migration 0003,0005 ran with the deploy of $K"
+check "and that dev may run K unhealthy" contains "$out" "dev may be running $K unhealthy"
+check "no revert line" not_contains "$(new_history)" "action=revert"
+check "C1 isn't started again" not_contains "$(after "$calls" "app_tag=$K $start")" "app_tag=$C1 "
+check "the record still names C1" eq "$(value tag)" "$C1"
+FLOOR2="contract migration 0003,0005 ran with the deploy of $K at"
+at_floor "rollback after it" rollback "nothing to roll back to above dev's rollback floor" "$FLOOR2"
+ci "deploy $L $EL"
+check "the fix-forward release deploys" eq "$rc" 0
+check "no new floor line for it" eq "$(floor_lines "$HISTORY")" 2
+check "its rollback target is none: C1, still the record's release, is below the floor" eq "$(value previous_tag)" ""
+rm "$FAKE/broken/$EK" "$FAKE/broken/$EZ"
+
+echo "--- A contract migration that fails still sets the floor (it may have run in part)"
+touch "$FAKE/fail/migrate"
+mark
+hmark
+ci "deploy $M $EM"
+rm "$FAKE/fail/migrate"
+check "it fails at migrate" contains "$out" "failed at 'migrate'"
+check "after the floor line" eq "$(new_history | sed 's/^time=[^ ]* //' | cut -d' ' -f1-5)" \
+  "env=dev action=floor outcome=set tag=$M digest=$EM"$'\n'"env=dev action=deploy outcome=failed tag=$M digest=$EM"
+check "dev still runs L" eq "$(value tag) $(cat "$FAKE/running-dev")" "$L $EL"
+FLOOR3="contract migration 0003,0005,0006 ran with the deploy of $M at"
+at_floor "rollback after it" rollback "nothing to roll back to above dev's rollback floor" "$FLOOR3"
+ci "deploy $M $EM"
+check "the same release, once its migration works, deploys" eq "$rc" 0
+check "without another floor line" eq "$(floor_lines "$HISTORY")" 3
+check "its rollback target is none: L ran before the floor" eq "$(value previous_tag)" ""
 
 pkill -f "sshd -p $SSH_PORT" || true
 finish

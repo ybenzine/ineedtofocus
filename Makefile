@@ -28,8 +28,8 @@ vitest_junit = $(if $(JUNIT_DIR),--reporter=default --reporter=junit --outputFil
 SCRIPTS_RUN := $(UV) run --with-requirements ../scripts/reviewer_token.py
 # create_backlog.py seeded the board once (2026-10-20) and is kept only as a record; not linted.
 SCRIPTS_LINT_EXCLUDE := create_backlog.py
-# Python test helpers under infra/ (the smoke test's fake OTLP gateway), linted like scripts/.
-INFRA_PY := ../infra/tests
+# Python under infra/ (the smoke test's fake OTLP gateway, the deploy's migration_info.py), linted like scripts/.
+INFRA_PY := ../infra/tests ../infra/app
 # ShellCheck, pinned, run through uv (shellcheck-py ships the official binary).
 SHELLCHECK := uvx --from shellcheck-py==0.11.0.1 shellcheck
 # actionlint, pinned, through uv (actionlint-py ships the official binary). The pinned

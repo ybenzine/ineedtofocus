@@ -5,6 +5,9 @@
 # It starts the real infra/compose.edge.yml and infra/compose.prod.yml, as prod and as
 # dev, under test project names, and checks:
 #
+#   - focus-ci's schema step (#165) works in the image: infra/app/migration_info.py,
+#     fed to a one-shot app container with no database, prints the image's alembic head
+#     and its contract revisions;
 #   - migrations run as a one-shot step (`run --rm app alembic upgrade head`), then
 #     the app starts with MIGRATE_ON_START=0 and turns healthy;
 #   - host resources (#117): the app, Postgres and the collector run with a pids limit,
@@ -141,6 +144,16 @@ export SMOKE_CADDY_JSON=$work/caddy.json
 echo "Starting $edge_project, $prefix-prod and $prefix-dev with $image_repo:$APP_TAG ..."
 edge up -d --wait --quiet-pull
 ok "edge: Caddy is up"
+# focus-ci's schema step (#165), as it runs it: migration_info.py on stdin to a one-shot
+# app container, with the app's limits and no database (nothing else is started yet).
+prod run --rm -T --pull never --no-deps app python - < "$infra/app/migration_info.py" \
+  > "$work/schema" 2> "$work/schema.err" || fail "schema step: $(cat "$work/schema.err")"
+alembic_head=$(prod run --rm -T --pull never --no-deps app alembic heads 2> /dev/null | awk 'NR == 1 { print $1 }')
+[[ -n $alembic_head && $(sed -n 1p "$work/schema") == "schema=$alembic_head" ]] ||
+  fail "schema step printed $(head -c 300 "$work/schema"), expected schema=$alembic_head first"
+[[ $(sed -n 2p "$work/schema") =~ ^contracts=(-|[A-Za-z0-9_]+(,[A-Za-z0-9_]+)*)$ && $(wc -l < "$work/schema") -eq 2 ]] ||
+  fail "schema step printed $(head -c 300 "$work/schema"), expected a contracts= line second and last"
+ok "schema step: the image's migrations lead to alembic head $alembic_head ($(sed -n 2p "$work/schema"))"
 prod run --rm --quiet-pull app alembic upgrade head > "$work/migrate.log" 2>&1 ||
   fail "prod migration: $(cat "$work/migrate.log")"
 ok "prod: migrations ran as a one-shot step"

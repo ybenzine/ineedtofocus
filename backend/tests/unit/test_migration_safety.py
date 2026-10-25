@@ -6,6 +6,12 @@ AST: destructive `op.*` calls (including via an alias or `from alembic.op import
 raw SQL, and `add_column` of a NOT NULL column without a `server_default`. It is a safety
 net, not a proof; code review still decides. A deliberate contract step needs a real
 comment line `# contract-migration: <reason>` with a non-empty reason.
+
+That marker also sets the rollback floor (#165): when a deploy brings a migration carrying
+it, the deploy tooling (infra/app/migration_info.py, read by infra/server/focus-ci.sh)
+stops treating the releases from before it as rollback targets on that environment. See
+_docs/deployment.md, Schema compatibility. Keep MARKER here and in migration_info.py the
+same (scripts/tests/test_migration_info.py checks it).
 """
 
 import ast

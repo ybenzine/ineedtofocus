@@ -64,7 +64,8 @@ APP_REPO=ghcr.io/ybenzine/ineedtofocus
 PINNED_RE='^[a-z0-9]+([._/-][a-z0-9]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}$'
 # Every file the deploy keys depend on; a commit without them isn't installed.
 REQUIRED_FILES=(compose.sh compose.prod.yml compose.edge.yml env/prod.env env/dev.env
-  caddy/Caddyfile otel-collector/config.yaml server/focus-ci.sh server/install.sh)
+  caddy/Caddyfile otel-collector/config.yaml server/focus-ci.sh server/install.sh
+  app/migration_info.py)
 
 log() { printf '==> %s\n' "$*"; }
 die() {
