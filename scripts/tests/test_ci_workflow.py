@@ -107,7 +107,7 @@ def test_deploy_dev_uses_the_dev_environment_and_its_own_group(jobs: dict[str, A
     deploy = jobs["deploy-dev"]
     assert deploy["environment"] == {"name": "dev", "url": "https://dev.ineedtofoc.us"}
     assert deploy["concurrency"] == {"group": "deploy-dev", "cancel-in-progress": False}
-    assert deploy["permissions"] == {"contents": "read"}
+    assert deploy["permissions"] == {"contents": "read", "attestations": "read"}
 
 
 def test_secrets_appear_only_where_they_belong(jobs: dict[str, Any]) -> None:
@@ -294,7 +294,7 @@ def test_deploy_prod_permissions_are_minimal(
         "actions": "read",
         "deployments": "read",
     }
-    assert prod_jobs["deploy"]["permissions"] == {"contents": "read"}
+    assert prod_jobs["deploy"]["permissions"] == {"contents": "read", "attestations": "read"}
 
 
 def test_deploy_prod_runs_in_production_after_the_plan(prod_jobs: dict[str, Any]) -> None:
@@ -557,6 +557,261 @@ def test_deploy_prod_resolves_the_digest_dev_ran(
         assert output.read_text() == "dev_time=T\n"
     else:
         assert github_env.read_text() == ""
+
+
+# --- Build provenance (#128) ----------------------------------------------------------
+
+IMAGE_NAME = "ghcr.io/ybenzine/ineedtofocus"
+RUN_URL = "https://github.com/ybenzine/ineedtofocus/actions/runs/123/attempts/1"
+VERIFY_STEP = "Verify the image's build provenance"
+# The exact gh call both verify steps make, one argument per line in the fake's log: this
+# repository's attestations of exactly that digest, signed by ci.yml at the approved
+# commit, built for a push to main from that commit, on a GitHub-hosted runner.
+VERIFY_ARGV = [
+    "attestation",
+    "verify",
+    f"oci://{IMAGE_NAME}@{DIGEST}",
+    "--repo",
+    "ybenzine/ineedtofocus",
+    "--signer-workflow",
+    "ybenzine/ineedtofocus/.github/workflows/ci.yml",
+    "--signer-digest",
+    SHA,
+    "--source-ref",
+    "refs/heads/main",
+    "--source-digest",
+    SHA,
+    "--predicate-type",
+    "https://slsa.dev/provenance/v1",
+    "--deny-self-hosted-runners",
+    "--format",
+    "json",
+    "--jq",
+    ".[0].verificationResult.signature.certificate.runInvocationURI",
+]
+
+
+def effective_permissions(path: Path) -> list[tuple[str, dict[str, str]]]:
+    """Each job's token permissions: its own block, else the workflow's. Every workflow
+    sets one, as a map (never `write-all` or the repository default)."""
+    data: dict[Any, Any] = yaml.safe_load(path.read_text())
+    top = data.get("permissions")
+    assert isinstance(top, dict), path.name
+    result = []
+    for name, job in data["jobs"].items():
+        own = job.get("permissions", top)
+        assert isinstance(own, dict), (path.name, name)
+        result.append((name, own))
+    return result
+
+
+@pytest.mark.parametrize("scope", ["id-token", "attestations"])
+def test_only_publish_can_sign_and_store_attestations(scope: str) -> None:
+    """`id-token: write` (a Sigstore certificate in this repository's name) and
+    `attestations: write` belong to ci.yml's publish job alone, across every workflow."""
+    writers = [
+        (path.name, name)
+        for path in all_workflows()
+        for name, permissions in effective_permissions(path)
+        if permissions.get(scope) == "write"
+    ]
+    assert writers == [("ci.yml", "publish")]
+
+
+def test_publish_permissions_are_exactly_these(jobs: dict[str, Any]) -> None:
+    assert jobs["publish"]["permissions"] == {
+        "contents": "read",
+        "packages": "write",
+        "id-token": "write",
+        "attestations": "write",
+    }
+
+
+def test_publish_attests_the_digest_it_pushed(jobs: dict[str, Any]) -> None:
+    """actions/attest-build-provenance, pinned by sha, for the pushed digest (not the tag),
+    stored next to the image too, after the push and while still logged in to GHCR."""
+    steps = jobs["publish"]["steps"]
+    attest = step_named(jobs["publish"], "Attest build provenance")
+    assert re.fullmatch(r"actions/attest-build-provenance@[0-9a-f]{40}", attest["uses"])
+    assert attest["with"] == {
+        "subject-name": IMAGE_NAME,
+        "subject-digest": "${{ steps.push.outputs.digest }}",
+        "push-to-registry": True,
+        "create-storage-record": False,
+    }
+    assert "if" not in attest and "continue-on-error" not in attest
+    push = next(i for i, step in enumerate(steps) if step.get("id") == "push")
+    assert push < steps.index(attest)
+    assert "docker logout" not in steps[push]["run"]
+    logout = step_named(jobs["publish"], "Log out of GHCR")
+    assert logout == {
+        "name": "Log out of GHCR",
+        "if": "always()",
+        "run": "docker logout ghcr.io",
+        "_shell": None,
+    }
+    assert steps.index(attest) < steps.index(logout) == len(steps) - 1
+    # The version comment (test_actions_are_pinned_to_a_commit checks its shape).
+    assert re.search(r"actions/attest-build-provenance@[0-9a-f]{40} # v4\.", CI.read_text())
+
+
+def verify_jobs(jobs: dict[str, Any], prod_jobs: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {"deploy-dev": jobs["deploy-dev"], "deploy-prod": prod_jobs["deploy"]}
+
+
+def test_both_deploys_verify_with_the_same_script(
+    jobs: dict[str, Any], prod_jobs: dict[str, Any]
+) -> None:
+    """One script, so dev never records a digest prod's check would refuse."""
+    dev, prod = (step_named(job, VERIFY_STEP) for job in verify_jobs(jobs, prod_jobs).values())
+    assert dev["run"] == prod["run"]
+    for step in (dev, prod):
+        assert step["id"] == "provenance"
+        assert step["if"] == "steps.config.outputs.configured == 'true'"
+        assert step["env"] == {"GH_TOKEN": "${{ github.token }}"}
+        assert "continue-on-error" not in step
+        assert "ssh" not in step["run"] and "scripts/" not in step["run"]
+        # The pins, as written in the workflow.
+        for flag in [
+            'gh attestation verify "oci://ghcr.io/ybenzine/ineedtofocus@$DIGEST"',
+            "--repo ybenzine/ineedtofocus \\",
+            "--signer-workflow ybenzine/ineedtofocus/.github/workflows/ci.yml \\",
+            '--signer-digest "$TAG" \\',
+            "--source-ref refs/heads/main \\",
+            '--source-digest "$TAG" \\',
+            "--predicate-type https://slsa.dev/provenance/v1 \\",
+            "--deny-self-hosted-runners \\",
+        ]:
+            assert flag in step["run"], flag
+
+
+@pytest.mark.parametrize("workflow_job", ["deploy-dev", "deploy-prod"])
+def test_a_failed_verify_stops_the_job_before_any_deploy_request(
+    jobs: dict[str, Any], prod_jobs: dict[str, Any], workflow_job: str
+) -> None:
+    """The verify step comes before the SSH deploy request, and every step from it up to
+    that request runs only if all before it succeeded (no always(), failure() or
+    !cancelled()), so a refused attestation means no `deploy` reaches the server. On
+    prod it comes after `candidate`, which reads the digest; on dev, before the key is
+    written."""
+    job = verify_jobs(jobs, prod_jobs)[workflow_job]
+    steps = job["steps"]
+    names = [str(step.get("name", step.get("uses"))) for step in steps]
+    verify = names.index(step_named(job, VERIFY_STEP)["name"])
+    deploy = names.index(step_named(job, "Deploy over SSH")["name"])
+    assert verify < deploy
+    assert not any('"deploy ' in str(step.get("run", "")) for step in steps[:verify])
+    for step in steps[verify : deploy + 1]:
+        condition = str(step.get("if", ""))
+        assert not re.search(r"always\(\)|failure\(\)|cancelled\(\)", condition), step
+        assert "continue-on-error" not in step, step
+    if workflow_job == "deploy-prod":
+        assert names.index(step_named(job, "Resolve the commit")["name"]) < verify
+    else:
+        assert verify < names.index(step_named(job, "Set up the deploy key")["name"])
+
+
+FAKE_GH_ATTEST = r"""#!/usr/bin/env bash
+# Fake gh for the verify step: logs its arguments one per line, then answers like
+# `gh attestation verify … --format json --jq <run URL>` (exit 0), or refuses (exit 1).
+printf '%s\n' "$@" > "$GH_LOG"
+if [[ $GH_STATUS != 0 ]]; then
+  echo "$GH_ERROR" >&2
+  exit "$GH_STATUS"
+fi
+printf '%s\n' "$GH_ANSWER"
+"""
+
+
+@pytest.mark.parametrize("workflow_job", ["deploy-dev", "deploy-prod"])
+@pytest.mark.parametrize(
+    ("overrides", "status", "built_by", "says"),
+    [
+        ({}, 0, RUN_URL, f"was built from {SHA} by {RUN_URL}"),
+        # No attestation at all: an image pushed outside publish, or published before #128.
+        (
+            {"GH_STATUS": "1", "GH_ERROR": "Error: HTTP 404: Not Found"},
+            1,
+            None,
+            "title=Build provenance not verified",
+        ),
+        # An attestation, but not for this commit (or ref, or workflow): gh refuses.
+        (
+            {
+                "GH_STATUS": "1",
+                "GH_ERROR": f"Error: expected SourceRepositoryDigest to be {SHA}, got {OTHER_SHA}",
+            },
+            1,
+            None,
+            "title=Build provenance not verified",
+        ),
+        # Verified, but the run URL isn't the expected shape: verified, no link.
+        ({"GH_ANSWER": "https://evil.example/x|y"}, 0, "", "by a ci.yml run on main"),
+        ({"DIGEST": "sha256:" + "C" * 64}, 1, None, "::error::bad tag or digest"),
+        ({"DIGEST": DIGEST[:-1]}, 1, None, "::error::bad tag or digest"),
+        ({"TAG": SHA[:12]}, 1, None, "::error::bad tag or digest"),
+        ({"TAG": ""}, 1, None, "::error::bad tag or digest"),
+    ],
+    ids=[
+        "attested",
+        "no-attestation",
+        "other-commit",
+        "odd-run-url",
+        "uppercase-digest",
+        "short-digest",
+        "short-tag",
+        "empty-tag",
+    ],
+)
+def test_verify_step_passes_only_an_attestation_gh_accepts(
+    jobs: dict[str, Any],
+    prod_jobs: dict[str, Any],
+    tmp_path: Path,
+    workflow_job: str,
+    overrides: dict[str, str],
+    status: int,
+    built_by: str | None,
+    says: str,
+) -> None:
+    """The verify step, run as GitHub runs it with a fake gh: exactly the pinned call;
+    gh's refusal fails the step with an error (so the job stops before `deploy`); a bad
+    tag or digest never reaches gh."""
+    step = step_named(verify_jobs(jobs, prod_jobs)[workflow_job], VERIFY_STEP)
+    gh_log = tmp_path / "gh.log"
+    env = {
+        "TAG": SHA,
+        "DIGEST": DIGEST,
+        "GH_TOKEN": "not-a-token",
+        "GH_LOG": str(gh_log),
+        "GH_STATUS": "0",
+        "GH_ERROR": "",
+        "GH_ANSWER": RUN_URL,
+        **overrides,
+    }
+    result, output, _ = run_step(step, tmp_path, env, FAKE_GH_ATTEST, "gh")
+    assert result.returncode == status, result
+    assert says in result.stdout
+    if "bad tag or digest" in says:
+        assert not gh_log.exists()
+    else:
+        assert gh_log.read_text().splitlines() == VERIFY_ARGV
+    if built_by is None:
+        assert output.read_text() == ""
+    else:
+        assert output.read_text() == f"built_by={built_by}\n"
+    if status and "bad tag" not in says:
+        assert env["GH_ERROR"] in result.stderr  # gh's reason stays in the log
+
+
+@pytest.mark.parametrize("workflow_job", ["deploy-dev", "deploy-prod"])
+def test_summary_reports_the_provenance(
+    jobs: dict[str, Any], prod_jobs: dict[str, Any], workflow_job: str
+) -> None:
+    summary = step_named(verify_jobs(jobs, prod_jobs)[workflow_job], "Summary")
+    assert summary["env"]["PROVENANCE_OUTCOME"] == "${{ steps.provenance.outcome }}"
+    assert summary["env"]["BUILT_BY"] == "${{ steps.provenance.outputs.built_by }}"
+    assert "| Build provenance |" in summary["run"]
+    assert "$PROVENANCE_OUTCOME == failure" in summary["run"]
 
 
 # --- rollback.yml (#30) ---------------------------------------------------------------
