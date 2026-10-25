@@ -83,7 +83,10 @@ Agents don't act as Yacine. They use a machine account of their own, so the `pro
 ### Checking a session
 
 - `gh auth status` should say `Logged in to github.com account merciful-poseidon`, with token scopes including `repo`, `workflow`, `project` and `read:org`. `gh api user --jq .login` prints `merciful-poseidon`.
-- `git config --show-origin --get-all credential.https://github.com.helper` should show the empty entry followed by `gh auth git-credential`. To see which account git would push as without printing the token: `printf 'protocol=https\nhost=github.com\n\n' | git credential fill | grep '^username='` should print `username=merciful-poseidon`.
+- `git config --show-origin --get-all credential.https://github.com.helper` should show the empty entry followed by `gh auth git-credential`. git then pushes as whichever account `gh auth status` shows, so for agents these two checks are enough. Both run without a prompt: `.claude/settings.json` allows exactly this `git config` command and plain `gh auth status` (#174).
+- To see directly which account git would push as, in your own terminal (agents can't: `.claude/settings.json` denies `git credential fill`, whose unfiltered output is the token, #174): `printf 'protocol=https\nhost=github.com\n\n' | git credential fill | grep '^username='` should print `username=merciful-poseidon`.
+
+Agents never run `gh auth status --show-token` (`-t`), `gh auth token`, `gh auth git-credential`, `git credential fill`, a `git credential-<helper>` or the `security` keychain reads: each prints the bot's token, and `.claude/settings.json` denies them (#174). Only plain `gh auth status` and a few exact variants run without a prompt; see [CLAUDE.md](../../CLAUDE.md#permissions-for-unattended-runs).
 
 If `gh auth status` shows `ybenzine`, the session wasn't started with `claude-focus`. Agents stop and ask for a restart instead of working as Yacine.
 
@@ -109,7 +112,7 @@ What it **can** do, as any writer: push to every branch except `main`, open and 
 | `gh api repos/ybenzine/ineedtofocus/environments/production` | `can_admins_bypass: false`; one `required_reviewers` rule whose only reviewer is the user `ybenzine`; deployment branches: custom policies (`main`) |
 | Admin-only reads: `gh api repos/ybenzine/ineedtofocus/hooks`, `…/keys`, `…/actions/permissions` | `404`, `404`, `403`: GitHub treats the account as a non-admin |
 | `gh secret list --env production` | Names only: `DEPLOY_KNOWN_HOSTS`, `DEPLOY_SSH_KEY`. The account can see the secrets exist; this check doesn't say whether it can overwrite them (above) |
-| `git credential fill` for `github.com` | `username=merciful-poseidon` |
+| `git credential fill` for `github.com` | `username=merciful-poseidon`. This check predates #174, which denies `git credential fill` to agents; it's now for Yacine's own terminal only ([Checking a session](#checking-a-session)) |
 
 These checks cover approving deployments and editing environments and their protection rules, not secrets: see above for what the account can do to secrets. No request that could change a setting or a secret was sent to prove the negative: if it had worked, it would have changed it. Approving a deployment isn't tried either. `.claude/settings.json` denies `pending_deployments` and `approveDeployments` commands (#126), and the reviewer list above already rules it out. The normal loop (issue comments, board moves, pushing a branch, opening and merging the PR) is #127's own trail, all done as `merciful-poseidon`.
 
