@@ -106,6 +106,37 @@ export default function SessionSetup({
   const [failure, setFailure] = useState<string | null>(null)
   const groupId = useId()
 
+  // What the form opened with. Anything changed from it is the user's work in progress: it is
+  // lost on a reload, so a waiting app update holds back while the form is dirty (#244).
+  const [initial] = useState(() => ({
+    mode,
+    tag,
+    goal,
+    audio,
+    countdown,
+    focus,
+    shortBreak,
+    blocks,
+    longBreakOn,
+    longBreak,
+    reminder,
+  }))
+  const dirty =
+    JSON.stringify(initial) !==
+    JSON.stringify({
+      mode,
+      tag,
+      goal,
+      audio,
+      countdown,
+      focus,
+      shortBreak,
+      blocks,
+      longBreakOn,
+      longBreak,
+      reminder,
+    })
+
   let config: TimerConfig
   if (mode === 'countdown') {
     config = { mode, minutes: toNumber(countdown) }
@@ -152,7 +183,12 @@ export default function SessionSetup({
   }
 
   return (
-    <form className="setup" onSubmit={(event) => void submit(event)} noValidate>
+    <form
+      className="setup"
+      data-holds-update={dirty ? '' : undefined}
+      onSubmit={(event) => void submit(event)}
+      noValidate
+    >
       <h1>I Need To Focus</h1>
 
       <fieldset>

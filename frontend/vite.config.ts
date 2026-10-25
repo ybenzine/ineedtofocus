@@ -26,10 +26,10 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      // A new version waits until every tab of the old one is closed, so a running timer is
-      // never reloaded under the user.
+      // A new version waits ('prompt') until the app registers it from main.tsx and activates it
+      // itself, only when idle (src/update/, #244): a running timer is never reloaded.
       registerType: 'prompt',
-      injectRegister: 'script-defer',
+      injectRegister: false,
       // The icons are already in OFFLINE_ASSETS, and the plugin adds the manifest itself.
       includeManifestIcons: false,
       manifest: {
