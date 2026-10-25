@@ -457,19 +457,28 @@ main > p {
 
 .account-confirm {
   flex-basis: 100%;
+  box-sizing: border-box;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.75rem;
   padding: 1rem;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 1rem;
   color: var(--text);
   font-size: 0.9375rem;
+  text-align: start;
 }
 
 .account-confirm p {
   flex-basis: 100%;
+  margin: 0;
+}
+
+/* Two full-width 44 px targets side by side, stacked when 360 px can't fit both. */
+.account-confirm button {
+  flex: 1 1 10rem;
+  min-height: 2.75rem;
 }
 
 /* Settings */
