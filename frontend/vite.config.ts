@@ -15,7 +15,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 const MEDIA_FOLDERS = ['sounds', 'audio']
 const MEDIA_TYPES = '{mp3,ogg,opus,m4a,wav,webm}'
 const OFFLINE_ASSETS = [
-  '**/*.{html,js,css,svg,png,ico}',
+  '**/*.{html,js,css,svg,png,ico,woff2}',
   ...MEDIA_FOLDERS.filter((folder) =>
     existsSync(fileURLToPath(new URL(`./public/${folder}`, import.meta.url))),
   ).map((folder) => `${folder}/**/*.${MEDIA_TYPES}`),
@@ -41,8 +41,8 @@ export default defineConfig({
         scope: '/',
         display: 'standalone',
         orientation: 'any',
-        background_color: '#0e1116',
-        theme_color: '#0e1116',
+        background_color: '#11112a',
+        theme_color: '#11112a',
         icons: [
           { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
           { src: '/icons/icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
@@ -66,7 +66,9 @@ export default defineConfig({
       },
     }),
   ],
-  server: { proxy: { '/api': 'http://localhost:8000' } },
+  // The dev server proxies the API to the local stack's app. A second worktree runs its stack on
+  // its own APP_PORT (#83): `APP_PORT=8010 npm --prefix frontend run dev -- --port 5183`.
+  server: { proxy: { '/api': `http://localhost:${process.env.APP_PORT || '8000'}` } },
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],

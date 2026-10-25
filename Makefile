@@ -28,8 +28,8 @@ vitest_junit = $(if $(JUNIT_DIR),--reporter=default --reporter=junit --outputFil
 SCRIPTS_RUN := $(UV) run --with-requirements ../scripts/reviewer_token.py
 # create_backlog.py seeded the board once (2026-10-20) and is kept only as a record; not linted.
 SCRIPTS_LINT_EXCLUDE := create_backlog.py
-# Python test helpers under infra/ (the smoke test's fake OTLP gateway), linted like scripts/.
-INFRA_PY := ../infra/tests
+# Python under infra/ (the smoke test's fake OTLP gateway, the deploy's migration_info.py), linted like scripts/.
+INFRA_PY := ../infra/tests ../infra/app
 # ShellCheck, pinned, run through uv (shellcheck-py ships the official binary).
 SHELLCHECK := uvx --from shellcheck-py==0.11.0.1 shellcheck
 # actionlint, pinned, through uv (actionlint-py ships the official binary). The pinned
@@ -53,18 +53,26 @@ frontend/node_modules: frontend/package.json frontend/package-lock.json
 
 # --- Local stack --------------------------------------------------------------
 
-up: ## Build and start the local stack, wait until it is healthy (compose.yaml)
+# Every target that starts, stops or checks this checkout's stack first runs
+# scripts/require-worktree-env.sh: in a subagent worktree (.claude/worktrees/) with no .env,
+# Compose would drive the main checkout's stack instead, so it stops there (#188).
+WORKTREE_ENV_GUARD := scripts/require-worktree-env.sh
+
+up: ## Build and start the local stack, wait until it is healthy, print its URLs (compose.yaml)
+	@$(WORKTREE_ENV_GUARD) "make up"
 	$(COMPOSE) up -d --build --wait
-	@echo "App:     http://localhost:8000 (or the APP_PORT set in .env)"
-	@echo "Grafana: http://localhost:3000 (or the GRAFANA_PORT set in .env)"
+	@scripts/stack-urls.sh
 
 down: ## Stop the local stack (keeps the database volume)
+	@$(WORKTREE_ENV_GUARD) "make down"
 	$(COMPOSE) down
 
 logs: ## Follow the local stack's logs
+	@$(WORKTREE_ENV_GUARD) "make logs"
 	$(COMPOSE) logs -f
 
 check-stack: ## Check the running stack: health, frontend, telemetry in Grafana
+	@$(WORKTREE_ENV_GUARD) "make check-stack"
 	python3 scripts/check_local_stack.py
 
 migrate: backend/.venv ## Apply database migrations (alembic upgrade head) to DATABASE_URL
@@ -92,7 +100,7 @@ test-frontend: frontend/node_modules ## Frontend unit tests (Vitest)
 test-scripts: backend/.venv ## Repo script tests (scripts/tests, pytest; e.g. the reviewer App, #70)
 	$(SCRIPTS_RUN) pytest -p no:cacheprovider ../scripts/tests $(call pytest_junit,scripts)
 
-test-server: ## Server bootstrap (#25), installer and deploy forced command (#28, #29) in an Ubuntu 24.04 container (needs Docker)
+test-server: ## Server bootstrap (#25), installer and deploy forced command (#28-#30) in an Ubuntu 24.04 container (needs Docker)
 	infra/server/tests/run.sh
 
 test-infra: ## Validate the production Compose, Caddy and Collector configs against the deploy rules (#27; needs Docker)
@@ -102,23 +110,34 @@ test-prod-stack: ## Smoke-test the production stack: Caddy + prod + dev (#27; ne
 	infra/tests/prod_stack.sh
 
 # Inside `make test`: run e2e when a stack answers on the base URL, otherwise skip loudly
-# (fail when CI is set). `make test-e2e` itself is always strict.
+# (fail when CI is set). `make test-e2e` itself is always strict. The base URL defaults to
+# this checkout's own app (scripts/stack-urls.sh app), so a second worktree (#83) never
+# tests another checkout's stack. A subagent worktree with no .env has no stack of its own
+# (#188): without an explicit PLAYWRIGHT_BASE_URL, both targets stop there, this one by
+# skipping loudly like when no stack answers.
 test-e2e-if-up:
-	@url="$${PLAYWRIGHT_BASE_URL:-http://localhost:8000}"; \
+	@if [ -z "$${PLAYWRIGHT_BASE_URL:-}" ] && ! $(WORKTREE_ENV_GUARD) "make test's e2e step"; then \
+		if [ -n "$${CI:-}" ]; then echo "FAILED e2e: no stack of this worktree's own (CI is set)." >&2; exit 1; fi; \
+		echo "SKIPPED e2e: no stack of this worktree's own. Copy the session's .env, then make up and make test-e2e." >&2; \
+		exit 0; \
+	fi; \
+	url="$${PLAYWRIGHT_BASE_URL:-$$(scripts/stack-urls.sh app)}"; \
 	if curl -fsS --max-time 3 "$$url/healthz" > /dev/null 2>&1; then \
-		$(MAKE) test-e2e; \
+		PLAYWRIGHT_BASE_URL="$$url" $(MAKE) test-e2e; \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAILED e2e: no stack at $$url (CI is set). Run make up first." >&2; exit 1; \
 	else \
 		echo "SKIPPED e2e: no stack at $$url. Run make up, then make test-e2e." >&2; \
 	fi
 
-test-e2e: frontend/node_modules ## Playwright end-to-end tests against the running stack (`make up` first)
+test-e2e: frontend/node_modules ## Playwright end-to-end tests against this checkout's running stack (`make up` first)
+	@if [ -z "$${PLAYWRIGHT_BASE_URL:-}" ]; then $(WORKTREE_ENV_GUARD) "make test-e2e"; fi
 	@if ! compgen -G 'frontend/playwright.config.*' > /dev/null; then \
 		echo 'frontend/playwright.config.* is missing.' >&2; \
 		exit 1; \
 	fi
-	$(NPM) exec --no -- playwright test --config frontend/playwright.config.ts
+	PLAYWRIGHT_BASE_URL="$${PLAYWRIGHT_BASE_URL:-$$(scripts/stack-urls.sh app)}" \
+		$(NPM) exec --no -- playwright test --config frontend/playwright.config.ts
 
 # --- Lint and format ----------------------------------------------------------
 
@@ -132,7 +151,7 @@ lint-backend: backend/.venv ## ruff check, ruff format --check, mypy
 lint-frontend: frontend/node_modules ## eslint, prettier --check, tsc
 	$(NPM) run lint
 
-lint-scripts: backend/.venv ## ruff check, ruff format --check, mypy (strict) on scripts/*.py and infra/tests/*.py
+lint-scripts: backend/.venv ## ruff check, ruff format --check, mypy (strict) on scripts/*.py, infra/tests/*.py and infra/app/*.py
 	$(SCRIPTS_RUN) ruff check --config pyproject.toml --extend-exclude $(SCRIPTS_LINT_EXCLUDE) ../scripts $(INFRA_PY)
 	$(SCRIPTS_RUN) ruff format --config pyproject.toml --extend-exclude $(SCRIPTS_LINT_EXCLUDE) --check ../scripts $(INFRA_PY)
 	$(SCRIPTS_RUN) mypy --config-file pyproject.toml --exclude '$(SCRIPTS_LINT_EXCLUDE)$$' ../scripts $(INFRA_PY)

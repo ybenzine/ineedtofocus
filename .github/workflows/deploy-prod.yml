@@ -19,7 +19,10 @@
 #             deploy <sha> <digest>
 #             status
 #           It resolves the commit to the digest dev ran (the one `publish` pushed and
-#           deploy-dev deployed), deploys that digest, reads the record back, then runs
+#           deploy-dev deployed), verifies that digest's build provenance attestation
+#           (#128: ci.yml's publish built exactly those bytes on refs/heads/main from the
+#           approved commit; no attestation, no deploy request), deploys that digest,
+#           reads the record back, then runs
 #           scripts/smoke_deploy.py against https://ineedtofoc.us. The server refuses a
 #           sha and digest dev hasn't run successfully, re-tags :<sha> from the digest
 #           under the host's deploy lock and checks the running image afterwards. The key
@@ -27,16 +30,20 @@
 #
 # The prod key and host line are secrets of the `production` environment only; nothing
 # is stored at repo level. Until they're set, the deploy job skips with a notice; with only
-# one set, it fails red. #30 adds the automatic revert and `rollback.yml`, which uses its
-# own `rollback` environment and key.
+# one set, it fails red. If the release fails its checks after starting, focus-ci starts
+# the previous prod release again and the job fails (#30). Rolling prod back is
+# rollback.yml, with its own `rollback` environment and key, and no approval. focus-ci also
+# refuses (in `candidate` and `promote`) a release dev rolled back from, which this plan
+# can't see: such a run stops at the resolve or deploy step, before anything changes.
 #
 # .claude/settings.json denies agents `gh workflow run` with deploy-prod in it or with a
 # numeric workflow ID, and approving through `pending_deployments` or GraphQL
 # `approveDeployments` (#126). The workflow's name is deploy-prod too, so starting it by
 # name matches the same rules. Re-runs aren't denied: they wait for the approval again.
-# The gate is the environment's required approval, but agents' `gh` is Yacine, the
-# required reviewer, and the rules only match command text. #127 gives agents a credential
-# that can't approve. See _docs/deployment.md, Deploy to prod.
+# The gate is the environment's required approval, and it holds against agents: they act
+# as merciful-poseidon (#127), which isn't a production reviewer or an administrator, so
+# it can't approve a run or edit the environment. The #126 rules, which only match
+# command text, are the second line. See _docs/deployment.md, Deploy to prod.
 
 name: deploy-prod
 run-name: "Deploy to prod: ${{ inputs.tag || 'the release dev runs' }}"
@@ -51,6 +58,13 @@ on:
         default: ""
 
 permissions: {}
+
+# `shell: bash` makes GitHub run every step with `bash --noprofile --norc -eo pipefail`.
+# Without it a step runs as `bash -e {0}`, and a pipeline takes its last command's status,
+# so `ssh … | tee` would hide a failed server request.
+defaults:
+  run:
+    shell: bash
 
 jobs:
   plan:
@@ -157,6 +171,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      attestations: read # gh attestation verify (#128)
     env:
       DEPLOY_HOST: 159.223.188.176
       PROD_URL: https://ineedtofoc.us
@@ -236,11 +251,42 @@ jobs:
             { echo "::error::unexpected candidate answer"; exit 1; }
           echo "DIGEST=$digest" >> "$GITHUB_ENV"
           echo "dev_time=$(get source_time)" >> "$GITHUB_OUTPUT"
+      # What binds the approved commit to the bytes (#128): dev's log only says which
+      # digest the dev key asked for; this proves ci.yml's publish built that digest from
+      # the approved commit. Runs gh from the runner image, no repository code. The same
+      # `run` block as deploy-dev's (test_ci_workflow.py keeps them identical).
+      - name: Verify the image's build provenance (publish on main, this commit)
+        id: provenance
+        if: steps.config.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ $TAG =~ ^[0-9a-f]{40}$ && $DIGEST =~ ^sha256:[0-9a-f]{64}$ ]] ||
+            { echo "::error::bad tag or digest: '$TAG' '$DIGEST'"; exit 1; }
+          # Only an attestation of exactly these bytes, from this repository's attestation
+          # store, signed by ci.yml (its publish job) on a GitHub-hosted runner, for a push
+          # to main, at the commit being deployed. gh prints why it refused.
+          if ! built_by=$(gh attestation verify "oci://ghcr.io/ybenzine/ineedtofocus@$DIGEST" \
+            --repo ybenzine/ineedtofocus \
+            --signer-workflow ybenzine/ineedtofocus/.github/workflows/ci.yml \
+            --signer-digest "$TAG" \
+            --source-ref refs/heads/main \
+            --source-digest "$TAG" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --deny-self-hosted-runners \
+            --format json \
+            --jq '.[0].verificationResult.signature.certificate.runInvocationURI'); then
+            echo "::error title=Build provenance not verified::ghcr.io/ybenzine/ineedtofocus@$DIGEST has no valid attestation that .github/workflows/ci.yml built it on refs/heads/main from $TAG (gh's reason is above). Nothing was deployed."
+            exit 1
+          fi
+          [[ $built_by =~ ^https://github\.com/ybenzine/ineedtofocus/actions/runs/[0-9]+(/attempts/[0-9]+)?$ ]] || built_by=""
+          echo "Verified: ghcr.io/ybenzine/ineedtofocus@$DIGEST was built from $TAG by ${built_by:-a ci.yml run on main}"
+          echo "built_by=$built_by" >> "$GITHUB_OUTPUT"
       - name: Deploy over SSH (promotion check, pull by digest, migrate, start, check, record)
         id: deploy
         if: steps.config.outputs.configured == 'true'
-        # #30: the automatic revert to the record's previous release, when a check fails,
-        # goes in focus-ci's deploy; this step stays the same.
+        # A failed check after the start reverts to the release prod ran before (#30),
+        # inside focus-ci's deploy and under its lock; the step still fails.
         run: ssh -F "$SSH_CONFIG" focus-prod "deploy $TAG $DIGEST"
       - name: Read the server's release record
         id: record
@@ -269,6 +315,8 @@ jobs:
           DEPLOYED_AT: ${{ steps.record.outputs.deployed_at }}
           INFRA_REVISION: ${{ steps.record.outputs.infra_revision }}
           PREVIOUS_TAG: ${{ steps.record.outputs.previous_tag }}
+          PROVENANCE_OUTCOME: ${{ steps.provenance.outcome }}
+          BUILT_BY: ${{ steps.provenance.outputs.built_by }}
           DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
         run: |
@@ -280,11 +328,20 @@ jobs:
             echo "| URL | $PROD_URL |"
             echo "| Tag (commit) | \`$TAG\` |"
             echo "| Image | \`ghcr.io/ybenzine/ineedtofocus@${DIGEST:-not resolved}\` |"
+            echo "| Build provenance | ${PROVENANCE_OUTCOME/success/verified}${BUILT_BY:+, built by $BUILT_BY} |"
             echo "| Dev ran it since (server, UTC) | ${DEV_TIME:-unknown} |"
             echo "| Deployed at (server, UTC) | ${DEPLOYED_AT:-not recorded} |"
             echo "| Previous tag (rollback target) | \`${PREVIOUS_TAG:-none}\` |"
             echo "| Infra revision on the server | \`${INFRA_REVISION:-unknown}\` |"
             echo ""
+            if [[ $PROVENANCE_OUTCOME == failure ]]; then
+              echo "Not deployed: the image has no valid build provenance attestation from publish on main for this commit (#128), so nothing was sent to the server. See the verify step's log."
+              echo ""
+            fi
+            if [[ $DEPLOY_OUTCOME == failure ]]; then
+              echo "The deploy failed and the record is unchanged. If the new release failed its checks after starting, the server started the previous release again (automatic revert, #30): see the deploy step's log."
+              echo ""
+            fi
             cat "$RUNNER_TEMP/smoke.md" 2> /dev/null || true
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Remove the deploy key

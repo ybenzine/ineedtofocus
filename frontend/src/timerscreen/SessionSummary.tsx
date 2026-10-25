@@ -1,5 +1,6 @@
 // End-of-session summary (F9): what was saved, with a link to the history (F10, built in #20).
 
+import { useEffect, useRef } from 'react'
 import type { FinishOutcome } from '../timer/index.ts'
 import { formatDuration } from './format.ts'
 
@@ -22,11 +23,15 @@ export default function SessionSummary({
   onNewSession,
   onViewHistory,
 }: SessionSummaryProps) {
+  const headingRef = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    headingRef.current?.focus()
+  }, [])
   return (
     <section className="summary" aria-labelledby="summary-title">
       {outcome.kind === 'saved' ? (
         <>
-          <h1 id="summary-title">
+          <h1 id="summary-title" tabIndex={-1} ref={headingRef}>
             {outcome.record.status === 'completed' ? 'Session complete' : 'Session ended early'}
           </h1>
           <dl className="summary-details">
@@ -63,7 +68,9 @@ export default function SessionSummary({
         </>
       ) : (
         <>
-          <h1 id="summary-title">Session not saved</h1>
+          <h1 id="summary-title" tabIndex={-1} ref={headingRef}>
+            Session not saved
+          </h1>
           <p>{outcome.message}</p>
         </>
       )}

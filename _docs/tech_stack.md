@@ -24,7 +24,7 @@ Production: https://ineedtofoc.us · Dev: https://dev.ineedtofoc.us
 ## 2. Environments and hosting
 
 - **Server:** one DigitalOcean Droplet, Basic 2 GiB / 1 vCPU ($12/month, optional weekly backups +$2.40), Ubuntu 24.04 LTS, NYC region.
-- **Layout on the Droplet:** two Docker Compose projects, `focus-prod` and `focus-dev`, each with its own app container and its own Postgres container and volume. One shared Caddy container terminates HTTPS (automatic Let's Encrypt certificates) and routes by host name. An OpenTelemetry Collector container in each project (one for prod, one for dev) forwards telemetry to Grafana Cloud; #32 may consolidate them into one. Every container has a memory limit so dev cannot starve prod.
+- **Layout on the Droplet:** two Docker Compose projects, `focus-prod` and `focus-dev`, each with its own app container and its own Postgres container and volume. One shared Caddy container terminates HTTPS (automatic Let's Encrypt certificates) and routes by host name. An OpenTelemetry Collector container in each project (one for prod, one for dev) forwards telemetry to Grafana Cloud; #32 kept one per environment ([observability.md](observability.md#one-collector-per-environment)). Every container has a memory limit so dev cannot starve prod.
 - **Security:** DigitalOcean Cloud Firewall allows only 22 (SSH, key-only), 80 and 443. Secrets live in per-environment `.env` files on the server and in GitHub environment secrets, never in the repo.
 - **Domain:** `ineedtofoc.us` registered at Gandi, DNS hosted on AWS Route 53.
 
@@ -39,8 +39,8 @@ Prerequisite: the domain's nameservers at Gandi must be the four Route 53 namese
 ## 3. CI/CD and rollback
 
 - **CI (every pull request and push):** lint, type-check, backend unit + integration tests, frontend tests, Playwright end-to-end tests against the Compose stack.
-- **CD to dev (automatic):** on merge to `main`, build one image tagged with the commit SHA, push to GHCR, deploy to `focus-dev`, run smoke tests against `https://dev.ineedtofoc.us`.
-- **Deploy to prod (manual):** a `workflow_dispatch` workflow takes an image tag (default: the tag currently on dev) and requires approval through the GitHub `production` environment.
+- **CD to dev (automatic):** on merge to `main`, build one image tagged with the commit SHA, push to GHCR with a build provenance attestation (GitHub artifact attestations, Sigstore), deploy to `focus-dev`, run smoke tests against `https://dev.ineedtofoc.us`.
+- **Deploy to prod (manual):** a `workflow_dispatch` workflow takes an image tag (default: the tag currently on dev) and requires approval through the GitHub `production` environment. It verifies the image's attestation (`gh attestation verify`) before deploying, so the approved commit binds the deployed bytes.
 - **Deploy script (both environments):** records the current tag, pulls the new image, runs migrations, restarts the app, checks `/healthz` (app) and `/readyz` (database). If the checks fail it automatically redeploys the previous tag.
 - **Rollback:** a manual `rollback` workflow redeploys the last known-good tag for an environment. The on-call agent uses the same workflow.
 - **Migrations:** backward-compatible only (add columns/tables first, remove later), so rolling back the app never requires a database downgrade.
@@ -51,9 +51,9 @@ Prerequisite: the domain's nameservers at Gandi must be the four Route 53 namese
 - **Signals:** traces for every request (FastAPI + SQLAlchemy instrumentation); metrics for session saves (count by outcome, latency) and history loads (count by outcome, latency); JSON logs with `trace_id` and `span_id` on every line so logs, traces and metrics link up in Grafana.
 - **No customer data in telemetry:** emails, passwords, cookies, session goals and YouTube links are never sent to telemetry. Users are referenced only by an opaque internal ID. Enforced by an attribute allowlist and covered by a test.
 - **Where to look:** locally in Grafana from `grafana/otel-lgtm`; deployed in Grafana Cloud (dashboards for the key journey per environment).
-- **Alert on user impact:** fires when the session-save error rate exceeds 5% over 5 minutes (with a minimum number of requests), or when history loads' p95 latency exceeds 2 s. Not on CPU or memory.
+- **Alert on user impact:** fires when the session-save error rate exceeds 5% over 5 minutes (with a minimum number of requests), or when history loads' p95 latency exceeds 2 s over 5 minutes (with at least 5 loads; fewer counts as no data). Not on CPU or memory. The one exception is a DigitalOcean disk-usage alert (above 80% for 10 minutes) that emails Yacine and is not routed to on-call (#202).
 - **Alert trigger for the demo:** a fault-injection setting, off by default and only changeable by the operator, makes a percentage of session saves fail; a small traffic script generates realistic load so the alert fires.
-- **Alert routing:** Grafana alert → webhook → GitHub `repository_dispatch` (through a small relay if Grafana's payload can't call GitHub directly) → on-call agent workflow.
+- **Alert routing:** Grafana alert → webhook → GitHub `repository_dispatch` → on-call agent workflow. There's no relay: Grafana's webhook contact point calls GitHub's API directly, with a custom payload template and a fine-grained token that only Grafana Cloud holds (#34, [observability.md](observability.md#alert-routing-34)).
 
 ## 5. Agent team and on-call responder
 

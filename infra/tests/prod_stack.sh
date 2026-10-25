@@ -5,8 +5,15 @@
 # It starts the real infra/compose.edge.yml and infra/compose.prod.yml, as prod and as
 # dev, under test project names, and checks:
 #
+#   - focus-ci's schema step (#165) works in the image: infra/app/migration_info.py,
+#     fed to a one-shot app container with no database, prints the image's alembic head
+#     and its contract revisions;
 #   - migrations run as a one-shot step (`run --rm app alembic upgrade head`), then
 #     the app starts with MIGRATE_ON_START=0 and turns healthy;
+#   - host resources (#117): the app, Postgres and the collector run with a pids limit,
+#     no capability and no-new-privileges; the app and the collector on a read-only
+#     root filesystem, the app writing temporary files to a small /tmp tmpfs; Postgres
+#     as its own user;
 #   - Caddy serves https://ineedtofoc.us and https://dev.ineedtofoc.us (certificates
 #     from Caddy's internal CA here, Let's Encrypt on the server) and redirects http;
 #   - each host reaches its own environment: with the dev app stopped, dev answers 502
@@ -43,6 +50,8 @@ export SMOKE_HTTPS_PORT=${SMOKE_HTTPS_PORT:-18443}
 export SMOKE_DIR=$here
 image_repo=ghcr.io/ybenzine/ineedtofocus
 spoofed=203.0.113.7
+# shellcheck source=/dev/null # exit_guard.sh: exit_guard, harness_done (#183)
+. "$here/exit_guard.sh"
 
 if [[ $prefix == focus ]]; then
   echo "refusing: FOCUS_TEST_PREFIX=focus would use the real projects focus-prod/focus-dev" >&2
@@ -86,6 +95,7 @@ dev() { # compose.sh's invocation plus the fake Grafana Cloud override
 
 cleanup() {
   local status=$?
+  exit_guard "$status" || status=$?
   set +e
   if [[ -n ${SMOKE_LOG_DIR:-} ]]; then
     mkdir -p "$SMOKE_LOG_DIR"
@@ -134,6 +144,16 @@ export SMOKE_CADDY_JSON=$work/caddy.json
 echo "Starting $edge_project, $prefix-prod and $prefix-dev with $image_repo:$APP_TAG ..."
 edge up -d --wait --quiet-pull
 ok "edge: Caddy is up"
+# focus-ci's schema step (#165), as it runs it: migration_info.py on stdin to a one-shot
+# app container, with the app's limits and no database (nothing else is started yet).
+prod run --rm -T --pull never --no-deps app python - < "$infra/app/migration_info.py" \
+  > "$work/schema" 2> "$work/schema.err" || fail "schema step: $(cat "$work/schema.err")"
+alembic_head=$(prod run --rm -T --pull never --no-deps app alembic heads 2> /dev/null | awk 'NR == 1 { print $1 }')
+[[ -n $alembic_head && $(sed -n 1p "$work/schema") == "schema=$alembic_head" ]] ||
+  fail "schema step printed $(head -c 300 "$work/schema"), expected schema=$alembic_head first"
+[[ $(sed -n 2p "$work/schema") =~ ^contracts=(-|[A-Za-z0-9_]+(,[A-Za-z0-9_]+)*)$ && $(wc -l < "$work/schema") -eq 2 ]] ||
+  fail "schema step printed $(head -c 300 "$work/schema"), expected a contracts= line second and last"
+ok "schema step: the image's migrations lead to alembic head $alembic_head ($(sed -n 2p "$work/schema"))"
 prod run --rm --quiet-pull app alembic upgrade head > "$work/migrate.log" 2>&1 ||
   fail "prod migration: $(cat "$work/migrate.log")"
 ok "prod: migrations ran as a one-shot step"
@@ -150,6 +170,33 @@ prod logs app > "$work/app.log" 2>&1
 grep -q 'MIGRATE_ON_START=0, skipping migrations' "$work/app.log" ||
   fail "prod app didn't start with MIGRATE_ON_START=0"
 ok "app starts without migrating (MIGRATE_ON_START=0)"
+
+# Host resources (#117): the running containers really have the limits, the app works
+# on its read-only root filesystem, and its /tmp is writable but bounded.
+for service in app db otel-collector; do
+  id=$(prod ps -q "$service")
+  [[ -n $id ]] || fail "prod $service isn't running"
+  read -r ro pids caps nnp <<< "$(docker inspect --format \
+    '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.PidsLimit}} {{join .HostConfig.CapDrop ","}} {{join .HostConfig.SecurityOpt ","}}' "$id")"
+  want_readonly=true
+  [[ $service != db ]] || want_readonly=false
+  [[ $ro == "$want_readonly" ]] || fail "prod $service: read-only root filesystem is $ro, expected $want_readonly"
+  [[ $pids =~ ^[1-9][0-9]*$ ]] || fail "prod $service: no pids limit ($pids)"
+  [[ $caps == ALL || $caps == all ]] || fail "prod $service: drops capabilities $caps, expected ALL"
+  [[ $nnp == no-new-privileges* ]] || fail "prod $service: security options $nnp, expected no-new-privileges"
+done
+ok "prod's app, db and collector run with a pids limit, no capability and no-new-privileges"
+if prod exec -T app sh -c 'echo x > /app/written-by-smoke-test' 2> /dev/null; then
+  fail "prod app could write to its root filesystem"
+fi
+prod exec -T app python -c 'import tempfile; tempfile.TemporaryFile().write(b"x")' ||
+  fail "prod app can't write a temporary file to /tmp"
+prod exec -T app sh -c 'df -k /tmp | tail -n 1' > "$work/tmp.df"
+read -r _ tmp_kib _ < "$work/tmp.df"
+((tmp_kib <= 32768)) || fail "prod app's /tmp is ${tmp_kib} KiB, expected a small tmpfs"
+ok "prod app: read-only root filesystem, temporary files in a ${tmp_kib} KiB /tmp tmpfs"
+[[ $(prod exec -T db id -un) == postgres ]] || fail "prod db doesn't run as postgres"
+ok "prod db runs as postgres from the start (no capability needed)"
 
 request() { # <host> <path> [curl args...] -> prints the HTTP status, body in $work/body
   local host=$1 path=$2
@@ -290,3 +337,4 @@ grep -q 'Everything is ready' "$work/otelcol.log" ||
 ok "prod collector is up without Grafana Cloud settings (accepts and drops)"
 
 echo "OK    production stack smoke test passed"
+harness_done

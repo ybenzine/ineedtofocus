@@ -1,0 +1,737 @@
+[
+ {
+  "url": "https://youtu.be/dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://youtu.be/dQw4w9WgXcQ",
+  "reason": "short link"
+ },
+ {
+  "url": "https://youtu.be/dQw4w9WgXcQ?t=5",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://youtu.be/dQw4w9WgXcQ?t=5",
+  "reason": "short link with a start time"
+ },
+ {
+  "url": "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
+  "reason": "mobile host"
+ },
+ {
+  "url": "https://music.youtube.com/watch?v=dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://music.youtube.com/watch?v=dQw4w9WgXcQ",
+  "reason": "music host"
+ },
+ {
+  "url": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+  "reason": "nocookie embed"
+ },
+ {
+  "url": "https://youtube-nocookie.com/v/dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://youtube-nocookie.com/v/dQw4w9WgXcQ",
+  "reason": "nocookie /v/"
+ },
+ {
+  "url": "  https://www.youtube.com/watch?v=dQw4w9WgXcQ  ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "reason": "surrounding spaces are trimmed"
+ },
+ {
+  "url": "https://www.youtube.com/shorts/dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/shorts/dQw4w9WgXcQ",
+  "reason": "shorts"
+ },
+ {
+  "url": "https://www.youtube.com/live/dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/live/dQw4w9WgXcQ",
+  "reason": "live"
+ },
+ {
+  "url": "https://www.youtube.com/embed/dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/embed/dQw4w9WgXcQ",
+  "reason": "embed"
+ },
+ {
+  "url": "https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+  "reason": "playlist"
+ },
+ {
+  "url": "https://www.youtube.com/embed/videoseries?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/embed/videoseries?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+  "reason": "playlist embed"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+  "reason": "video inside a playlist"
+ },
+ {
+  "url": "http://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "http://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "reason": "plain http"
+ },
+ {
+  "url": "https://www.youtube.com:443/watch?v=dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com:443/watch?v=dQw4w9WgXcQ",
+  "reason": "default https port"
+ },
+ {
+  "url": "http://youtube.com:80/watch?v=dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "http://youtube.com:80/watch?v=dQw4w9WgXcQ",
+  "reason": "default http port"
+ },
+ {
+  "url": "HTTPS://WWW.YOUTUBE.COM/watch?v=dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "HTTPS://WWW.YOUTUBE.COM/watch?v=dQw4w9WgXcQ",
+  "reason": "upper case scheme and host"
+ },
+ {
+  "url": "HtTpS://youtu.be/dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "HtTpS://youtu.be/dQw4w9WgXcQ",
+  "reason": "mixed case scheme"
+ },
+ {
+  "url": "youtu.be/dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": true,
+  "sent": "https://youtu.be/dQw4w9WgXcQ",
+  "reason": "no scheme: the client adds https://"
+ },
+ {
+  "url": "www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "reason": "no scheme, www host"
+ },
+ {
+  "url": "https://www.youtube.com?v=dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com?v=dQw4w9WgXcQ",
+  "reason": "query straight after the host"
+ },
+ {
+  "url": "https://www.youtube.com:0443/watch?v=dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com:0443/watch?v=dQw4w9WgXcQ",
+  "reason": "zero-padded default port"
+ },
+ {
+  "url": "https://www.youtube.com:/watch?v=dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com:/watch?v=dQw4w9WgXcQ",
+  "reason": "empty port"
+ },
+ {
+  "url": "\ufeffhttps://youtu.be/dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": true,
+  "sent": "https://youtu.be/dQw4w9WgXcQ",
+  "reason": "byte order mark in front: only the client trims it"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&next=https://evil",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&next=https://evil",
+  "reason": "a URL in the query is only text"
+ },
+ {
+  "url": "https://www.youtube.com/@channel",
+  "server_ok": true,
+  "client_ok": false,
+  "sent": null,
+  "reason": "channel page: no video or playlist"
+ },
+ {
+  "url": "https://youtu.be/",
+  "server_ok": true,
+  "client_ok": false,
+  "sent": null,
+  "reason": "short host with no id"
+ },
+ {
+  "url": "https://www.youtube.com/results?search_query=rain",
+  "server_ok": true,
+  "client_ok": false,
+  "sent": null,
+  "reason": "search page"
+ },
+ {
+  "url": "http://youtube.com/watch?v=abc",
+  "server_ok": true,
+  "client_ok": false,
+  "sent": null,
+  "reason": "id too short to be a video"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXc",
+  "server_ok": true,
+  "client_ok": false,
+  "sent": null,
+  "reason": "10-character id"
+ },
+ {
+  "url": "https://www.youtube.com/",
+  "server_ok": true,
+  "client_ok": false,
+  "sent": null,
+  "reason": "bare host"
+ },
+ {
+  "url": "https://youtu.be/videoseries",
+  "server_ok": true,
+  "client_ok": false,
+  "sent": null,
+  "reason": "videoseries without a list"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=d<w4w9WgXc<",
+  "server_ok": true,
+  "client_ok": false,
+  "sent": null,
+  "reason": "id with markup"
+ },
+ {
+  "url": "",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "empty"
+ },
+ {
+  "url": "not a url",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "not a link"
+ },
+ {
+  "url": "https://example.com/watch?v=abc",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "other host (example.com)"
+ },
+ {
+  "url": "https://vimeo.com/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "other host (vimeo)"
+ },
+ {
+  "url": "https://youtube.com.evil.example/watch",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "look-alike host"
+ },
+ {
+  "url": "https://evil.example/?u=https://youtube.com/x",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "host in the query"
+ },
+ {
+  "url": "javascript:alert(1)//youtube.com",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "javascript scheme"
+ },
+ {
+  "url": "ftp://youtube.com/x",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "other scheme"
+ },
+ {
+  "url": "https://[bad",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "bad IPv6 host"
+ },
+ {
+  "url": "https://[::1]/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "IP literal host"
+ },
+ {
+  "url": "https://evil.example\\@youtube.com/x",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "backslash before a real host"
+ },
+ {
+  "url": "https://www.youtube.com\\@evil.example/x",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "backslash after the host"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&a=b\\c",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "backslash in the query"
+ },
+ {
+  "url": "https://user:pass@youtube.com/watch?v=abc",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "userinfo with password"
+ },
+ {
+  "url": "https://user@www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "userinfo"
+ },
+ {
+  "url": "https://@youtube.com/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "empty userinfo"
+ },
+ {
+  "url": "https://www.youtube.com:8080/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "other port"
+ },
+ {
+  "url": "https://www.youtube.com:80/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "http port on https"
+ },
+ {
+  "url": "http://www.youtube.com:443/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "https port on http"
+ },
+ {
+  "url": "https://www.youtube.com:443x/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "port with a letter"
+ },
+ {
+  "url": "https://www.youtube.com:443:443/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "two ports"
+ },
+ {
+  "url": "https://:443/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "no host"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ x",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "space inside"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ\tx",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "tab"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ\nx",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "newline"
+ },
+ {
+  "url": "https://www.youtube.com/wat\u0000ch",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "NUL"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u001f&y=1",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "unit separator inside"
+ },
+ {
+  "url": "https://www.youtube.com\t/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "tab after the host"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u00a0&y=1",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "no-break space inside"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u3000&y=1",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "ideographic space inside"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u200b",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "zero-width space"
+ },
+ {
+  "url": "https://youtu.be/dQw4w9WgXcQ/\u00ad",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "soft hyphen"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u180e",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "Mongolian vowel separator"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u2061",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "function application"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u206a",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "inhibit symmetric swapping"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u061c",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "Arabic letter mark"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\ufff9",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "interlinear annotation"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\ue000",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "private use"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\udb40\udc01",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "language tag"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u0378",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "unassigned in every Unicode version"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\udbff\udfff",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "noncharacter"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u1680&y=1",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "Ogham space mark inside"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u0085&y=1",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "next line inside"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u2028&y=1",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "line separator inside"
+ },
+ {
+  "url": "https://www.youtu\u212aube.com/watch",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "Kelvin sign in the host"
+ },
+ {
+  "url": "https://www.youtube-nocoo\u212aie.com/embed/x",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "Kelvin sign in a nocookie host"
+ },
+ {
+  "url": "https://www.youtube.com\u3002evil.example/x",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "ideographic full stop in the host"
+ },
+ {
+  "url": "https://www.y\u00f6utube.com/watch",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "non-ASCII host"
+ },
+ {
+  "url": "https://www.youtube.com\u0130/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "dotted capital I after the host"
+ },
+ {
+  "url": "https://www.youtub%65.com/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "percent-encoded host"
+ },
+ {
+  "url": "https://www.youtube.com%2Fevil/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "encoded slash in the host"
+ },
+ {
+  "url": "https://www.youtube.com%40evil.com/watch?v=dQw4w9WgXcQ",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "encoded @ in the host"
+ },
+ {
+  "url": "https://www.youtube.com/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "2048 path characters: over the limit"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "over the length limit"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "reason": "exactly 2048 characters"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "2049 characters"
+ },
+ {
+  "url": "https://youtu.be/dQw4w9WgXcQ?a=\u00e9",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://youtu.be/dQw4w9WgXcQ?a=%C3%A9",
+  "reason": "accented letter in the query"
+ },
+ {
+  "url": "https://youtu.be/dQw4w9WgXcQ#\u00e9",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://youtu.be/dQw4w9WgXcQ#%C3%A9",
+  "reason": "accented letter in the fragment"
+ },
+ {
+  "url": "https://youtu.be/dQw4w9WgXcQ?\u00e9=1",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://youtu.be/dQw4w9WgXcQ?%C3%A9=1",
+  "reason": "accented letter in a query name"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&a=\ud83d\ude00",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&a=%F0%9F%98%80",
+  "reason": "emoji in the query"
+ },
+ {
+  "url": "https://youtu.be/dQw4w9WgXcQ/\u4e2d",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://youtu.be/dQw4w9WgXcQ/%E4%B8%AD",
+  "reason": "CJK letter in the path"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u2ffc",
+  "server_ok": null,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=%E2%BF%BC",
+  "reason": "newer Unicode: U+2FFC (Unicode 15.1)"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u31ef",
+  "server_ok": null,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=%E3%87%AF",
+  "reason": "newer Unicode: U+31EF (Unicode 15.1)"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\ud833\udc00",
+  "server_ok": null,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=%F0%9C%B0%80",
+  "reason": "newer Unicode: U+1CC00 (Unicode 16)"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u0897",
+  "server_ok": null,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=%E0%A2%97",
+  "reason": "newer Unicode: U+0897 (Unicode 16)"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\ud83e\ude89",
+  "server_ok": null,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=%F0%9F%AA%89",
+  "reason": "newer Unicode: U+1FA89 (Unicode 16)"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\ud82c\udd1f",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=%F0%9B%84%9F",
+  "reason": "newer Unicode: U+1B11F"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\ud86d\udf39",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=%F0%AB%9C%B9",
+  "reason": "newer Unicode: U+2B739 (Unicode 15.0 CJK)"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\ud83e\udcb0",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=%F0%9F%A2%B0",
+  "reason": "newer Unicode: U+1F8B0"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\udb40\udc20",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "newer Unicode: U+E0020 tag space"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\ud80d\udc30",
+  "server_ok": false,
+  "client_ok": false,
+  "sent": null,
+  "reason": "newer Unicode: U+13430 Egyptian format control"
+ },
+ {
+  "url": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=\u061d",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=%D8%9D",
+  "reason": "newer Unicode: U+061D"
+ }
+]

@@ -19,9 +19,18 @@ them. Exits non-zero, listing every broken rule:
     network's ip_range, so Docker never hands it to another container first;
   - the app runs with COOKIE_SECURE=1 and MIGRATE_ON_START=0, and trusts proxy headers only
     from Caddy's fixed address on its own edge network (never `*`);
+  - fault injection (#33) renders off, FAULT_SAVE_ERROR_PERCENT=0, from the committed files
+    alone: only the operator's server .env may turn it on;
   - each environment has its own edge network, Postgres keeps its data in a named volume,
     and only the app joins the edge network;
   - Caddy routes ineedtofoc.us to the prod app and dev.ineedtofoc.us to the dev app;
+  - every image but the app's (Postgres, the collector, Caddy) is pinned by tag and
+    digest, `name:tag@sha256:<64 hex>`, so the deploys pull exactly those bytes (#170);
+  - host resources (#117): every service of prod and dev has a positive pids_limit,
+    drops every capability (cap_drop ALL, no cap_add, not privileged) and runs with
+    no-new-privileges; the app and the collector have a read-only root filesystem, every
+    tmpfs of theirs has a size and every other volume of theirs is read-only, so a
+    container can't fill the shared disk;
   - with --tag, the app image is ghcr.io/ybenzine/ineedtofocus:<tag>.
 
 Stdlib only.
@@ -32,6 +41,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -44,6 +54,16 @@ MEMORY_BUDGET_MIB = 1600
 EXPECTED_PROJECTS = {"edge": "focus-edge", "prod": "focus-prod", "dev": "focus-dev"}
 HOSTS = {"prod": "ineedtofoc.us", "dev": "dev.ineedtofoc.us"}
 PG_DATA = "/var/lib/postgresql/data"
+# name:tag@sha256:<digest>. The same pattern is in infra/server/focus-ci.sh and
+# infra/server/install.sh, which refuse to pull an image that doesn't match it.
+PINNED_IMAGE = re.compile(
+    r"^[a-z0-9]+([._/-][a-z0-9]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}$"
+)
+# Services of prod and dev whose root filesystem must be read-only (#117). Postgres isn't:
+# outside its data volume it writes only its socket and lock file, and its data, the one
+# thing that grows, is the volume anyway (_docs/deployment.md, Host resources).
+READ_ONLY_SERVICES = ("app", "otel-collector")
+NO_NEW_PRIVILEGES = {"no-new-privileges", "no-new-privileges:true", "no-new-privileges=true"}
 
 Config = dict[str, Any]
 
@@ -144,6 +164,37 @@ def caddy_routes(caddy: Config) -> dict[str, list[str]]:
     return routes
 
 
+def hardening_errors(where: str, name: str, service: Config) -> list[str]:
+    """Process, privilege and disk limits of one service of prod or dev (#117)."""
+    errors: list[str] = []
+    pids = service.get("pids_limit")
+    if not isinstance(pids, int) or isinstance(pids, bool) or pids <= 0:
+        errors.append(f"{where}: needs a positive pids_limit, got {pids!r}")
+    if "ALL" not in [str(cap).upper() for cap in service.get("cap_drop") or []]:
+        errors.append(f"{where}: must drop every capability (cap_drop: [ALL])")
+    if service.get("cap_add"):
+        errors.append(f"{where}: adds capabilities {service['cap_add']}; none may be added back")
+    if service.get("privileged"):
+        errors.append(f"{where}: must not be privileged")
+    if not NO_NEW_PRIVILEGES & set(service.get("security_opt") or []):
+        errors.append(f"{where}: needs security_opt no-new-privileges:true")
+    if name in READ_ONLY_SERVICES:
+        if service.get("read_only") is not True:
+            errors.append(f"{where}: root filesystem must be read-only (read_only: true)")
+        for mount in service.get("tmpfs") or []:
+            if "size=" not in str(mount):
+                errors.append(f"{where}: tmpfs {mount!r} needs a size (e.g. /tmp:size=16m)")
+        # A writable volume or bind mount would undo the bound on the root filesystem.
+        for volume in service.get("volumes") or []:
+            target = volume.get("target")
+            if volume.get("type") == "tmpfs":
+                if not (volume.get("tmpfs") or {}).get("size"):
+                    errors.append(f"{where}: tmpfs volume at {target} needs a size")
+            elif volume.get("read_only") is not True:
+                errors.append(f"{where}: volume at {target} must be read-only (:ro)")
+    return errors
+
+
 def check(
     edge: Config, prod: Config, dev: Config, caddy: Config, tag: str | None = None
 ) -> list[str]:
@@ -165,6 +216,16 @@ def check(
         ports = service.get("ports") or []
         if env != "edge" and ports:
             errors.append(f"{env}/{name}: publishes ports {ports}; only Caddy may")
+        image = service.get("image")
+        is_app = env != "edge" and name == "app"
+        if not is_app and not (isinstance(image, str) and PINNED_IMAGE.fullmatch(image)):
+            errors.append(
+                f"{env}/{name}: image {image!r} isn't pinned by tag and digest"
+                " (name:tag@sha256:<64 hex>)"
+            )
+
+    for env, name, service in all_services(envs):
+        errors.extend(hardening_errors(f"{env}/{name}", name, service))
 
     migration = max(mib(services(c).get("app") or {}) for c in envs.values())
     if total + migration > MEMORY_BUDGET_MIB:
@@ -207,6 +268,11 @@ def check(
             errors.append(f"{env}/app: COOKIE_SECURE must be 1")
         if environment.get("MIGRATE_ON_START") != "0":
             errors.append(f"{env}/app: MIGRATE_ON_START must be 0 (deploys migrate separately)")
+        if environment.get("FAULT_SAVE_ERROR_PERCENT") != "0":
+            errors.append(
+                f"{env}/app: FAULT_SAVE_ERROR_PERCENT must default to 0 (off); only the"
+                " operator's server .env may turn fault injection on (#33)"
+            )
         if tag is not None and app.get("image") != f"{IMAGE_REPO}:{tag}":
             errors.append(f"{env}/app: image is {app.get('image')!r}, expected {IMAGE_REPO}:{tag}")
 

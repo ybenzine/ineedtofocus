@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # Sign-ups allowed per client within the window (each runs a full argon2 hash).
     signup_max_per_client: int = Field(default=10, ge=1)
     signup_window_seconds: float = Field(default=3600.0, gt=0)
+    # Operator-only fault injection, the alert trigger (#33): the share of session save and
+    # sync requests, 0 to 100, that fail on purpose with a 500. Read from the environment
+    # at startup; no endpoint can read or change it. 0 (off) unless the operator sets it.
+    fault_save_error_percent: float = Field(default=0.0, ge=0, le=100)
 
 
 @lru_cache

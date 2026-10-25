@@ -1,0 +1,854 @@
+# On-call (#34, #35). Woken by Grafana: an alert's contact point posts to GitHub's dispatch
+# API for this repo, which starts this workflow with a `repository_dispatch` event of type
+# `grafana-alert` (_docs/observability.md, Alert routing). Firing and resolved alerts, and
+# a still-firing alert's 4-hourly repeat, each arrive as a new run.
+#
+# The rule: **no Claude session holds a token that can write.** The sessions (on-call,
+# reviewer, follow-up) get a read-only workflow token and leave files: a decision, a
+# comment, a git bundle, a review. Deterministic steps, on a fresh runner and a fresh
+# checkout, check those files with scripts/oncall.py and do every write.
+#
+#   alert        #34's payload check. No secrets.
+#   incident     Finds the incident issue or opens it, locks it; the daily run cap.
+#   respond      The on-call agent (Claude Code, .claude/agents/oncall.md). Read-only.
+#   act          Checks the decision; posts the comment; labels; for a fix, pushes the
+#                branch and opens the PR as the on-call App (ONCALL_APP_KEY), or posts it
+#                as a patch with ⛔ Needs Yacine: without the key; for a resolved alert,
+#                closes the incident.
+#   rollback     Starts rollback.yml once for the alert's environment, waits. The only job
+#                with `actions: write`. No checkout, no secret.
+#   review       The reviewer agent (Claude Code, .claude/agents/reviewer.md). Read-only,
+#                no App key. Writes the review body and verdict.
+#   post-review  Posts that review through the reviewer App (scripts/reviewer-review.sh,
+#                REVIEWER_APP_KEY); a comment review when the key is missing.
+#   merge        On reviewDecision APPROVED and green required checks, squash-merges as the
+#                on-call App (dev deploy); posts the prod ask. Otherwise ⛔ Needs Yacine:.
+#   wait         Waits for the alert to resolve (Grafana, read-only), after a rollback or a
+#                merged fix to a dev alert.
+#   follow-up    The on-call agent again, given only the steps' checked results. Read-only.
+#   report       Posts the follow-up's report, or ⛔ Needs Yacine: if it didn't finish.
+#
+# Guardrails (_docs/deployment.md, On-call workflow):
+# - The payload is untrusted. Scripts read it from $GITHUB_EVENT_PATH, never through `${{ }}`
+#   in a `run:` script.
+# - Secrets come only from the `oncall` environment (main only, no reviewer), each to the
+#   steps that need it: the Claude key and Grafana token to the sessions, REVIEWER_APP_KEY
+#   to post-review, ONCALL_APP_KEY to the push, PR and merge steps.
+# - Nothing here can approve a deployment or start deploy-prod. The on-call App has no
+#   Actions or Workflows permission; only the rollback job can start a workflow.
+# - Cost: turn, dollar and step-time caps on every session; at most 4 runs per alert and
+#   environment in 24 hours.
+#
+# One run per alert and environment at a time, never cancelled: a resolved event waits for
+# its firing run. GitHub keeps one waiting run per group, so a newer dispatch replaces one
+# that's still waiting.
+
+name: oncall
+run-name: "Alert: ${{ github.event.client_payload.alert }} ${{ github.event.client_payload.status }} in ${{ github.event.client_payload.environment }}"
+
+on:
+  repository_dispatch:
+    types: [grafana-alert]
+
+permissions: {}
+
+concurrency:
+  group: oncall-${{ github.event.client_payload.alert }}-${{ github.event.client_payload.environment }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CLAUDE_CODE_VERSION: "2.1.310"
+  UV_VERSION: "0.11.4" # same as ci.yml
+  NODE_VERSION: "24" # same as ci.yml
+  ONCALL_OUT: /tmp/oncall
+  # The on-call GitHub App (`ineedtofocus-oncall`, #35; infra/github/README.md). Its IDs
+  # are public, like the reviewer App's. Its key is the `oncall` secret ONCALL_APP_KEY.
+  # Without the key, the fix path falls back to a patch on the incident issue.
+  ONCALL_APP_ID: "5470564"
+  ONCALL_INSTALLATION_ID: "175230402"
+
+jobs:
+  alert:
+    name: Check the alert
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check and log the payload
+        run: python3 scripts/alert_dispatch.py check-event "$GITHUB_EVENT_PATH"
+
+  incident:
+    name: Incident issue
+    needs: alert
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      actions: read
+    outputs:
+      alert: ${{ steps.plan.outputs.alert }}
+      environment: ${{ steps.plan.outputs.environment }}
+      status: ${{ steps.plan.outputs.status }}
+      title: ${{ steps.plan.outputs.title }}
+      incident: ${{ steps.open.outputs.incident || steps.plan.outputs.incident }}
+      rolled_back: ${{ steps.plan.outputs.rolled_back }}
+      open_pr: ${{ steps.plan.outputs.open_pr }}
+      run_agent: ${{ steps.plan.outputs.run_agent }}
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Find the incident and count today's runs
+        id: plan
+        run: |
+          gh issue list --state all --label type:incident --limit 100 \
+            --json number,title,state,labels,closedAt > "$RUNNER_TEMP/issues.json"
+          gh pr list --state open --limit 100 \
+            --json number,state,headRefName,isCrossRepository > "$RUNNER_TEMP/prs.json"
+          gh run list --workflow oncall.yml --event repository_dispatch --limit 100 \
+            --json databaseId,displayTitle,createdAt > "$RUNNER_TEMP/runs.json"
+          python3 scripts/oncall.py incident "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/issues.json" \
+            "$RUNNER_TEMP/prs.json" "$RUNNER_TEMP/runs.json" "$GITHUB_RUN_ID" "$RUNNER_TEMP"
+      - name: Open the incident issue
+        id: open
+        if: steps.plan.outputs.create == 'true'
+        env:
+          TITLE: ${{ steps.plan.outputs.title }}
+        run: |
+          url=$(gh issue create --title "$TITLE" --body-file "$RUNNER_TEMP/incident-body.md" \
+            --label type:incident --label agent:oncall)
+          number=${url##*/}
+          [[ $number =~ ^[1-9][0-9]*$ ]] || { echo "::error::no issue number in $url"; exit 1; }
+          echo "incident=$number" >> "$GITHUB_OUTPUT"
+      - name: Lock the incident issue
+        # New or reused: outsiders can't comment where the agents read. No lock reason:
+        # none of GitHub's (off-topic, too heated, resolved, spam) fits.
+        env:
+          INCIDENT: ${{ steps.open.outputs.incident || steps.plan.outputs.incident }}
+        run: |
+          [[ $INCIDENT =~ ^[1-9][0-9]*$ ]] || exit 0
+          if [[ $(gh api "repos/$GH_REPO/issues/$INCIDENT" --jq .locked) != true ]]; then
+            gh issue lock "$INCIDENT"
+          fi
+      - name: Post the daily cap
+        if: steps.plan.outputs.cap_notice == 'true'
+        env:
+          INCIDENT: ${{ steps.open.outputs.incident || steps.plan.outputs.incident }}
+        run: |
+          [[ $INCIDENT =~ ^[1-9][0-9]*$ ]] || { echo "::warning::daily cap reached, no incident to post on"; exit 0; }
+          gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/cap-body.md"
+          gh issue edit "$INCIDENT" --add-label needs-yacine
+      - name: Ask for help if a step failed
+        if: failure()
+        env:
+          INCIDENT: ${{ steps.open.outputs.incident || steps.plan.outputs.incident }}
+          ALERT: ${{ steps.plan.outputs.alert }}
+          STATUS: ${{ steps.plan.outputs.status }}
+          ALERT_ENV: ${{ steps.plan.outputs.environment }}
+          TITLE: ${{ steps.plan.outputs.title }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [[ $INCIDENT =~ ^[1-9][0-9]*$ ]] || exit 1
+          python3 scripts/oncall.py stalled-body "$ALERT" "$STATUS" "$ALERT_ENV" "$TITLE" "$RUN_URL" \
+            "a step of the incident job failed (see the run's log)" > "$RUNNER_TEMP/failed.md"
+          gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/failed.md"
+          gh issue edit "$INCIDENT" --add-label needs-yacine
+
+  respond:
+    name: On-call agent
+    needs: incident
+    if: needs.incident.outputs.run_agent == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    environment:
+      name: oncall
+      deployment: false
+    # Read-only: the session can read issues, PRs, runs and checks, and write nothing.
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+      checks: read
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # history, for "did a deploy cause it?" and the fix branch
+      - name: Write the prompt
+        env:
+          INCIDENT: ${{ needs.incident.outputs.incident }}
+          ROLLED_BACK: ${{ needs.incident.outputs.rolled_back }}
+          OPEN_PR: ${{ needs.incident.outputs.open_pr }}
+        run: |
+          python3 scripts/oncall.py prompt "$GITHUB_EVENT_PATH" "$ONCALL_OUT" --incident "$INCIDENT" \
+            --rolled-back "$ROLLED_BACK" --open-pr "$OPEN_PR"
+          git config user.name "ineedtofocus-oncall[bot]"
+          git config user.email "ineedtofocus-oncall[bot]@users.noreply.github.com"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          # No cache: it would carry what a session wrote to the jobs that hold the App keys.
+          enable-cache: false
+          restore-cache: false
+          save-cache: false
+      - name: Install Claude Code
+        run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      - name: Run the on-call agent
+        # A step timeout fails the step (a job timeout would cancel it): act still runs,
+        # finds no decision and posts the ⛔ Needs Yacine:.
+        timeout-minutes: 35
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GRAFANA_READONLY_TOKEN: ${{ secrets.GRAFANA_READONLY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/oncall-claude.sh oncall 60 10 "$ONCALL_OUT/prompt.md" "$RUNNER_TEMP/agent.json"
+      - name: Pack the agent's fix branch
+        if: ${{ !cancelled() }}
+        run: |
+          branches=$(git for-each-ref --format='%(refname)' refs/heads/oncall/)
+          if [[ -n $branches ]]; then
+            # shellcheck disable=SC2086 # one ref name per word; ref names hold no spaces
+            git bundle create "$ONCALL_OUT/fix.bundle" $branches ^origin/main || true
+          fi
+      - name: Hand the files to the next job
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: respond
+          # Only what the act job reads: artifacts on a public repo are downloadable.
+          path: |
+            /tmp/oncall/decision.json
+            /tmp/oncall/comment.md
+            /tmp/oncall/pr.md
+            /tmp/oncall/fix.bundle
+          retention-days: 7
+          if-no-files-found: ignore
+
+  act:
+    name: Act on the decision
+    needs: [incident, respond]
+    if: ${{ always() && needs.incident.outputs.run_agent == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: oncall
+      deployment: false
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      action: ${{ steps.decision.outputs.action }}
+      rollback_tag: ${{ steps.decision.outputs.rollback_tag }}
+      pr: ${{ steps.fix.outputs.pr }}
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      INCIDENT: ${{ needs.incident.outputs.incident }}
+      ALERT: ${{ needs.incident.outputs.alert }}
+      ALERT_ENV: ${{ needs.incident.outputs.environment }}
+      STATUS: ${{ needs.incident.outputs.status }}
+      TITLE: ${{ needs.incident.outputs.title }}
+      ROLLED_BACK: ${{ needs.incident.outputs.rolled_back }}
+      OPEN_PR: ${{ needs.incident.outputs.open_pr }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Take the agent's files
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: respond
+          path: ${{ runner.temp }}/respond
+      - name: Check the decision
+        id: decision
+        run: |
+          python3 scripts/oncall.py decision "$RUNNER_TEMP/respond" --status "$STATUS" \
+            --environment "$ALERT_ENV" --incident "$INCIDENT" --rolled-back "$ROLLED_BACK" \
+            --open-pr "$OPEN_PR"
+      - name: Post the update and label the incident
+        env:
+          ACTION: ${{ steps.decision.outputs.action }}
+          REASON: ${{ steps.decision.outputs.reason }}
+        run: |
+          if [[ $ACTION == stalled ]]; then
+            python3 scripts/oncall.py stalled-body "$ALERT" "$STATUS" "$ALERT_ENV" "$TITLE" "$RUN_URL" \
+              "$REASON" > "$RUNNER_TEMP/stalled.md"
+            gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/stalled.md"
+          else
+            gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/respond/comment.md"
+          fi
+          case $ACTION in
+            stalled | escalate) gh issue edit "$INCIDENT" --add-label needs-yacine ;;
+            rollback)
+              # One rollback per incident: decision refuses another once this label is on.
+              gh label create "oncall:rolled-back" --color B60205 \
+                --description "The on-call workflow rolled this incident's environment back (#35)" 2> /dev/null || true
+              gh issue edit "$INCIDENT" --add-label "oncall:rolled-back"
+              ;;
+          esac
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        if: steps.decision.outputs.action == 'fix'
+        with:
+          version: ${{ env.UV_VERSION }}
+          # No cache: it would carry what a session wrote to the jobs that hold the App keys.
+          enable-cache: false
+          restore-cache: false
+          save-cache: false
+      - name: Push the fix and open the PR, or post the patch
+        id: fix
+        if: steps.decision.outputs.action == 'fix'
+        env:
+          BRANCH: ${{ steps.decision.outputs.branch }}
+          ONCALL_APP_KEY: ${{ secrets.ONCALL_APP_KEY }}
+        run: |
+          git fetch --quiet "$RUNNER_TEMP/respond/fix.bundle" "refs/heads/$BRANCH:refs/heads/$BRANCH"
+          if ! python3 scripts/oncall.py check-fix "$BRANCH" "$INCIDENT" > "$RUNNER_TEMP/check.txt"; then
+            cat "$RUNNER_TEMP/check.txt"
+            python3 scripts/oncall.py stalled-body "$ALERT" "$STATUS" "$ALERT_ENV" "$TITLE" "$RUN_URL" \
+              "the fix branch was refused: $(tr '\n' ' ' < "$RUNNER_TEMP/check.txt")" > "$RUNNER_TEMP/refused.md"
+            gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/refused.md"
+            gh issue edit "$INCIDENT" --add-label needs-yacine
+            exit 0
+          fi
+          if [[ -z $ONCALL_APP_KEY || -z $ONCALL_APP_ID || -z $ONCALL_INSTALLATION_ID ]]; then
+            echo "::notice title=No on-call App::posting the fix as a patch on #$INCIDENT"
+            python3 scripts/oncall.py patch-body "$BRANCH" "$INCIDENT" > "$RUNNER_TEMP/patch.md"
+            gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/patch.md"
+            gh issue edit "$INCIDENT" --add-label needs-yacine
+            exit 0
+          fi
+          dir=$RUNNER_TEMP/oncall-app
+          install -d -m 700 "$dir"
+          (umask 077 && printf '%s\n' "$ONCALL_APP_KEY" > "$dir/key.pem")
+          token=$(REVIEWER_APP_ID=$ONCALL_APP_ID REVIEWER_INSTALLATION_ID=$ONCALL_INSTALLATION_ID \
+            REVIEWER_APP_KEY_PATH=$dir/key.pem uv run --quiet --locked --script scripts/reviewer_token.py)
+          rm -f "$dir/key.pem"
+          echo "::add-mask::$token"
+          auth=$(printf 'x-access-token:%s' "$token" | base64 | tr -d '\n')
+          echo "::add-mask::$auth"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            push --quiet origin "refs/heads/$BRANCH:refs/heads/$BRANCH"
+          body=$RUNNER_TEMP/respond/pr.md
+          [[ -s $body ]] || body=/dev/null
+          python3 scripts/oncall.py pr-body "$body" "$INCIDENT" > "$RUNNER_TEMP/pr-body.md"
+          url=$(GH_TOKEN=$token gh pr create --base main --head "$BRANCH" \
+            --title "fix(oncall): incident #$INCIDENT, $ALERT in $ALERT_ENV" --body-file "$RUNNER_TEMP/pr-body.md")
+          token=""
+          echo "pr=${url##*/}" >> "$GITHUB_OUTPUT"
+      - name: Close a resolved incident
+        if: needs.incident.outputs.status == 'resolved' && steps.decision.outputs.action != 'stalled'
+        run: |
+          gh pr list --state open --limit 100 --json number,state,headRefName,isCrossRepository \
+            > "$RUNNER_TEMP/prs.json"
+          open_pr=$(python3 scripts/oncall.py open-fix-pr "$RUNNER_TEMP/prs.json" "$INCIDENT")
+          if [[ -n $open_pr ]]; then
+            echo "::notice::incident #$INCIDENT stays open: its fix PR #$open_pr is still open"
+          else
+            gh issue close "$INCIDENT" --reason completed
+          fi
+      - name: Ask for help if a step failed
+        # A refused push, a failed token mint or a failed gh call: nothing else says so.
+        if: failure()
+        env:
+          REASON: "a step of the act job failed (see the run's log)"
+        run: |
+          [[ $INCIDENT =~ ^[1-9][0-9]*$ ]] || exit 1
+          python3 scripts/oncall.py stalled-body "$ALERT" "$STATUS" "$ALERT_ENV" "$TITLE" "$RUN_URL" \
+            "$REASON" > "$RUNNER_TEMP/failed.md"
+          gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/failed.md"
+          gh issue edit "$INCIDENT" --add-label needs-yacine
+      - name: Remove the key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/oncall-app"
+
+  rollback:
+    name: Roll back (on-call decision)
+    needs: [incident, act]
+    if: needs.act.outputs.action == 'rollback'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    # One on-call rollback per environment at a time, whichever alert asked for it.
+    concurrency:
+      group: oncall-rollback-${{ needs.incident.outputs.environment }}
+      cancel-in-progress: false
+    # The only job that can start a workflow. It runs no repository code and starts
+    # rollback.yml only, once, for the alert's own environment.
+    permissions:
+      actions: write
+    outputs:
+      result: ${{ steps.recent.outputs.result || steps.watch.outputs.result }}
+      run: ${{ steps.start.outputs.run }}
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      TARGET_ENV: ${{ needs.incident.outputs.environment }}
+      STATUS: ${{ needs.incident.outputs.status }}
+      TAG: ${{ needs.act.outputs.rollback_tag }}
+      RECENT_MINUTES: "30"
+    steps:
+      - name: Check the request
+        # Checked again here, against what the incident job read before any agent ran.
+        run: |
+          die() { echo "::error title=$1::$2"; exit 1; }
+          [[ $STATUS == firing ]] || die "Not firing" "a rollback is only for a firing alert."
+          [[ $TARGET_ENV == dev || $TARGET_ENV == prod ]] || die "Bad env" "env must be dev or prod."
+          [[ -z $TAG || $TAG =~ ^[0-9a-f]{40}$ ]] || die "Bad tag" "tag must be empty or a 40-hex sha."
+      - name: Skip if it was rolled back recently
+        id: recent
+        # Two alerts on one environment (one release can break saves and history) ask for
+        # one rollback, not two.
+        run: |
+          gh run list --workflow rollback.yml --limit 30 \
+            --json databaseId,displayTitle,status,conclusion,createdAt > "$RUNNER_TEMP/runs.json"
+          since=$(python3 -c "import datetime as d, sys; print((d.datetime.now(d.timezone.utc) - d.timedelta(minutes=int(sys.argv[1]))).strftime('%Y-%m-%dT%H:%M:%SZ'))" "$RECENT_MINUTES")
+          recent=$(jq --arg env "$TARGET_ENV" --arg since "$since" '[.[] | select(
+              (.displayTitle | startswith("Roll back " + $env + " ")) and .createdAt >= $since
+              and (.status != "completed" or .conclusion == "success"))] | length' "$RUNNER_TEMP/runs.json")
+          if [[ $recent != 0 ]]; then
+            echo "::notice title=Not rolled back again::$TARGET_ENV had a rollback in the last $RECENT_MINUTES minutes"
+            echo "result=skipped-recent" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Start rollback.yml
+        id: start
+        if: steps.recent.outputs.result != 'skipped-recent'
+        run: |
+          gh run list --workflow rollback.yml --limit 30 --json databaseId > "$RUNNER_TEMP/before.json"
+          args=(-f "env=$TARGET_ENV")
+          [[ -n $TAG ]] && args+=(-f "tag=$TAG")
+          gh workflow run rollback.yml "${args[@]}"
+          # Our run: new since the list above, dispatched, and titled for this request.
+          title="Roll back $TARGET_ENV to ${TAG:-the last known-good release}"
+          id=""
+          for _ in $(seq 1 24); do
+            sleep 5
+            gh run list --workflow rollback.yml --event workflow_dispatch --limit 30 \
+              --json databaseId,displayTitle > "$RUNNER_TEMP/after.json"
+            id=$(jq -r --slurpfile before "$RUNNER_TEMP/before.json" --arg title "$title" \
+              '[.[] | select(.displayTitle == $title and ([.databaseId] | inside([$before[0][].databaseId]) | not))]
+               | last | .databaseId // empty' "$RUNNER_TEMP/after.json")
+            [[ -n $id ]] && break
+          done
+          [[ -n $id ]] || { echo "::error title=Rollback run not found::$title"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "run=https://github.com/$GH_REPO/actions/runs/$id" >> "$GITHUB_OUTPUT"
+      - name: Wait for it
+        id: watch
+        if: steps.recent.outputs.result != 'skipped-recent'
+        env:
+          RUN_ID: ${{ steps.start.outputs.id }}
+        run: |
+          if gh run watch "$RUN_ID" --exit-status --interval 30 > /dev/null; then
+            echo "result=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+            echo "::error title=Rollback failed::see run $RUN_ID"
+            exit 1
+          fi
+
+  review:
+    name: Reviewer agent
+    needs: [incident, act]
+    if: needs.act.outputs.pr != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    environment:
+      name: oncall
+      deployment: false
+    # Read-only, and no App key in this job: the session can't post or approve.
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+      checks: read
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ needs.act.outputs.pr }}
+      INCIDENT: ${{ needs.incident.outputs.incident }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check it's the on-call fix PR
+        run: |
+          gh pr view "$PR" --json number,state,baseRefName,headRefName,isCrossRepository \
+            > "$RUNNER_TEMP/pr.json"
+          python3 scripts/oncall.py check-pr "$RUNNER_TEMP/pr.json" "$INCIDENT"
+          python3 scripts/oncall.py review-prompt "$ONCALL_OUT" "$PR" "$INCIDENT"
+      - name: Wait for CI
+        timeout-minutes: 40
+        # Red checks don't stop the review: the reviewer reports them. CI takes a few
+        # seconds to register its checks on a new PR.
+        run: |
+          for _ in $(seq 1 24); do
+            [[ $(gh pr view "$PR" --json statusCheckRollup --jq '.statusCheckRollup | length') -gt 0 ]] && break
+            sleep 5
+          done
+          gh pr checks "$PR" --watch --required --interval 30 || true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Install Claude Code
+        run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      - name: Run the reviewer agent
+        timeout-minutes: 15
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          scripts/oncall-claude.sh reviewer 40 5 "$ONCALL_OUT/review-prompt.md" "$RUNNER_TEMP/reviewer.json" \
+            'Bash(gh pr checkout *)' 'Bash(git checkout *)' 'Bash(git switch *)' 'Bash(make *)'
+      - name: Hand the review to the next job
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: review
+          path: |
+            /tmp/oncall/review.md
+            /tmp/oncall/review.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+  post-review:
+    name: Post the review (reviewer App)
+    needs: [act, review]
+    if: ${{ always() && needs.act.outputs.pr != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: oncall
+      deployment: false
+    # pull-requests: write only for the fallback comment review. The workflow token can't
+    # approve: the repo doesn't let Actions approve pull requests.
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      verdict: ${{ steps.result.outputs.verdict }}
+      posted: ${{ steps.post.outputs.posted }}
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ needs.act.outputs.pr }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Take the review
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: review
+          path: ${{ runner.temp }}/review
+      - name: Check the review
+        id: result
+        run: python3 scripts/oncall.py review-result "$RUNNER_TEMP/review"
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        if: steps.result.outputs.verdict != ''
+        with:
+          version: ${{ env.UV_VERSION }}
+          # No cache: it would carry what a session wrote to the jobs that hold the App keys.
+          enable-cache: false
+          restore-cache: false
+          save-cache: false
+      - name: Post it through the reviewer App
+        id: post
+        if: steps.result.outputs.verdict != ''
+        env:
+          REVIEWER_APP_KEY: ${{ secrets.REVIEWER_APP_KEY }}
+          VERDICT: ${{ steps.result.outputs.verdict }}
+          BODY: ${{ steps.result.outputs.body }}
+        # reviewer_token.py reads the key from a path. A missing file makes
+        # reviewer-review.sh fall back to a comment review (_docs/process.md §4).
+        run: |
+          dir=$RUNNER_TEMP/reviewer-app
+          install -d -m 700 "$dir"
+          if [[ -n $REVIEWER_APP_KEY ]]; then
+            (umask 077 && printf '%s\n' "$REVIEWER_APP_KEY" > "$dir/key.pem")
+          else
+            echo "::warning title=No reviewer App key::the review falls back to a comment; the merge waits for Yacine."
+          fi
+          REVIEWER_APP_KEY_PATH=$dir/key.pem scripts/reviewer-review.sh "$PR" "$VERDICT" "$BODY" \
+            > "$RUNNER_TEMP/posted.txt" 2>&1 || { cat "$RUNNER_TEMP/posted.txt"; exit 1; }
+          cat "$RUNNER_TEMP/posted.txt"
+          if grep -q '^Fallback:' "$RUNNER_TEMP/posted.txt"; then
+            echo "posted=fallback" >> "$GITHUB_OUTPUT"
+          else
+            echo "posted=app" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Remove the key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/reviewer-app"
+
+  merge:
+    name: Merge the fix (on-call App)
+    needs: [incident, act, post-review]
+    if: ${{ always() && needs.act.outputs.pr != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: oncall
+      deployment: false
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      checks: read
+    outputs:
+      merged: ${{ steps.merge.outputs.merged }}
+      sha: ${{ steps.merge.outputs.sha }}
+      reason: ${{ steps.check.outputs.reason }}
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ needs.act.outputs.pr }}
+      INCIDENT: ${{ needs.incident.outputs.incident }}
+      ALERT_ENV: ${{ needs.incident.outputs.environment }}
+      ALERT: ${{ needs.incident.outputs.alert }}
+      STATUS: ${{ needs.incident.outputs.status }}
+      TITLE: ${{ needs.incident.outputs.title }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      POSTED: ${{ needs.post-review.outputs.posted || 'none' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the merge conditions
+        id: check
+        run: |
+          gh pr view "$PR" --json number,state,headRefName,reviewDecision,statusCheckRollup \
+            > "$RUNNER_TEMP/pr.json"
+          python3 scripts/oncall.py merge-check "$RUNNER_TEMP/pr.json" "$INCIDENT"
+      - uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+        if: steps.check.outputs.ok == 'true'
+        with:
+          version: ${{ env.UV_VERSION }}
+          # No cache: it would carry what a session wrote to the jobs that hold the App keys.
+          enable-cache: false
+          restore-cache: false
+          save-cache: false
+      - name: Squash-merge as the on-call App
+        id: merge
+        if: steps.check.outputs.ok == 'true'
+        env:
+          ONCALL_APP_KEY: ${{ secrets.ONCALL_APP_KEY }}
+        run: |
+          [[ -n $ONCALL_APP_KEY && -n $ONCALL_APP_ID && -n $ONCALL_INSTALLATION_ID ]] ||
+            { echo "merged=false" >> "$GITHUB_OUTPUT"; echo "app=missing" >> "$GITHUB_OUTPUT"; exit 0; }
+          dir=$RUNNER_TEMP/oncall-app
+          install -d -m 700 "$dir"
+          (umask 077 && printf '%s\n' "$ONCALL_APP_KEY" > "$dir/key.pem")
+          token=$(REVIEWER_APP_ID=$ONCALL_APP_ID REVIEWER_INSTALLATION_ID=$ONCALL_INSTALLATION_ID \
+            REVIEWER_APP_KEY_PATH=$dir/key.pem uv run --quiet --locked --script scripts/reviewer_token.py)
+          rm -f "$dir/key.pem"
+          echo "::add-mask::$token"
+          # The squash commit's message is the workflow's own, so no text from the branch
+          # (a closing keyword, say) reaches main.
+          python3 scripts/oncall.py squash-body "$INCIDENT" "$PR" > "$RUNNER_TEMP/squash.md"
+          GH_TOKEN=$token gh pr merge "$PR" --squash --delete-branch \
+            --subject "fix(oncall): incident #$INCIDENT (#$PR)" --body-file "$RUNNER_TEMP/squash.md"
+          token=""
+          sha=$(gh pr view "$PR" --json mergeCommit --jq .mergeCommit.oid)
+          echo "merged=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - name: Post the result
+        # A failed check or merge step is reported once, by the step below.
+        if: ${{ !cancelled() && steps.check.outcome == 'success' && steps.merge.outcome != 'failure' }}
+        env:
+          REASON: ${{ steps.check.outputs.reason }}
+          MERGED: ${{ steps.merge.outputs.merged }}
+          APP: ${{ steps.merge.outputs.app }}
+          SHA: ${{ steps.merge.outputs.sha }}
+        run: |
+          if [[ $MERGED == true ]]; then
+            python3 scripts/oncall.py merged-body "$ALERT_ENV" "$INCIDENT" "$PR" "$SHA" > "$RUNNER_TEMP/merged.md"
+            gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/merged.md"
+            if [[ $ALERT_ENV == prod ]]; then gh issue edit "$INCIDENT" --add-label needs-yacine; fi
+          else
+            if [[ $APP == missing ]]; then REASON="the on-call App isn't set up (ONCALL_APP_KEY and its IDs)"; fi
+            python3 scripts/oncall.py not-merged-body "$INCIDENT" "$PR" "$REASON" "$POSTED" > "$RUNNER_TEMP/not-merged.md"
+            gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/not-merged.md"
+            gh issue edit "$INCIDENT" --add-label needs-yacine
+          fi
+      - name: Ask for help if a step failed
+        # A refused push, a failed token mint or a failed gh call: nothing else says so.
+        if: failure()
+        env:
+          REASON: "a step of the merge job failed (see the run's log)"
+        run: |
+          [[ $INCIDENT =~ ^[1-9][0-9]*$ ]] || exit 1
+          python3 scripts/oncall.py stalled-body "$ALERT" "$STATUS" "$ALERT_ENV" "$TITLE" "$RUN_URL" \
+            "$REASON" > "$RUNNER_TEMP/failed.md"
+          gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/failed.md"
+          gh issue edit "$INCIDENT" --add-label needs-yacine
+      - name: Remove the key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/oncall-app"
+
+  wait:
+    name: Wait for the alert to resolve
+    needs: [incident, rollback, merge]
+    if: >-
+      ${{ always() && (needs.rollback.outputs.result == 'success' ||
+      needs.rollback.outputs.result == 'skipped-recent' ||
+      (needs.merge.outputs.merged == 'true' && needs.incident.outputs.environment == 'dev')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: oncall
+      deployment: false
+    permissions: {}
+    outputs:
+      resolved: ${{ steps.wait.outputs.resolved }}
+      journey: ${{ steps.wait.outputs.journey }}
+    env:
+      ALERT: ${{ needs.incident.outputs.alert }}
+      ALERT_ENV: ${{ needs.incident.outputs.environment }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Wait (read-only Grafana)
+        id: wait
+        timeout-minutes: 25
+        env:
+          GRAFANA_READONLY_TOKEN: ${{ secrets.GRAFANA_READONLY_TOKEN }}
+        run: |
+          resolved=false
+          python3 scripts/oncall_grafana.py wait "$ALERT" "$ALERT_ENV" normal --minutes 20 && resolved=true
+          echo "resolved=$resolved" >> "$GITHUB_OUTPUT"
+          journey=$(python3 scripts/oncall_grafana.py journey "$ALERT_ENV" | jq -c . || echo '{}')
+          echo "journey=$journey" >> "$GITHUB_OUTPUT"
+
+  follow-up:
+    name: On-call follow-up
+    needs: [incident, act, rollback, post-review, merge, wait]
+    if: >-
+      ${{ always() && needs.act.result == 'success' &&
+      (needs.act.outputs.action == 'rollback' || needs.act.outputs.pr != '') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: oncall
+      deployment: false
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+      checks: read
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Write the prompt
+        env:
+          ACTION: ${{ needs.act.outputs.action }}
+          INCIDENT: ${{ needs.incident.outputs.incident }}
+          ALERT: ${{ needs.incident.outputs.alert }}
+          ALERT_ENV: ${{ needs.incident.outputs.environment }}
+          PR: ${{ needs.act.outputs.pr }}
+          REVIEW: ${{ needs.post-review.outputs.verdict }}
+          POSTED: ${{ needs.post-review.outputs.posted }}
+          MERGED: ${{ needs.merge.outputs.merged || 'false' }}
+          MERGE_SHA: ${{ needs.merge.outputs.sha }}
+          MERGE_REASON: ${{ needs.merge.outputs.reason }}
+          ROLLBACK_RESULT: ${{ needs.rollback.outputs.result || 'not-run' }}
+          ROLLBACK_RUN: ${{ needs.rollback.outputs.run }}
+          ROLLBACK_TAG: ${{ needs.act.outputs.rollback_tag }}
+          RESOLVED: ${{ needs.wait.outputs.resolved || 'not-checked' }}
+          JOURNEY: ${{ needs.wait.outputs.journey }}
+        run: |
+          python3 scripts/oncall.py follow-up-prompt "$ONCALL_OUT" \
+            --action "$ACTION" --incident "$INCIDENT" --alert "$ALERT" --environment "$ALERT_ENV" \
+            --pr "$PR" --review "$REVIEW" --posted "$POSTED" --merged "$MERGED" --merge-sha "$MERGE_SHA" \
+            --merge-reason "$MERGE_REASON" --rollback-result "$ROLLBACK_RESULT" --rollback-run "$ROLLBACK_RUN" \
+            --rollback-tag "$ROLLBACK_TAG" --resolved "$RESOLVED" --journey "$JOURNEY"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Install Claude Code
+        run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      - name: Run the on-call agent
+        timeout-minutes: 15
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GRAFANA_READONLY_TOKEN: ${{ secrets.GRAFANA_READONLY_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/oncall-claude.sh oncall 40 6 "$ONCALL_OUT/follow-up-prompt.md" "$RUNNER_TEMP/agent.json"
+      - name: Hand the report to the next job
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: follow-up
+          path: /tmp/oncall/comment.md
+          retention-days: 7
+          if-no-files-found: ignore
+
+  report:
+    name: Post the report
+    needs: [incident, follow-up]
+    if: ${{ always() && needs.follow-up.result != 'skipped' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      INCIDENT: ${{ needs.incident.outputs.incident }}
+      ALERT: ${{ needs.incident.outputs.alert }}
+      ALERT_ENV: ${{ needs.incident.outputs.environment }}
+      STATUS: ${{ needs.incident.outputs.status }}
+      TITLE: ${{ needs.incident.outputs.title }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Take the report
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: follow-up
+          path: ${{ runner.temp }}/follow-up
+      - name: Post it, or ask for help
+        run: |
+          report=$RUNNER_TEMP/follow-up/comment.md
+          if python3 scripts/oncall.py check-comment "$report"; then
+            gh issue comment "$INCIDENT" --body-file "$report"
+            if grep -q '⛔ Needs Yacine' "$report"; then gh issue edit "$INCIDENT" --add-label needs-yacine; fi
+          else
+            python3 scripts/oncall.py stalled-body "$ALERT" "$STATUS" "$ALERT_ENV" "$TITLE" "$RUN_URL" \
+              "the follow-up session didn't finish its report" > "$RUNNER_TEMP/stalled.md"
+            gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/stalled.md"
+            gh issue edit "$INCIDENT" --add-label needs-yacine
+          fi
+          exit 0
