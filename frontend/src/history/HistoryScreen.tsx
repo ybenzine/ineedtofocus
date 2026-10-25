@@ -921,6 +921,7 @@ function EditForm({
   return (
     <form
       className="history-edit"
+      data-holds-update=""
       aria-label={`Edit session from ${label}`}
       onSubmit={(event) => void submit(event)}
       onKeyDown={(event) => {

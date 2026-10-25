@@ -5,6 +5,7 @@ import App from './App.tsx'
 import AuthGate from './auth/AuthGate.tsx'
 import { registerLocalDataHook } from './auth/localData.ts'
 import { createAppServices } from './services.ts'
+import { startAutoUpdate } from './update/start.ts'
 
 const root = document.getElementById('root')
 if (!root) {
@@ -24,3 +25,6 @@ createRoot(root).render(
     </AuthGate>
   </StrictMode>,
 )
+
+// A new version takes over by itself when the app is idle (#244). No worker in dev.
+if (import.meta.env.PROD) startAutoUpdate()

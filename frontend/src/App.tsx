@@ -7,7 +7,8 @@ import { useAccount } from './auth/AccountContext.tsx'
 import AccountBar from './auth/AccountBar.tsx'
 import ArchiveScreen from './archive/ArchiveScreen.tsx'
 import HistoryScreen from './history/HistoryScreen.tsx'
-import { notifySessionExpired, signedInUserId } from './auth/localData.ts'
+import { notifySessionExpired, signedInUserId, trySyncAll } from './auth/localData.ts'
+import { registerUpdateFlush, setViewBusy } from './update/idle.ts'
 import ScreenNav from './nav/ScreenNav.tsx'
 import { pathForScreen, screenFromPath, type ScreenId } from './nav/screens.ts'
 import { httpSettingsApi } from './settings/api.ts'
@@ -134,6 +135,20 @@ function AppBody({
   const { values } = useSettingsState()
   const [view, setView] = useState<View>({ name: 'loading' })
   useTheme(values.theme, view.name === 'timer' || view.name === 'summary')
+  // A new version may take over only on setup, History, Archive and Settings (#244): the timer,
+  // a summary and the start-up restore are never reloaded. Before a reload, send what is pending.
+  const viewName = view.name
+  useEffect(() => {
+    setViewBusy(viewName === 'loading' || viewName === 'timer' || viewName === 'summary')
+  }, [viewName])
+  useEffect(() => () => setViewBusy(true), [])
+  useEffect(
+    () =>
+      registerUpdateFlush(async () => {
+        await Promise.all([settings.flush(), trySyncAll()])
+      }),
+    [settings],
+  )
   // The audio source is remembered with the active session (sourceStore), so a reload restores it.
   const [notice, setNotice] = useState<string | null>(null)
   const [audio, setAudio] = useState<AudioSource>('none')

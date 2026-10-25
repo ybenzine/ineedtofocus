@@ -273,6 +273,7 @@ export default function SessionSetup({
           maxLength={GOAL_MAX_LENGTH}
           autoComplete="off"
           value={goal}
+          data-holds-update={goal === '' ? undefined : ''}
           aria-describedby={`${groupId}-goal-count`}
           onChange={(event) => setGoal(event.target.value)}
         />
