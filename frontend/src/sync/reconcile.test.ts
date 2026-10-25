@@ -29,8 +29,8 @@ describe('clearArchivedOnDevice', () => {
 describe('reconcileMissing racing with Undo on this screen', () => {
   it('#228 does not mark archived a session whose Undo started while the Archive list loaded', async () => {
     const setArchived = vi.fn().mockResolvedValue(undefined)
-    const forget = vi.fn().mockResolvedValue(undefined)
-    const store = { setArchived, forget } as unknown as SessionStore
+    const markGone = vi.fn().mockResolvedValue(undefined)
+    const store = { setArchived, markGone } as unknown as SessionStore
     const restored = new Set<string>()
     let answer: (value: unknown) => void = () => undefined
     const archiveApi = {
@@ -46,6 +46,6 @@ describe('reconcileMissing racing with Undo on this screen', () => {
     answer({ kind: 'ok', value: [{ id: 's', archivedAt: '2026-10-21T10:00:00Z' }] })
     await reconcile
     expect(setArchived).not.toHaveBeenCalled()
-    expect(forget).toHaveBeenCalledWith('me', [])
+    expect(markGone).toHaveBeenCalledWith('me', [], expect.any(Number))
   })
 })
