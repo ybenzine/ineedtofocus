@@ -21,7 +21,8 @@ Two rules per environment, on the key journey only, never on CPU or memory (tech
   submitted failed (`outcome="error"` over all `focus_session_saves_total`, the complement
   of the dashboards' save success rate), with at least 10 sessions submitted.
 - **History slow:** the p95 latency of history loads over the last 5 minutes is above 2 s,
-  with at least 5 history loads in those 5 minutes.
+  with at least 5 history loads in those 5 minutes that recorded a latency (the samples
+  behind the p95; a request FastAPI rejects with a 422 before the handler doesn't count).
 
 Below either minimum the count query returns nothing, so the window is "no data" (Normal),
 not a false condition: one failed save or one slow load at 3 a.m. is not user impact.
@@ -101,7 +102,12 @@ def at_least(expr: str, minimum: int) -> str:
 
 
 def history_loads(env: str) -> str:
-    return f"sum(increase({g.HISTORY_LOADS}{g._sel(env)}[{WINDOW}]))"
+    """The history loads behind the p95: those that recorded a latency sample, i.e. that
+    reached the handler, whatever their outcome. Not `focus_history_loads_total`, which
+    also counts the requests FastAPI rejects with a 422 before the handler: they record no
+    latency, so 4 of them and 1 slow load would meet the minimum with a p95 of one sample
+    (the product manager's decision on #208)."""
+    return f"sum(increase({g.HISTORY_DURATION}_count{g._sel(env)}[{WINDOW}]))"
 
 
 def save_error_rate(env: str) -> str:
