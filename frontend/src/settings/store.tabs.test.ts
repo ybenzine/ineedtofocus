@@ -40,6 +40,28 @@ function stored() {
   }
 }
 
+/**
+ * Web Locks as browsers have them: granted on a later task, one holder at a time. Returns the
+ * names requested.
+ */
+function deferredLocks(): string[] {
+  const names: string[] = []
+  let chain: Promise<unknown> = Promise.resolve()
+  vi.stubGlobal('navigator', {
+    ...navigator,
+    onLine: true,
+    locks: {
+      request: (name: string, run: () => Promise<unknown>) => {
+        names.push(name)
+        const result = chain.then(() => new Promise((r) => setTimeout(r, 0))).then(run)
+        chain = result.catch(() => undefined)
+        return result
+      },
+    },
+  })
+  return names
+}
+
 /** A tab: its own store over the shared localStorage and the shared server. */
 function openTab(api: SettingsApi) {
   return new SettingsStore({ api, storage: localStorage, owner: 'u1', retryBaseMs: 3_600_000 })
@@ -137,32 +159,63 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
   })
 
   it('merges under a Web Lock where there is one', async () => {
-    const held: string[] = []
-    vi.stubGlobal('navigator', {
-      ...navigator,
-      onLine: true,
-      locks: {
-        request: vi.fn(async (name: string, run: () => Promise<unknown>) => {
-          held.push(name)
-          return run()
-        }),
-      },
-    })
+    const held = deferredLocks()
     const { server, api } = fakeServer()
     const a = openTab(api)
     const b = openTab(api)
     server.online = false
     a.update({ week_start_day: 3 })
-    await vi.waitFor(() => expect(stored().pending).toEqual({ week_start_day: 3 }))
+    await a.flush()
+    expect(stored().pending).toEqual({ week_start_day: 3 })
     b.update({ background_volume: 70 })
-    await vi.waitFor(() =>
-      expect(stored().pending).toEqual({ week_start_day: 3, background_volume: 70 }),
-    )
     await b.flush() // the send fails: offline
-    expect(held.slice(0, 2)).toEqual([SETTINGS_LOCK, SETTINGS_LOCK])
+    expect(stored().pending).toEqual({ week_start_day: 3, background_volume: 70 })
+    expect(held).toContain(SETTINGS_LOCK)
     server.online = true
     await b.flush()
     expect(server.value).toMatchObject({ week_start_day: 3, background_volume: 70 })
+  })
+
+  it('sends the merged cache, not its own older copy, when the lock grants later', async () => {
+    deferredLocks()
+    const { server, api, patches } = fakeServer()
+    const a = openTab(api)
+    server.online = false
+    a.update({ week_start_day: 3 })
+    await a.flush()
+    const b = openTab(api) // starts with week start 3 pending, and misses every later change
+    expect(b.countUnsynced()).toBe(1)
+    server.online = true
+    await a.flush()
+    a.update({ week_start_day: 5 })
+    await a.flush()
+    expect(server.value.week_start_day).toBe(5)
+
+    b.update({ background_volume: 70 })
+    await b.flush()
+
+    expect(patches.at(-1)).toEqual({ background_volume: 70 })
+    expect(server.value).toMatchObject({ week_start_day: 5, background_volume: 70 })
+    expect(b.values.week_start_day).toBe(5)
+  })
+
+  it('still merges, and keeps counting, when the lock request is refused', async () => {
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      onLine: true,
+      locks: { request: () => Promise.reject(new DOMException('no', 'SecurityError')) },
+    })
+    const { server, api } = fakeServer()
+    const a = openTab(api)
+    const b = openTab(api)
+    server.online = false
+    b.update({ alert_volume: 10 })
+    await b.flush()
+    a.update({ week_start_day: 3 })
+    await a.flush()
+    expect(stored().pending).toEqual({ alert_volume: 10, week_start_day: 3 })
+    // Not stuck "writing": this tab still sees the other tab's edit.
+    expect(b.countUnsynced()).toBe(2)
   })
 
   it("does not adopt another user's cache or break the owner binding", () => {

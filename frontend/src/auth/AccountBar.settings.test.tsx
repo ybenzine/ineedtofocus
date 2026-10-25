@@ -11,7 +11,7 @@ import { SETTINGS_KEY, SettingsStore } from '../settings/store.ts'
 import { LocalActiveSessionStore, TimerController } from '../timer/index.ts'
 import AccountBar from './AccountBar.tsx'
 import { AccountContext } from './AccountContext.tsx'
-import { registerLocalDataHook } from './localData.ts'
+import { clearLocalUserData, registerLocalDataHook } from './localData.ts'
 
 const unregisters: (() => void)[] = []
 afterEach(() => {
@@ -122,5 +122,8 @@ describe('sign-out and unsent settings edits (#129)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     fireEvent.click(await screen.findByRole('button', { name: 'Sign out anyway' }))
     await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
+    // The sign-out removes the cache with the edits, as clearLocalUserData does.
+    await clearLocalUserData()
+    expect(localStorage.getItem(SETTINGS_KEY)).toBeNull()
   })
 })

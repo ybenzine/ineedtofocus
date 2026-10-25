@@ -90,6 +90,8 @@ export class SettingsStore {
   #flushing: Promise<void> | null = null
   /** Cache writes started and not finished yet (they queue on the lock). */
   #writing = 0
+  /** The newest queued cache write; a send waits for it so it works from the merged cache. */
+  #lastWrite: Promise<unknown> = Promise.resolve()
 
   constructor(options: SettingsStoreOptions = {}) {
     this.#api = options.api
@@ -168,7 +170,9 @@ export class SettingsStore {
     this.#state = { ...this.#state, ...change(this.#state) }
     this.#notify()
     this.#writing++
+    let started = false
     const merge = () => {
+      started = true
       try {
         if (!this.#live()) return
         const base = this.#readStored() ?? this.#state
@@ -184,12 +188,11 @@ export class SettingsStore {
       merge()
       return
     }
-    locks
+    this.#lastWrite = locks
       .request(SETTINGS_LOCK, async () => merge())
       .catch(() => {
-        // Locking failed: merge without it rather than lose the write.
-        this.#writing++
-        merge()
+        // Locking failed before the merge ran: merge without it rather than lose the write.
+        if (!started) merge()
       })
   }
 
@@ -306,8 +309,11 @@ export class SettingsStore {
   async #flushLoop(): Promise<void> {
     const api = this.#api
     if (!api) return
-    this.#adoptStored()
-    while (this.#live() && this.hasPending()) {
+    for (;;) {
+      // Queued cache writes (waiting on the lock) land first, so what is sent is the merged cache.
+      while (this.#writing > 0) await this.#lastWrite
+      this.#adoptStored()
+      if (!this.#live() || !this.hasPending()) return
       const sent = this.#state.pending
       let server: Settings | null = null
       let drop: string[] = Object.keys(sent)
