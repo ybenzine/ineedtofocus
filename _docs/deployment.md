@@ -1,6 +1,6 @@
 # Deployment
 
-> **Status: in progress.** Server setup is scripted (#25), the images and production Compose are defined (#27), merges to `main` deploy to dev (#28), prod deploys are a manual, approved workflow (#29), and a deploy that fails its checks reverts by itself, with a `rollback` workflow for dev and prod (#30). The plan is in [tech_stack.md §2–3](tech_stack.md).
+> **Status: in progress.** Server setup is scripted (#25), the images and production Compose are defined (#27), merges to `main` deploy to dev (#28), prod deploys are a manual, approved workflow (#29), and a deploy that fails its checks reverts by itself, with a `rollback` workflow for dev and prod (#30). Host resources other than memory and CPU are bounded too: old app images are pruned and every container has process, privilege and disk limits (#117). The plan is in [tech_stack.md §2–3](tech_stack.md).
 
 ## Environments
 
@@ -133,7 +133,7 @@ Every image but the app's is pinned by tag **and** digest, `name:tag@sha256:<dig
 
 **Bumping one** (a Postgres minor or Alpine rebuild, a collector or Caddy release) is a PR that changes the tag and digest together. Read the digest with `docker buildx imagetools inspect <name>:<tag>` (the `Digest:` line at the top, the index). After the merge, `install.sh` pulls the new image (Caddy is recreated then), and each environment's next deploy recreates its Postgres and collector from it. A Postgres image change restarts the database: a clean shutdown and start on the same volume, a few seconds of `/readyz` failing for the app that runs. Stay within one Postgres major: a new major can't open the old data directory and needs a dump and restore, which is its own issue. A new minor or an Alpine rebuild within a major is safe. Postgres' on-disk format is fixed within a major. The databases use the default libc collation, and musl's (Alpine's libc) is plain code point order, so a rebuild doesn't reorder text indexes.
 
-**Pruning (#117)** must keep these images, the pinned ones of the installed `infra/`. A rollback's target uses today's installed compose files, so it needs exactly those. If one is pruned anyway, the next deploy or rollback pulls it again by digest, but only while Docker Hub answers.
+**Pruning (#117) never touches them.** `focus-ci` removes only `ghcr.io/ybenzine/ineedtofocus` images ([Old images](#old-images-pruning-117)), so the pinned images of the installed `infra/` stay on the host. A rollback's target uses today's installed compose files, so it needs exactly those. If one goes anyway (a manual `docker image prune -a`, say), the next deploy or rollback pulls it again by digest, but only while Docker Hub answers: never run `docker image prune -a` or `docker system prune -a` on the server. After a bump, the old pinned image isn't referenced any more and stays until removed by hand (`docker image rm <name>:<tag>@sha256:<old digest>`).
 
 ### Memory: dev can't starve prod
 
@@ -145,6 +145,26 @@ Every image but the app's is pinned by tag **and** digest, `name:tag@sha256:<dig
 | Caddy (shared) | 96 MiB | |
 
 The limits add up to 1,248 MiB. Adding a one-shot migration container (up to 320 MiB) gives 1,568 MiB, under the 1,600 MiB budget that leaves about 350 MiB of the 2 GiB Droplet to the kernel, dockerd, containerd and sshd. So the limits never overcommit the host. Dev's containers also get `oom_score_adj: 500`, so the kernel kills them first if memory runs out anyway, and a quarter of prod's CPU weight (`cpu_shares` 256 against 1024). The collectors run with `GOMEMLIMIT` and a `memory_limiter` at 80% of their limit. `make test-infra` fails if the limits break these rules (`scripts/check_prod_compose.py`).
+
+### Host resources: processes, privileges, disk (#117)
+
+Every merge deploys agent-written code to dev, on the Droplet prod shares. Memory and CPU are bounded above; `infra/compose.prod.yml` bounds the rest, the same for prod and dev:
+
+| Service | `pids_limit` | Capabilities | `no-new-privileges` | Root filesystem | Writes to |
+|---|---|---|---|---|---|
+| app | 128 | `cap_drop: [ALL]` | yes | read-only (`read_only: true`) | `/tmp`, a 16 MiB tmpfs |
+| Postgres (`db`) | 128 | `cap_drop: [ALL]`, runs as `user: postgres` | yes | writable (below) | its data volume, `/var/run/postgresql` |
+| OpenTelemetry Collector | 128 | `cap_drop: [ALL]` | yes | read-only | nothing |
+
+- **Disk.** A container's writable layer has no size limit of its own: `storage_opt: size=…` needs overlay2 on XFS with project quotas, which the Droplet's ext4 root doesn't have. So the app and the collector can't write to their root filesystem at all. The app runs as uid 10001 with `PYTHONDONTWRITEBYTECODE=1` and writes only temporary files, to `/tmp`, a tmpfs of 16 MiB. A tmpfs lives in memory and counts towards the container's `mem_limit`, so a runaway write there ends in an out-of-memory kill of that container, never in a full disk. The one-shot migration container (`run --rm app alembic upgrade head`) gets the same settings.
+- **Processes.** `pids_limit` counts threads too. 128 is several times what each service runs: one uvicorn process with its threads, Postgres' 40 connections plus its background workers, the collector's Go threads. A fork bomb or a thread leak in dev stops at 128 and can't exhaust the host's process table.
+- **Privileges.** The app and the collector already run as non-root users; with no capability and `no-new-privileges`, nothing in them can gain one (no setuid binary works). Postgres runs as the image's `postgres` user from the start, so it needs no capability either. Started as root, its entrypoint would chown the data directory and then switch users, which needs `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETUID` and `SETGID`. The data directory is `postgres`'s already: the image creates it so, and on the server the root entrypoint that started Postgres until now made it so (checked by hand: a volume set up that way starts with the new settings and keeps its data).
+- **The exception: Postgres' root filesystem stays writable.** Outside its volume it writes its socket and lock file (`/var/run/postgresql`), and its data, the one thing that grows, lives in the volume whatever the root filesystem is. Making it read-only would add tmpfs mounts for little.
+- **Caddy** (`compose.edge.yml`, shared by both environments) isn't covered by this issue: changing it recreates Caddy, a few seconds without HTTPS for both sites. It runs no agent-written code.
+
+`scripts/check_prod_compose.py` (`make test-infra`) fails if a service of prod or dev has no positive `pids_limit`, doesn't drop every capability, adds one back, is privileged or lacks `no-new-privileges`, or if the app or the collector isn't read-only or has a tmpfs without a size. `make test-prod-stack` runs the whole stack with these settings (CI's `image` job runs it too).
+
+**Reaching the server:** these settings, like every `infra/` change, apply once Yacine installs the merge commit with `install.sh` ([below](#infra-on-the-server-installsh)): a deploy recreates the app, and each environment's next deploy recreates its Postgres (a few seconds of `/readyz` failing, as for an image bump) and its collector.
 
 ### Image build and publish
 
@@ -274,7 +294,7 @@ Nothing is stored at repo level. The key can only run the `dev` profile: deploy,
 
 - `deploy` pulls only from `ghcr.io/ybenzine/ineedtofocus`, by digest, so the bytes deployed and recorded are the ones requested. A re-pushed tag can't swap them.
 - The revision label check only proves the image *claims* to be built from `<sha>`. Anyone able to push to that package can set any label, and any workflow run in this repo that asks for `packages: write` can push there, including runs on PR branches. So the checks don't prove an image was built on `main`. That guarantee comes from the workflow: `deploy-dev` deploys only the digest `publish` pushed for a `main` commit that passed CI. The key itself is held only by the `main`-only `dev` environment.
-- An image runs as dev's app, with the root-installed `compose.prod.yml`: no volumes, ports, Docker socket, privileges or host network, on dev's own networks and database. Host disk and process limits come with #117.
+- An image runs as dev's app, with the root-installed `compose.prod.yml`: no volumes, ports, Docker socket, privileges or host network, on dev's own networks and database. It can't write to its root filesystem, has no capability and at most 128 processes ([Host resources](#host-resources-processes-privileges-disk-117)), and old images are pruned ([Old images](#old-images-pruning-117)).
 
 **The local `:<sha>` tag is host-wide.** Both environments' Compose projects resolve `ghcr.io/ybenzine/ineedtofocus:<sha>` from the same local image store, and `focus-ci` moves that tag (`docker tag …@<digest> …:<sha>`) on every deploy and rollback. `focus-ci` therefore never trusts an existing local tag. It re-tags from the digest it was given or has recorded, under the lock, and then checks the running container's image. Anything else that starts an app container must do the same. The prod deploy (#29), the automatic revert and `rollback` (#30) do, through the same code. Any manual `compose.sh … up` must too ([break-glass](#break-glass-on-the-server)).
 
@@ -301,7 +321,7 @@ The `main`-only branch policy keeps workflows on other branches from reading the
 ### Upkeep
 
 - **Infra changed in a merge:** run `install.sh` with the merge commit (see above), read the diff, type `yes`; the next deploy records the new `infra_revision`.
-- **Host disk:** nothing prunes old app images yet. Until #117 lands, check `df -h /` and `docker system df` now and then. Never prune the pinned [dependency images](#dependency-images-170) of the installed `infra/`. A deploy would pull them again, but a rollback then depends on Docker Hub.
+- **Host disk:** every deploy and rollback prunes old app images ([Old images](#old-images-pruning-117)). Check `df -h /` and `docker system df` now and then anyway: database volumes and container logs (3 × 10 MB per container) grow too. Never run `docker image prune -a` or `docker system prune -a`: they would remove the pinned [dependency images](#dependency-images-170), and a rollback would then depend on Docker Hub.
 - **Rotate the key:** repeat steps 2–6, then remove the old line from `/etc/ssh/authorized_keys/deploy`.
 - **Roll dev back:** `gh workflow run rollback.yml -f env=dev` ([Rollback](#rollback-rollbackyml)).
 
@@ -403,6 +423,7 @@ Dev must be deployed first ([Deploy to dev → One-time setup](#one-time-setup-y
 3. **Migrate** as a one-shot container (`run --rm … alembic upgrade head`).
 4. **Start** with `up -d --wait`, which waits for the `/healthz` healthcheck (`--wait-timeout 180`). Then check that the app container runs exactly that digest, and that `GET /healthz` (the process) and `GET /readyz` (the database) answer inside it, three tries each, 2 s apart.
 5. **Record** the release (`release`, plus an ok line in `releases.log`).
+6. **Prune** old app images, still under the lock ([Old images](#old-images-pruning-117)). This never fails the deploy.
 
 ### Automatic revert
 
@@ -435,6 +456,27 @@ A **known-good release** of an environment is a release (tag and digest) with an
 - After every deploy or rollback, the record's `previous_tag`/`previous_digest` is the next rollback target, worked out the same way. The workflow summaries show it.
 
 **Not promotable once dev rolled back from it** (#125 review). Prod takes only releases dev ran, and a release dev rolled back from is one we decided was bad. `focus-ci prod` refuses it in `candidate` (read-only) and in `promote` (under the lock, before any docker call) with `dev rolled back from <sha> <digest>, so it is not promotable`. It becomes promotable again only when dev runs that digest again with an ok line. deploy-prod's `plan` job can't see this (it reads GitHub deployments, which a rollback doesn't change), so a run that picked such a release stops at `Resolve` or `Deploy`, after the approval but before anything changes on prod.
+
+### Old images: pruning (#117)
+
+Every deploy pulls a new `ghcr.io/ybenzine/ineedtofocus` image. So after every successful deploy or rollback, still under `/opt/focus/deploy.lock`, `focus-ci` removes the app images neither environment may start again. Whichever profile runs (`dev`, `prod` or `rollback-prod`), it keeps, for **both** environments:
+
+- the current and previous release of `/opt/focus/<env>/release` (`digest`, `previous_digest`): what runs, and what `rollback` and an automatic revert would start;
+- the newest 5 [known-good releases](#known-good-releases) in `/opt/focus/<env>/releases.log` (`KEEP_KNOWN_GOOD` in `focus-ci.sh`): the rollbacks after that.
+
+An image is kept when any of its digests is one of these. Everything else of that repository goes: failed deploys' images, releases rolled back from, and known-good releases older than the newest 5. Those older releases stay rollback targets: `rollback <sha>` pulls one again by its recorded digest from GHCR, which is where every deploy pulls from anyway. So the next rollbacks need no registry, and the [dependency images](#dependency-images-170) are never touched, so no rollback needs Docker Hub.
+
+How it removes, and what it never does:
+
+- It lists images (`docker image ls`), takes those of `ghcr.io/ybenzine/ineedtofocus`, reads each one's references (`docker image inspect`) and removes only that repository's (`docker image rm <repo>:<tag> <repo>@<digest>`). Never `docker image prune` or `docker system prune`, never `--force`. Another repository's image is never named, and neither is another repository's name on the same image.
+- An image a container uses can't be removed without force, so it stays, with a warning.
+- Anything it can't read with certainty keeps images: a malformed or unreadable `release` or `releases.log` of either environment skips pruning (`focus-ci: warning: not pruning old images: …`), and an image whose references it can't read is kept.
+- It never fails the request: the release is already recorded and running. Problems are warnings (`focus-ci: warning: …`, also in `journalctl -t focus-ci`). The output lists what was pruned and how many images were kept.
+- A rollback floor (#165) will change what counts as known-good; pruning reads the same list, so it follows.
+
+`make test-server` checks it with the fake docker: the window per environment, both environments' releases kept whichever profile runs, the pinned images and another repository's image left alone, only the app's references in each `image rm` and never forced, under the lock and with the clean environment, a pruned known-good release pulled again by `rollback <sha>`, and that a failed deploy prunes nothing. Docker refusing a removal (or an image a container runs), a malformed log of the other environment and unreadable references each keep the images, and the deploy still succeeds.
+
+**Reaching the server:** like every `focus-ci` change, this runs once Yacine installs the merge commit with `install.sh`. The first deploy or rollback after that prunes what accumulated since #28.
 
 ### Schema compatibility
 
@@ -484,7 +526,7 @@ Nothing is stored at repo level. The environment has no reviewer on purpose, so 
 | prod (`prod`) | yes, a release dev ran and didn't roll back from | no | yes | yes (reads dev) | prod |
 | prod rollback (`rollback-prod`) | no | yes, prod's own known-good releases | yes | no | prod only |
 
-- **Prod rollback key** (`focus-ci rollback-prod`): `rollback`, `rollback <sha>` and `status` on prod, nothing else. The client never names a digest: the target comes from prod's own `releases.log`, so the key can only start bytes prod already ran and checked. It can't deploy, migrate, read or change dev, open a shell or change the compose files. If it leaked, the worst it could do is roll prod back to an older known-good release, or step back through several. That's an outage-sized nuisance, fixed by an approved deploy, but never new code.
+- **Prod rollback key** (`focus-ci rollback-prod`): `rollback`, `rollback <sha>` and `status` on prod, nothing else. The client never names a digest: the target comes from prod's own `releases.log`, so the key can only start bytes prod already ran and checked. It can't deploy, migrate, read or change dev, open a shell or change the compose files. (After a rollback, focus-ci also reads dev's records on the server, to keep dev's images when it [prunes](#old-images-pruning-117); the client sees only which images were removed.) If it leaked, the worst it could do is roll prod back to an older known-good release, or step back through several. That's an outage-sized nuisance, fixed by an approved deploy, but never new code.
 - An agent-merged edit of `rollback.yml` can't do more: the key's limits hold whatever the workflow says, and the `rollback` environment accepts only `main`.
 
 `make test-server` checks all three keys behind the real sshd. The rollback key gets the hostile requests plus `deploy` and `candidate`. It's checked to restore only prod's known-good releases (not dev's, not a failed one, not one rolled back from, not the current one) and to leave dev's record, log and container alone. The dev key's rollback touches no prod file, and the prod key still can't roll back.

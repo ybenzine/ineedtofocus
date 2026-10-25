@@ -40,6 +40,13 @@
 #   rollback-prod (#30) the prod rollback key: hostile inputs; only rollback and status;
 #               only prod's own known-good releases; never touches dev; the lock and the
 #               clean environment
+#   pruning     (#117) after a successful deploy or rollback, under the lock, with any
+#               profile: old app images leave the host, but never the current, previous
+#               or newest known-good releases of either environment, the pinned images
+#               (Postgres, the collector, Caddy) or another repository's; a pruned
+#               known-good release is pulled again by a rollback; a failed deploy prunes
+#               nothing; a failed removal, a malformed log or unreadable references keep
+#               images and never fail the deploy
 set -euo pipefail
 
 SRC=/src
@@ -95,10 +102,11 @@ apt-get update -q >/dev/null
 apt-get install -y -q --no-install-recommends git >/dev/null
 mv /usr/bin/docker /usr/bin/docker.real
 install -m 0755 "$SRC/server/tests/fake_docker.sh" /usr/bin/docker
-install -d -m 1777 "$FAKE" "$FAKE/labels" "$FAKE/tags" "$FAKE/fail" "$FAKE/broken"
-# Not sticky: root (install.sh) and the deploy user (focus-ci) both pull, and the tests
-# remove images from the host whoever pulled them.
-install -d -m 0777 "$FAKE/local"
+install -d -m 1777 "$FAKE" "$FAKE/labels" "$FAKE/fail" "$FAKE/broken"
+# Not sticky: root (install.sh) and the deploy user (focus-ci) both pull and tag, the
+# tests remove images from the host whoever pulled them, and focus-ci's pruning (#117)
+# removes images and tags whoever made them.
+install -d -m 0777 "$FAKE/local" "$FAKE/tags"
 install -m 0666 /dev/null "$FAKE/calls.log"
 
 # The images the real compose files pin besides the app's (#170): in the fake registry
@@ -459,6 +467,7 @@ deploy_fails() { # <description> <step> <sha> <digest> <must not appear>
   check "$desc: record unchanged" eq "$(cat "$RECORD")" "$before_record"
   check "$desc: logged as failed" contains "$(new_history | head -n1)" "action=deploy outcome=failed tag=$tag digest=$dig"
   check "$desc: logged step" contains "$(new_history | head -n1)" "step=$step"
+  check "$desc: prunes nothing (#117)" not_contains "$(new_calls)" ":: image ls"
 }
 # Before `up`, the running app is untouched: nothing to revert.
 no_revert() { # <description>
@@ -790,6 +799,7 @@ broken_deploy() { # <description> <digest> <what the output says failed>
   check "$desc: then the revert" contains "$(new_history | sed -n 2p)" "action=revert outcome=ok tag=$S1 digest=$D5"
   check "$desc: which names what failed" contains "$(new_history | sed -n 2p)" "failed_action=deploy failed_tag=$S4 failed_digest=$dig"
   check "$desc: two history lines" eq "$(new_history | wc -l)" 2
+  check "$desc: a failed deploy prunes nothing (#117)" not_contains "$calls" ":: image ls"
   check "$desc: docker gets PATH, HOME and APP_TAG only" clean_env_only "$calls"
   check "$desc: no prod file in any call" not_contains "$calls" "/opt/focus/prod/"
   check "$desc: both starts ran under the deploy lock" \
@@ -1076,6 +1086,140 @@ rb "rollback $S2"
 check "rollback key: rollback <sha> to a known-good prod release succeeds" eq "$rc" 0
 check "rollback key: prod runs S2 D2" eq "$(pvalue tag) $(pvalue digest) $(cat "$FAKE/running-prod")" "$S2 $D2 $D2"
 check "rollback key: rollback <sha>: no migration" not_contains "$(new_calls)" "alembic"
+
+echo "--- Pruning old app images (#117)"
+KEEP=$(sed -n 's/^readonly KEEP_KNOWN_GOOD=\([0-9][0-9]*\)$/\1/p' /opt/focus/bin/focus-ci)
+check "sanity: focus-ci keeps a number of known-good releases per environment" [ -n "$KEEP" ]
+# Each `image rm` names only the app's references: <repo>:<tag> or <repo>@<digest>.
+rm_app_only() {
+  local line word bad=""
+  while IFS= read -r line; do
+    for word in ${line#*:: image rm }; do
+      [[ $word == "$REPO:"* || $word == "$REPO@"* ]] || bad+="$word "
+    done
+  done < <(grep ':: image rm ' <<<"$1" || true)
+  [[ -z $bad ]] && return 0
+  printf '     image rm of other references: %s\n' "$bad"
+  return 1
+}
+OTHER=example/other:1@$(digest 0xfe) # an image of another repository, on the host
+printf '%s\n' "${OTHER%@*}" >"$FAKE/local/${OTHER#*@}"
+chmod 0666 "$FAKE/local/${OTHER#*@}"
+check "sanity: prod runs S2 D2, with no rollback target" eq "$(pvalue tag) $(pvalue digest) $(pvalue previous_digest)" "$S2 $D2 "
+N=$((KEEP + 2))
+P=() Q=()
+for ((i = 1; i <= N; i++)); do
+  P[i]=$(sha $((0xc0 + i)))
+  Q[i]=$(digest $((0xf0 + i)))
+  echo "${P[i]}" >"$FAKE/labels/${Q[i]}"
+done
+for ((i = 1; i < N; i++)); do
+  ci "deploy ${P[i]} ${Q[i]}"
+  check "dev deploys release $i of $N" eq "$rc" 0
+done
+touch "$FAKE/probe-lock"
+rm -f "$FAKE/rm-lock-probe.log"
+mark
+ci_as dev -o 'SetEnv=LC_FOCUS=leak LANG=C.UTF-8' -- "deploy ${P[N]} ${Q[N]}"
+rm "$FAKE/probe-lock"
+printf '%s\n' "$out" | sed 's/^/     | /'
+calls=$(new_calls)
+check "deploy $N succeeds" eq "$rc" 0
+for ((i = N - KEEP + 1; i <= N; i++)); do
+  check "dev's release $i (one of its newest $KEEP known-good) stays on the host" on_host "${Q[i]}"
+done
+check "dev's release 1 is pruned (outside the window)" bash -c "! [ -e '$FAKE/local/${Q[1]}' ]"
+check "dev's release 2 is pruned by this deploy" bash -c "! [ -e '$FAKE/local/${Q[2]}' ]"
+check "with its host-wide tag" bash -c "! [ -e '$FAKE/tags/${P[2]}' ]"
+check "the deploy says what it pruned" contains "$out" "pruned $REPO:${P[2]} $REPO@${Q[2]}"
+check "and how many it kept" contains "$out" "old $REPO image(s);"
+check "prod's current release stays (any profile keeps both environments')" on_host "$D2"
+check "Postgres' pinned image stays (#170)" on_host "$PG"
+check "the collector's pinned image stays (#170)" on_host "$OTEL"
+check "Caddy's pinned image stays (#170)" on_host "$CADDY"
+check "another repository's image stays" on_host "$OTHER"
+check "pruning lists the images after the start and its checks" before "$calls" "/readyz" ":: image ls"
+check "it removes only the app's references" rm_app_only "$calls"
+check "it never forces a removal" not_contains "$(grep ':: image rm ' <<<"$calls")" " -f"
+check "it removes under the deploy lock" eq "$(sed 's/.* lock=//' "$FAKE/rm-lock-probe.log" | sort -u)" held
+check "pruning: docker gets PATH, HOME and APP_TAG only" clean_env_only "$calls"
+check "pruning: no prod file in any call" not_contains "$calls" "/opt/focus/prod/"
+
+echo "--- An older known-good release stays a rollback target: it's pulled again"
+mark
+ci "rollback ${P[1]}"
+calls=$(new_calls)
+check "rollback to the pruned release 1 succeeds" eq "$rc" 0
+check "it pulls release 1 by its recorded digest" contains "$calls" ":: pull --quiet $REPO@${Q[1]}"
+check "dev runs release 1" eq "$(cat "$FAKE/running-dev")" "${Q[1]}"
+check "the release it left ($N, now rolled back from) is pruned" bash -c "! [ -e '$FAKE/local/${Q[N]}' ]"
+check "the next rollback target ($((N - 1))) stays" on_host "${Q[N - 1]}"
+check "sanity: it is the record's previous release" eq "$(value previous_digest)" "${Q[N - 1]}"
+
+echo "--- Prod's deploy and rollback keep dev's images, and dev's keep prod's"
+mark
+prod "deploy ${P[N - 1]} ${Q[N - 1]}"
+check "prod deploys dev's release $((N - 1))" eq "$rc" 0
+check "prod's deploy keeps dev's current release" on_host "${Q[1]}"
+check "and prod's previous one (D2)" on_host "$D2"
+check "prod's deploy removes only the app's references" rm_app_only "$(new_calls)"
+mark
+rb rollback
+check "the rollback key rolls prod back to S2" eq "$rc $(pvalue digest)" "0 $D2"
+check "the rollback key's prune keeps a release prod left but dev may still start" on_host "${Q[N - 1]}"
+check "and dev's current release" on_host "${Q[1]}"
+check "the rollback key's prune removes only the app's references" rm_app_only "$(new_calls)"
+
+echo "--- Pruning never fails a deploy, and keeps what it can't be sure of"
+SX=$(sha 0xcf) DX=$(digest 0xff)
+echo "$SX" >"$FAKE/labels/$DX"
+touch "$FAKE/fail/migrate"
+ci "deploy $SX $DX"
+rm "$FAKE/fail/migrate"
+check "sanity: a deploy that failed at migrate" eq "$rc" 1
+check "left its image on the host, tagged" eq "$(on_host "$DX" && cat "$FAKE/tags/$SX")" "$DX"
+dev_release() { ci "deploy ${P[1]} ${Q[1]}"; } # redeploy dev's current release
+touch "$FAKE/fail/rm"
+mark
+dev_release
+rm "$FAKE/fail/rm"
+check "docker can't remove an image: the deploy still succeeds" eq "$rc" 0
+check "it warns and keeps the image" contains "$out" "focus-ci: warning: kept $REPO:$SX $REPO@$DX: docker couldn't remove it"
+check "the image is still there" on_host "$DX"
+check "the release is recorded" eq "$(value tag) $(value digest) $(value action)" "${P[1]} ${Q[1]} deploy"
+cp -p "$PROD_HISTORY" /tmp/prod-history.bak
+printf 'garbage\n' >>"$PROD_HISTORY"
+mark
+dev_release
+cp -p /tmp/prod-history.bak "$PROD_HISTORY"
+check "prod's log is malformed: dev's deploy still succeeds" eq "$rc" 0
+check "it says it doesn't prune, and why" \
+  contains "$out" "focus-ci: warning: not pruning old images: /opt/focus/prod/releases.log line"
+check "it lists no image, so removes none" not_contains "$(new_calls)" ":: image ls"
+check "the stray image is still there" on_host "$DX"
+touch "$FAKE/fail/refs"
+mark
+dev_release
+rm "$FAKE/fail/refs"
+check "an image's references can't be read: the deploy still succeeds" eq "$rc" 0
+check "it keeps that image and says so" contains "$out" "focus-ci: warning: kept image $(printf 'sha256:img%s' "${DX#sha256:}")"
+check "it removes nothing it couldn't read" not_contains "$(new_calls)" ":: image rm"
+running_prod=$(cat "$FAKE/running-prod")
+put "$FAKE/running-prod" "$DX" # a container runs the stray image (started by hand, say)
+mark
+dev_release
+put "$FAKE/running-prod" "$running_prod"
+check "an image a container runs: the deploy still succeeds" eq "$rc" 0
+check "it keeps that image, with docker's reason" \
+  contains "$out" "focus-ci: warning: kept $REPO:$SX $REPO@$DX: docker couldn't remove it (Error response from daemon: conflict"
+check "it never forces a removal" not_contains "$(grep ':: image rm ' <<<"$(new_calls)")" " -f"
+check "the image a container runs is still there" on_host "$DX"
+mark
+dev_release
+check "the next deploy prunes the stray image" bash -c "! [ -e '$FAKE/local/$DX' ] && ! [ -e '$FAKE/tags/$SX' ]"
+check "and says so" contains "$out" "pruned $REPO:$SX $REPO@$DX"
+check "still only the app's references" rm_app_only "$(new_calls)"
+check "the pinned images are all still there" bash -c "[ -e '$FAKE/local/${PG#*@}' ] && [ -e '$FAKE/local/${OTEL#*@}' ] && [ -e '$FAKE/local/${CADDY#*@}' ]"
 
 echo "--- releases.log is read strictly, and fails closed (#30 review)"
 cp -p "$HISTORY" /tmp/dev-history.bak

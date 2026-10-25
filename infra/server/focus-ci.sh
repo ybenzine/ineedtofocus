@@ -21,7 +21,8 @@
 #       exactly that image and that /healthz and /readyz answer inside it, and record the
 #       release. If the start or a check fails, it starts the release that ran before
 #       again (the automatic revert: by its recorded digest, the same pulls, no
-#       migration) and still fails, so the workflow goes red.
+#       migration) and still fails, so the workflow goes red. After a success, prune
+#       old app images (see Pruning).
 #   rollback [<commit sha>] [expect sha256:<digest>]
 #       Start a known-good release again, by its recorded digest, without migrating
 #       (migrations are expand-only). With no sha: the newest known-good release other
@@ -30,7 +31,8 @@
 #       lock (a guard against a deploy that ran in between; never a target). Then pull
 #       what it needs like a deploy, start it, check it like a deploy and record it, and print a `result` line with what it left and
 #       what runs now. The release it leaves is marked as rolled back from (revoked). On
-#       dev, that also makes it not promotable to prod.
+#       dev, that also makes it not promotable to prod. After a success, prune old app
+#       images (see Pruning).
 #   status
 #       Print the current release record.
 #   candidate [<commit sha>]
@@ -45,6 +47,16 @@
 # release with an ok line that isn't revoked. Each one migrated this environment's
 # database, or ran on it, and migrations are never undone and only ever add (AGENTS.md),
 # so it runs on today's schema without migrating.
+#
+# Pruning (#117). After a successful deploy or rollback, still under the lock, focus-ci
+# removes the ghcr.io/ybenzine/ineedtofocus images that neither environment may start
+# again, whichever profile runs: each environment keeps its record's current and
+# previous release and its newest KEEP_KNOWN_GOOD known-good releases. Older known-good
+# releases stay rollback targets: a rollback to one pulls it again by its recorded
+# digest. No other image is touched: the dependency images (Postgres, the collector,
+# Caddy) stay, so a rollback never depends on Docker Hub. Pruning never fails the
+# request, and whatever it can't read with certainty (a malformed log, an image whose
+# references it can't read) keeps images rather than removing them.
 #
 # Profiles:
 #   dev            deploy, rollback, status       on focus-dev
@@ -109,6 +121,9 @@ readonly CHECK_ATTEMPTS=3
 readonly IMAGE_REPO=ghcr.io/ybenzine/ineedtofocus
 readonly CLEAN_PATH=/usr/sbin:/usr/bin:/sbin:/bin
 readonly MAX_REQUEST_LENGTH=160
+# Image pruning (#117): per environment, the newest known-good releases whose app image
+# stays on the host, on top of the record's current and previous release.
+readonly KEEP_KNOWN_GOOD=5
 export PATH=$CLEAN_PATH
 
 readonly SHA_RE='^[0-9a-f]{40}$'
@@ -134,6 +149,10 @@ fail() {
   printf 'focus-ci: FAILED: %s\n' "$*" >&2
   audit "failed: $*"
   exit 1
+}
+warn() {
+  printf 'focus-ci: warning: %s\n' "$*" >&2
+  audit "warning: $*"
 }
 
 # --- What may this key do? ------------------------------------------------------------
@@ -253,18 +272,23 @@ parse_line() {
 
 # load_history <releases.log>: the releases that ran there and passed the checks, oldest
 # first (ok_tags, ok_digests, ok_lines), and the digests rolled back from since their
-# last ok line (revoked). See "Known-good" at the top.
+# last ok line (revoked). See "Known-good" at the top. Returns 1, with the reason in
+# $history_error, for a malformed line: callers fail on it (read_history), except the
+# image pruning, which then keeps every image instead.
 declare -A revoked=()
 ok_tags=() ok_digests=() ok_lines=()
+history_error=""
 load_history() {
   local line number=0
-  ok_tags=() ok_digests=() ok_lines=() revoked=()
+  ok_tags=() ok_digests=() ok_lines=() revoked=() history_error=""
   [[ -f $1 ]] || return 0
   while IFS= read -r line || [[ -n $line ]]; do
     number=$((number + 1))
     [[ -n $line ]] || continue
-    parse_line "$line" ||
-      fail "$1 line $number is malformed ($bad): nothing that reads that log runs until it's fixed (see _docs/deployment.md, The release record)"
+    if ! parse_line "$line"; then
+      history_error="$1 line $number is malformed ($bad): nothing that reads that log runs until it's fixed (see _docs/deployment.md, The release record)"
+      return 1
+    fi
     [[ ${f[outcome]-} == ok && ${f[tag]-} =~ $SHA_RE && ${f[digest]-} =~ $DIGEST_RE ]] || continue
     if [[ ${f[action]-} == rollback && ${f[from_digest]-} =~ $DIGEST_RE ]]; then
       revoked[${f[from_digest]}]=1
@@ -275,10 +299,13 @@ load_history() {
     ok_lines+=("$line")
   done <"$1"
 }
+# read_history <releases.log>: load_history, or stop with its reason.
+read_history() { load_history "$1" || fail "${history_error:-cannot read $1}"; }
 
 # known_good <tag or ""> [digests to skip...]: from the loaded history, the newest
 # known-good release (of <tag>, when given) whose digest isn't one of those skipped, as
-# "<tag> <digest>"; or nothing.
+# "<tag> <digest>"; or nothing. keep_release_images (pruning) walks the same list: a
+# change to what counts as known-good (a rollback floor, #165) applies to both.
 known_good() {
   local want=$1 i d skip
   shift
@@ -348,7 +375,7 @@ check_install() {
 # promoted <tag> <digest>: the source environment ran exactly this release successfully
 # and hasn't rolled back from it since.
 promoted() {
-  load_history "$FOCUS_ROOT/$promote_from/releases.log"
+  read_history "$FOCUS_ROOT/$promote_from/releases.log"
   is_known_good "$1" "$2" && return 0
   if [[ -n ${revoked[$2]-} ]]; then
     printf 'focus-ci: %s rolled back from %s %s, so it is not promotable: deploy a release %s runs or ran without rolling back\n' \
@@ -528,6 +555,127 @@ write_record() { # <action> [extra fields for the history line...]
   audit "$action ok tag=$tag digest=$digest"
 }
 
+# --- Image pruning (#117) ---------------------------------------------------------------
+
+# keep_release_images <env>: add to keep_digests the app images <env> may start again:
+# its record's digest and previous_digest (the next rollback target), and its newest
+# KEEP_KNOWN_GOOD known-good releases (the rollbacks after that). Returns 1, with the
+# reason in $prune_error, when that can't be read with certainty.
+declare -A keep_digests=()
+prune_error=""
+keep_release_images() {
+  local dir=$FOCUS_ROOT/$1 key value i d n=0
+  local -A counted=()
+  if [[ ! -d $dir || ! -x $dir ]]; then
+    prune_error="can't read $dir"
+    return 1
+  fi
+  if [[ -e $dir/release ]]; then
+    if [[ ! -r $dir/release ]]; then
+      prune_error="can't read $dir/release"
+      return 1
+    fi
+    for key in digest previous_digest; do
+      value=$(record_get "$key" "$dir/release")
+      if [[ -n $value && ! $value =~ $DIGEST_RE ]]; then
+        prune_error="$dir/release has a malformed $key"
+        return 1
+      fi
+      [[ -z $value ]] || keep_digests[$value]=1
+    done
+  fi
+  if [[ -e $dir/releases.log && ! -r $dir/releases.log ]]; then
+    prune_error="can't read $dir/releases.log"
+    return 1
+  fi
+  if ! load_history "$dir/releases.log"; then
+    prune_error=${history_error:-cannot read $dir/releases.log}
+    return 1
+  fi
+  for ((i = ${#ok_digests[@]} - 1; i >= 0 && n < KEEP_KNOWN_GOOD; i--)); do
+    d=${ok_digests[i]}
+    [[ -z ${revoked[$d]-} && -z ${counted[$d]-} ]] || continue
+    counted[$d]=1
+    keep_digests[$d]=1
+    n=$((n + 1))
+  done
+}
+
+# app_refs <image id>: that image's IMAGE_REPO references (<repo>:<tag>, <repo>@<digest>),
+# one per line. Fails when they can't be read, or the image is gone.
+app_refs() {
+  local out ref
+  out=$(clean docker image inspect --format \
+    '{{range .RepoTags}}{{println .}}{{end}}{{range .RepoDigests}}{{println .}}{{end}}' "$1") || return 1
+  while IFS= read -r ref; do
+    case $ref in
+      "$IMAGE_REPO@"* | "$IMAGE_REPO:"*) printf '%s\n' "$ref" ;;
+    esac
+  done <<<"$out"
+}
+
+# prune_images: after a successful deploy or rollback, still under the lock, remove the
+# IMAGE_REPO images that no environment may start again (keep_release_images, for prod
+# and dev, whichever profile runs), so each deploy's new image doesn't fill the disk.
+# Only IMAGE_REPO's references are removed, never another repository's: the pinned
+# dependency images (Postgres, the collector, Caddy) are never touched, nor an image
+# that also carries another name. Never forced, so an image a container uses stays. An
+# image is removed only when its references were read and name no kept digest. It
+# never fails the request: a problem is a warning, and an image in doubt is kept.
+#
+# Removing an image's last tag can delete it before its digest reference is reached
+# (Docker's classic image store does), and `image rm` then fails on that reference. So
+# success is judged by what's left: no IMAGE_REPO reference on that image any more.
+prune_images() {
+  local env listing repo id refs_out ref keep left rm_errors removed=0 kept=0
+  local -a refs
+  local -A seen=()
+  keep_digests=()
+  for env in prod dev; do
+    if ! keep_release_images "$env"; then
+      warn "not pruning old images: $prune_error"
+      return 0
+    fi
+  done
+  if ! listing=$(clean docker image ls --no-trunc --format '{{.Repository}} {{.ID}}'); then
+    warn "not pruning old images: docker image ls failed"
+    return 0
+  fi
+  while read -r repo id; do
+    [[ $repo == "$IMAGE_REPO" && -n $id && -z ${seen[$id]-} ]] || continue
+    seen[$id]=1
+    if ! refs_out=$(app_refs "$id"); then
+      warn "kept image $id: can't read its references"
+      kept=$((kept + 1))
+      continue
+    fi
+    refs=() keep=0
+    while IFS= read -r ref; do
+      [[ -n $ref ]] || continue
+      refs+=("$ref")
+      if [[ $ref == "$IMAGE_REPO@"* && -n ${keep_digests[${ref#*@}]-} ]]; then
+        keep=1
+      fi
+    done <<<"$refs_out"
+    if ((keep || ${#refs[@]} == 0)); then
+      kept=$((kept + 1))
+      continue
+    fi
+    rm_errors=$(clean docker image rm "${refs[@]}" 2>&1 >/dev/null) || true
+    # The image is gone ("No such image", not shown), or has no app reference left.
+    if left=$(app_refs "$id" 2>/dev/null) && [[ -n $left ]]; then
+      rm_errors=${rm_errors//$'\n'/; }
+      warn "kept ${refs[*]}: docker couldn't remove it${rm_errors:+ ($rm_errors)}"
+      kept=$((kept + 1))
+    else
+      removed=$((removed + 1))
+      log "pruned ${refs[*]}"
+    fi
+  done <<<"$listing"
+  log "pruned $removed old $IMAGE_REPO image(s); $kept kept for prod and dev (current, previous and up to $KEEP_KNOWN_GOOD known-good releases each)"
+  audit "pruned removed=$removed kept=$kept"
+}
+
 # --- Verbs ----------------------------------------------------------------------------
 
 do_status() {
@@ -541,7 +689,7 @@ do_status() {
 # candidate [<sha>]: what a prod deploy may take from dev, read-only.
 do_candidate() {
   local source_record=$FOCUS_ROOT/$promote_from/release found line
-  load_history "$FOCUS_ROOT/$promote_from/releases.log"
+  read_history "$FOCUS_ROOT/$promote_from/releases.log"
   if [[ -z $tag ]]; then
     tag=$(record_get tag "$source_record")
     digest=$(record_get digest "$source_record")
@@ -578,7 +726,7 @@ do_deploy() {
     fail "the release record $record is malformed"
   # The rollback target once this release is current: the newest known-good release
   # other than this one (normally the current release).
-  load_history "$history"
+  read_history "$history"
   read -r previous_tag previous_digest <<<"$(known_good "" "$digest")"
   if [[ -z $previous_tag && -n $current_tag && $current_digest != "$digest" ]]; then
     previous_tag=$current_tag previous_digest=$current_digest
@@ -592,6 +740,7 @@ do_deploy() {
   step deploy migrate migrate "$tag"
   start_or_revert deploy "$current_tag" "$current_digest"
   write_record deploy
+  prune_images || warn "pruning old images failed"
 }
 
 do_rollback() {
@@ -606,7 +755,7 @@ do_rollback() {
   if [[ -n $expect && $expect != "$from_digest" ]]; then
     fail "$env_name runs $from_tag ($from_digest) now, not the expected $expect: a deploy or rollback ran in between. Nothing changed; check what runs and start again"
   fi
-  load_history "$history"
+  read_history "$history"
   found=$(known_good "$want" "$from_digest")
   if [[ -z $found && -n $want ]]; then
     fail "no known-good release of $want is recorded on $env_name: it must have passed the checks here, not be the current release and not have been rolled back from (see status and _docs/deployment.md)"
@@ -625,6 +774,7 @@ do_rollback() {
   if [[ $env_name == dev ]]; then
     log "$from_tag ($from_digest) is marked as rolled back from: prod won't take it from dev"
   fi
+  prune_images || warn "pruning old images failed"
 }
 
 cd /
