@@ -360,3 +360,15 @@ export function missingFromServer(
     })
     .map((d) => d.id)
 }
+
+/**
+ * Ids of device sessions marked archived that the server's answer lists as live: they were
+ * restored on another device. Tag filters don't matter here (a listed session is live either way).
+ */
+export function listedAsLive(
+  base: HistoryData,
+  device: readonly { id: string; archived: boolean }[],
+): string[] {
+  const known = new Set(base.sessions.map((s) => s.id))
+  return device.filter((d) => d.archived && known.has(d.id)).map((d) => d.id)
+}

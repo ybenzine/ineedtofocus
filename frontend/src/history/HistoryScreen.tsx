@@ -6,7 +6,7 @@ import { HttpArchiveApi, type ArchiveApi } from '../archive/api.ts'
 import { useSettingsState } from '../settings/SettingsContext.ts'
 import { GOAL_MAX_LENGTH } from '../setup/options.ts'
 import { HttpSessionsApi, type SessionEdit, type SessionsApi } from '../sync/api.ts'
-import { reconcileMissing } from '../sync/reconcile.ts'
+import { clearArchivedOnDevice, reconcileMissing } from '../sync/reconcile.ts'
 import type { SessionStore } from '../sync/sessionStore.ts'
 import type { SyncEngine } from '../sync/syncEngine.ts'
 import { TAGS, type Tag } from '../timer/config.ts'
@@ -30,6 +30,7 @@ import {
   formatTime,
   localDate,
   mergeSessions,
+  listedAsLive,
   missingFromServer,
   oneLine,
   periodFor,
@@ -110,6 +111,14 @@ export default function HistoryScreen({
   const mounted = useRef(true)
   // Sessions being archived: left out of every answer until the server has confirmed or refused.
   const archiving = useRef(new Set<string>())
+  // Archived on this screen (confirmed) and not undone since: a server answer read before that
+  // may still list the session, and must not clear the mark.
+  const archivedHere = useRef(new Set<string>())
+  // Undo started on this screen: a reconcile still in flight must not mark the session archived
+  // after Undo's own write.
+  const restored = useRef(new Set<string>())
+  const isSkipped = (id: string) =>
+    archiving.current.has(id) || archivedHere.current.has(id) || restored.current.has(id)
   // Read by the load effect without re-running it when a caller passes a fresh object.
   const archiveApiRef = useRef(archiveApi)
   useEffect(() => {
@@ -219,9 +228,19 @@ export default function HistoryScreen({
             query.tags,
             archiving.current,
           )
-          void reconcileMissing(sessions, archiveApiRef.current, owner, missing).catch(
+          void reconcileMissing(sessions, archiveApiRef.current, owner, missing, isSkipped).catch(
             () => undefined,
           )
+          // Restored on another device: the server lists it as live again.
+          void clearArchivedOnDevice(
+            sessions,
+            owner,
+            listedAsLive(
+              result.value,
+              local.map((d) => ({ id: d.record.id, archived: d.archivedAt !== null })),
+            ),
+            isSkipped,
+          ).catch(() => undefined)
         }
         setLoad({
           kind: 'ready',
@@ -348,6 +367,7 @@ export default function HistoryScreen({
     setEditingId(null)
     const gone = new Set([session.id])
     archiving.current.add(session.id)
+    restored.current.delete(session.id)
     setLoad({ ...load, data: removeSessions(load.data, gone) })
     // The cache is left alone until the server confirms: `archiving` keeps the session out of
     // every answer meanwhile, and a failed archive (offline) must not wipe what's cached for
@@ -377,6 +397,7 @@ export default function HistoryScreen({
     if (owner !== null) {
       await sessions?.setArchived(owner, session.id, result.value).catch(() => undefined)
     }
+    archivedHere.current.add(session.id)
     archiving.current.delete(session.id)
     for (const [key, data] of cache.current) cache.current.set(key, removeSessions(data, gone))
     setUndo(session.id)
@@ -386,13 +407,18 @@ export default function HistoryScreen({
   async function undoArchive() {
     if (undo === null) return
     setProblem('')
-    const result = await archiveApi.restore(undo)
+    const id = undo
+    restored.current.add(id)
+    const result = await archiveApi.restore(id)
     if (!mounted.current) return
-    if (result.kind !== 'ok') return fail(result.kind, 'undo the archive')
+    if (result.kind !== 'ok') {
+      restored.current.delete(id)
+      return fail(result.kind, 'undo the archive')
+    }
+    archivedHere.current.delete(id)
     // Cleared before the next await, so the message is gone by the time the row is back.
-    const restored = undo
     setUndo(null)
-    if (owner !== null) await sessions?.setArchived(owner, restored, null).catch(() => undefined)
+    if (owner !== null) await sessions?.setArchived(owner, id, null).catch(() => undefined)
     cache.current.clear()
     setReload((n) => n + 1)
   }

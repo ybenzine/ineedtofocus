@@ -5,6 +5,7 @@ import {
   bucketUnitFor,
   emptyData,
   localDate,
+  listedAsLive,
   missingFromServer,
   applyChanges,
   mergeSessions,
@@ -231,5 +232,23 @@ describe('missingFromServer', () => {
     expect(ids('2026-10-12T22:30:00Z')).toEqual([])
     expect(ids('2026-10-13T01:00:00Z')).toEqual([])
     expect(ids('2026-10-09T23:00:00Z')).toEqual([])
+  })
+})
+
+describe('listedAsLive', () => {
+  const base = emptyData('week', 'UTC', 1, { start: '2026-10-19', end: '2026-10-25' })
+
+  it('lists device sessions marked archived that the server lists as live', () => {
+    const withServer = { ...base, sessions: [session({ id: 'a' }), session({ id: 'b' })] }
+    const device = [
+      { id: 'a', archived: true },
+      { id: 'b', archived: false },
+      { id: 'c', archived: true },
+    ]
+    expect(listedAsLive(withServer, device)).toEqual(['a'])
+  })
+
+  it('lists nothing for an empty answer', () => {
+    expect(listedAsLive(base, [{ id: 'a', archived: true }])).toEqual([])
   })
 })
