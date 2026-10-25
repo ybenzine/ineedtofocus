@@ -483,3 +483,255 @@ describe('clock moved backwards (#93)', () => {
     expect(record.focusSeconds + record.pausedSeconds).toBeLessThanOrEqual(span + 2)
   })
 })
+
+describe('a failed write to the device store is retried', () => {
+  /** A store whose next `failures` saves throw (quota, private mode), then behaves normally. */
+  function flaky() {
+    const inner = new MemoryActiveSessionStore()
+    const state = { failures: 0 }
+    const store: ActiveSessionStore = {
+      load: () => inner.load(),
+      clear: () => inner.clear(),
+      save(value) {
+        if (state.failures > 0) {
+          state.failures -= 1
+          throw new Error('QuotaExceededError')
+        }
+        inner.save(value)
+      },
+    }
+    return { store, state }
+  }
+
+  it('catches up on the next tick after a phase change, and a reload sees it', async () => {
+    const { store, state } = flaky()
+    const { controller, make } = setup(store)
+    await controller.start(
+      startOptions({ ...DEFAULT_POMODORO, blocks: 2, focusMinutes: 10, breakMinutes: 5 }),
+    )
+    const before = store.load()?.session
+    wait(10 * MINUTE_MS)
+    state.failures = 1
+    const update = await controller.tick() // the write fails; the bell is still reported once
+    expect(update.events).toMatchObject([{ type: 'phase-change', to: 'break' }])
+    expect(store.load()?.session).toEqual(before) // stored copy is behind, with a retry pending
+
+    wait(SECOND)
+    expect((await controller.tick()).events).toEqual([]) // not reported twice
+    expect(store.load()?.session).not.toEqual(before)
+
+    const reloaded = make()
+    const restored = await reloaded.restore()
+    expect(restored.snapshot?.pomodoro).toMatchObject({ phase: 'break' })
+    expect(restored.events).toEqual([])
+    expect((await reloaded.tick()).events).toEqual([]) // no replayed phase change
+  })
+
+  it('writes a pause that failed to store on the next call', async () => {
+    const { store, state } = flaky()
+    const { controller, make, saved } = setup(store)
+    await controller.start(startOptions(countdown(25)))
+    wait(MINUTE_MS)
+    state.failures = 1
+    expect((await controller.pause()).snapshot?.paused).toBe(true)
+    expect(store.load()?.session.pauses).toHaveLength(0)
+
+    wait(MINUTE_MS)
+    expect(controller.current()?.paused).toBe(true) // reading writes nothing
+    expect(store.load()?.session.pauses).toHaveLength(0)
+    await controller.tick() // retries
+    expect(store.load()?.session.pauses).toHaveLength(1)
+
+    const reloaded = make()
+    expect((await reloaded.restore()).snapshot).toMatchObject({ paused: true })
+    const stopped = await reloaded.stop()
+    expect(stopped.outcome).toMatchObject({ kind: 'saved' })
+    expect(saved[0]).toMatchObject({ focusSeconds: 60, pausedSeconds: 60 })
+  })
+
+  it('keeps retrying while writes keep failing, and the stop still saves correctly', async () => {
+    const { store, state } = flaky()
+    const { controller, saved } = setup(store)
+    await controller.start(startOptions(countdown(25)))
+    wait(MINUTE_MS)
+    state.failures = 3
+    await controller.pause()
+    wait(MINUTE_MS)
+    await controller.tick()
+    await controller.tick()
+    expect(store.load()?.session.pauses).toHaveLength(0)
+    await controller.tick()
+    expect(store.load()?.session.pauses).toHaveLength(1)
+    await controller.stop()
+    expect(saved[0]).toMatchObject({ focusSeconds: 60, pausedSeconds: 60 })
+  })
+
+  it('drops the retry when another tab has changed the stored session meanwhile', async () => {
+    const { store, state } = flaky()
+    const { controller: tabA, make } = setup(store)
+    await tabA.start(startOptions(countdown(25)))
+    const tabB = make()
+    await tabB.restore()
+    wait(MINUTE_MS)
+    state.failures = 1
+    await tabA.pause() // fails to store
+    wait(SECOND)
+    await tabB.pause() // tab B reads the store (unpaused) and stores its own pause
+    wait(SECOND)
+    await tabA.tick() // must not overwrite B's pause with its own older one
+    expect(store.load()?.session.pauses).toHaveLength(1)
+    expect(store.load()?.session.pauses[0]?.pausedAt).toBe(T0 + MINUTE_MS + SECOND)
+    expect(tabA.current()?.paused).toBe(true)
+  })
+
+  it("a second tab restoring does not undo the first tab's pending pause", async () => {
+    const { store, state } = flaky()
+    const { controller: tabA, make } = setup(store)
+    await tabA.start(startOptions(countdown(25)))
+    wait(MINUTE_MS)
+    state.failures = 1
+    await tabA.pause() // fails to store
+    wait(SECOND)
+    const tabB = make()
+    expect((await tabB.restore()).snapshot?.paused).toBe(false) // B only reads
+    wait(SECOND)
+    await tabA.tick()
+    expect(store.load()?.session.pauses).toHaveLength(1)
+    expect(tabA.current()?.paused).toBe(true)
+  })
+
+  it('restoring on the same controller writes its own pending change first', async () => {
+    const { store, state } = flaky()
+    const { controller } = setup(store)
+    await controller.start(startOptions(countdown(25)))
+    wait(MINUTE_MS)
+    state.failures = 1
+    await controller.pause()
+    const restored = await controller.restore()
+    expect(restored.snapshot?.paused).toBe(true)
+    expect(store.load()?.session.pauses).toHaveLength(1)
+  })
+
+  it('a failed write in start keeps the timer, says so, and catches up', async () => {
+    const { store, state } = flaky()
+    const { controller, make } = setup(store)
+    state.failures = 1
+    const update = await controller.start(startOptions(countdown(25)))
+    expect(update.snapshot).not.toBeNull()
+    expect(update.unsaved).toBe(true)
+    expect(store.load()).toBeNull() // a reload now would lose it
+    await expect(controller.start(startOptions(countdown(25)))).rejects.toBeInstanceOf(
+      ActiveSessionExistsError,
+    )
+    wait(SECOND)
+    expect(controller.current()?.paused).toBe(false)
+    expect((await controller.tick()).unsaved).toBe(false)
+    const reloaded = make()
+    expect((await reloaded.restore()).snapshot).not.toBeNull()
+  })
+
+  it("a start that never reached the store yields to another tab's session", async () => {
+    const { store, state } = flaky()
+    const { controller: tabA, make } = setup(store)
+    state.failures = 1
+    await tabA.start(startOptions(countdown(25)))
+    const tabB = make()
+    await tabB.start(startOptions(countdown(10)))
+    wait(SECOND)
+    await tabA.tick()
+    expect(store.load()?.session.config).toEqual(countdown(10))
+    expect(tabA.current()?.config).toEqual(countdown(10))
+  })
+
+  it('a failed write in restore does not throw, keeps memory and catches up', async () => {
+    const { store, state } = flaky()
+    const { controller, make } = setup(store)
+    await controller.start(
+      startOptions({ ...DEFAULT_POMODORO, blocks: 2, focusMinutes: 10, breakMinutes: 5 }),
+    )
+    wait(11 * MINUTE_MS) // the phase changed while the app was closed
+    const reloaded = make()
+    state.failures = 1
+    const restored = await reloaded.restore()
+    expect(restored.snapshot?.pomodoro).toMatchObject({ phase: 'break' })
+    expect(restored.unsaved).toBe(true)
+    wait(SECOND)
+    expect((await reloaded.tick()).events).toEqual([]) // no replayed bell
+    expect(make().current()?.pomodoro).toMatchObject({ phase: 'break' })
+    const again = make()
+    expect((await again.restore()).events).toEqual([])
+    expect(store.load()?.session.observedActiveMs).toBeGreaterThan(0)
+  })
+
+  it('a failed pendingRecord write in finish still hands the record over', async () => {
+    const { store, state } = flaky()
+    const { controller, saved, make } = setup(store)
+    await controller.start(startOptions(countdown(25)))
+    wait(2 * MINUTE_MS)
+    state.failures = 1
+    const stopped = await controller.stop()
+    expect(stopped.outcome).toMatchObject({ kind: 'saved' })
+    expect(stopped.recordPending).toBe(false)
+    expect(saved).toHaveLength(1)
+    expect(store.load()).toBeNull() // the running copy is gone: a reload doesn't resurrect it
+    expect(make().current()).toBeNull()
+  })
+
+  it('keeps a record held in memory when neither the store nor saveRecord took it', async () => {
+    const { store, state } = flaky()
+    const saved: SessionRecord[] = []
+    let failSave = true
+    const { make } = setup(store)
+    const controller = make((r) => {
+      if (failSave) throw new Error('IndexedDB unavailable')
+      saved.push(r)
+    })
+    await controller.start(startOptions(countdown(25)))
+    wait(2 * MINUTE_MS)
+    state.failures = 1
+    const stopped = await controller.stop()
+    expect(stopped.recordPending).toBe(true)
+    expect(controller.current()).toBeNull() // the stale running copy isn't picked up again
+    failSave = false
+    expect(await controller.retryPending()).toBe(true)
+    expect(saved).toHaveLength(1)
+    expect(store.load()).toBeNull()
+    await controller.start(startOptions(countdown(5))) // free to start again
+  })
+
+  it('finishing drops a pending retry so it cannot come back', async () => {
+    const { store, state } = flaky()
+    const { controller, saved } = setup(store)
+    await controller.start(startOptions(countdown(25)))
+    wait(2 * MINUTE_MS)
+    state.failures = 1
+    await controller.pause() // unsaved
+    await controller.stop()
+    expect(saved).toHaveLength(1)
+    await controller.start(startOptions(countdown(5)))
+    expect(store.load()?.session.config).toEqual(countdown(5))
+    wait(SECOND)
+    await controller.tick()
+    expect(store.load()?.session.config).toEqual(countdown(5))
+    expect(controller.current()?.paused).toBe(false)
+  })
+
+  it('hands over a held record even when another tab has put a session in the store', async () => {
+    const { store, state } = flaky()
+    const saved: SessionRecord[] = []
+    let failSave = true
+    const { make } = setup(store)
+    const tabA = make((r) => {
+      if (failSave) throw new Error('IndexedDB unavailable')
+      saved.push(r)
+    })
+    state.failures = 3 // the start write, its retry at stop, and the pendingRecord write
+    await tabA.start(startOptions(countdown(25)))
+    wait(2 * MINUTE_MS)
+    expect((await tabA.stop()).recordPending).toBe(true)
+    await make().start(startOptions(countdown(10))) // tab B reaches the store
+    failSave = false
+    expect(await tabA.retryPending()).toBe(true)
+    expect(saved).toHaveLength(1)
+  })
+})

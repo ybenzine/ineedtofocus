@@ -1,7 +1,13 @@
 /*
- * One dark theme for the whole app, "Dusk 5°" (#213). Every colour is a token defined once in
- * the :root block below; nothing else in this file or in the components may use a colour
- * literal (colors.test.ts fails if one appears). The contrast of each pair is pinned there too.
+ * The app's colour tokens (#213, #214). Dark, "Dusk 5°", is the default and the reference look;
+ * a light set mirrors every token. Every colour is a token defined in the :root blocks below;
+ * nothing else in this file or in the components may use a colour literal (colors.test.ts fails
+ * if one appears). The contrast of each pair is pinned there too, for both sets.
+ *
+ * Which set applies: Settings > Appearance (System / Dark / Light) puts data-theme="dark" or
+ * "light" on <html> (theme.ts; public/theme-init.js does it before first paint). With no
+ * data-theme ("System") the device's prefers-color-scheme decides. The timer and summary screens
+ * stay dark in every mode (AC9.1).
  */
 @font-face {
   font-family: 'Inter Variable';
@@ -32,6 +38,52 @@
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Light set (#214): the same hue family, the same contrast rules. */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme='dark']) {
+    --bg: #eeeefa;
+    --surface: #fbfbff;
+    --border: #d3d3ec;
+    --control-border: #6c6cae;
+    --text: #14143a;
+    --muted: #4a4a7c;
+    --accent: #4146d1;
+    --accent-hover: #2a2ea8;
+    --on-accent: #fafaff;
+    --error: #b3261e;
+    color-scheme: light;
+  }
+}
+
+:root[data-theme='light'] {
+  --bg: #eeeefa;
+  --surface: #fbfbff;
+  --border: #d3d3ec;
+  --control-border: #6c6cae;
+  --text: #14143a;
+  --muted: #4a4a7c;
+  --accent: #4146d1;
+  --accent-hover: #2a2ea8;
+  --on-accent: #fafaff;
+  --error: #b3261e;
+  color-scheme: light;
+}
+
+/* The timer and the summary stay dark whatever the theme (AC9.1). */
+:root:has(main.focus-screen) {
+  --bg: #11112a;
+  --surface: #1b1b3c;
+  --border: #33336a;
+  --control-border: #6161b3;
+  --text: #edecfb;
+  --muted: #ababd3;
+  --accent: #949aff;
+  --accent-hover: #b9bdff;
+  --on-accent: #0d0d33;
+  --error: #ff8a80;
+  color-scheme: dark;
 }
 
 body {
@@ -195,7 +247,12 @@ input[type='checkbox']:disabled {
   cursor: default;
 }
 
-/* Slider from the tokens: 44 px tall hit area, outlined track, accent thumb. */
+/*
+ * Slider from the tokens: 44 px tall hit area, accent thumb, and a track filled up to the thumb.
+ * Firefox fills it with ::-moz-range-progress; WebKit and Blink have no such part, so the track
+ * is a hard-stop gradient that ends where the thumb's centre is. RangeInput.tsx sets --fill (the
+ * value as a 0-1 fraction) on the input; without it the track is simply unfilled.
+ */
 input[type='range'] {
   appearance: none;
   width: 100%;
@@ -208,7 +265,11 @@ input[type='range'] {
 input[type='range']::-webkit-slider-runnable-track {
   height: 0.375rem;
   border-radius: 999px;
-  background: var(--control-border);
+  background: linear-gradient(
+    to right,
+    var(--accent) calc(0.75rem + (100% - 1.5rem) * var(--fill, 0)),
+    var(--control-border) calc(0.75rem + (100% - 1.5rem) * var(--fill, 0))
+  );
 }
 
 input[type='range']::-webkit-slider-thumb {
@@ -378,9 +439,14 @@ main > p {
     color: HighlightText;
   }
 
-  /* The current nav item: a system-colour border, since fills are replaced. */
-  .screen-nav [aria-current='page'] {
+  /* The current nav item: the same system-colour fill as a selected chip, since our fills are replaced. */
+  .screen-nav [aria-current='page'],
+  .screen-nav [aria-current='page']:hover:not(:disabled),
+  .screen-nav [aria-current='page']:focus-visible {
+    forced-color-adjust: none;
+    background: Highlight;
     border-color: Highlight;
+    color: HighlightText;
   }
 
   /* The custom slider is background-only: give it back the native one. */
@@ -457,19 +523,28 @@ main > p {
 
 .account-confirm {
   flex-basis: 100%;
+  box-sizing: border-box;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.75rem;
   padding: 1rem;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--control-border);
   border-radius: 1rem;
   color: var(--text);
   font-size: 0.9375rem;
+  text-align: start;
 }
 
 .account-confirm p {
   flex-basis: 100%;
+  margin: 0;
+}
+
+/* Two full-width 44 px targets side by side, stacked when 360 px can't fit both. */
+.account-confirm button {
+  flex: 1 1 10rem;
+  min-height: 2.75rem;
 }
 
 /* Settings */
@@ -504,6 +579,17 @@ main > p {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 1rem;
+}
+
+.settings fieldset.field {
+  margin: 0;
+  min-width: 0;
+}
+
+.settings fieldset.field legend {
+  padding: 0 0.25rem;
+  font-size: 0.9375rem;
+  color: var(--muted);
 }
 
 .settings .field > label:has(input[type='checkbox']) {

@@ -28,6 +28,7 @@ DEFAULTS = {
     "default_reminder_minutes": None,
     "pomodoro_config": None,
     "last_tag": None,
+    "theme": "system",
 }
 POMODORO = {
     "focus_minutes": 50,
@@ -98,6 +99,7 @@ def test_ac12_1_to_12_4_round_trip(client: TestClient) -> None:
         "background_volume": 100,
         "keep_screen_awake": True,
         "default_reminder_minutes": 45,
+        "theme": "light",
     }
     r = client.patch("/api/settings", json=patch)
     assert r.status_code == 200
@@ -139,6 +141,9 @@ def test_updated_at_moves_on_update(client: TestClient) -> None:
         {"keep_screen_awake": None},
         {"default_reminder_minutes": 20},
         {"default_reminder_minutes": 0},
+        {"theme": "sepia"},
+        {"theme": None},
+        {"theme": "Dark"},
         {"unknown": 1},
     ],
 )

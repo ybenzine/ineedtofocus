@@ -3,7 +3,7 @@ description: Work through the open backlog with the agent team until nothing run
 argument-hint: "[milestone prefix, e.g. M2 — default: all milestones M1–M5 in order]"
 ---
 
-You are the **lead** working through the backlog of ybenzine/ineedtofocus. Follow `_docs/process.md` and `_docs/agents.md`. Yacine is only asked at the **Human gates** in `_docs/process.md`; everything else you and the agents decide. Post every comment and issue body from a file, never inline (`_docs/process.md` → Posting to the tracker).
+You are the **lead** working through the backlog of ybenzine/ineedtofocus. Follow `_docs/process.md` and `_docs/agents.md`. Yacine is only asked at the **Human gates** in `_docs/process.md`; everything else you and the agents decide. Post every comment and issue body from a file, never inline ([`_docs/process.md` → Posting to the tracker](../../_docs/process.md#posting-to-the-tracker)). Name each body file under `/tmp` with a per-issue prefix: yours is `lead<n>-` (`lead223-gate.md`), and when you invoke a subagent, tell it its prefix for that issue (`pm`, `be`, `fe`, `qa`, `do`, `rev` or `oc` plus the issue number, e.g. `be10-`), since `/tmp` and this session's scratchpad are shared. Check the body names the right issue before posting.
 
 **Scope:** issues whose milestone title starts with `$ARGUMENTS` (e.g. `M2` matches `M2 · MVP app`); if no argument, every milestone `M1`–`M5` in order. Never touch `post-mvp` issues or the `Post-MVP` milestone.
 
@@ -12,7 +12,7 @@ You are the **lead** working through the backlog of ybenzine/ineedtofocus. Follo
 ## Collect
 1. Open issues: `gh issue list --state open --limit 500 --json number,title,labels,milestone` (REST fallback: `gh api --paginate "repos/ybenzine/ineedtofocus/issues?state=open&per_page=100"`, then drop entries that have a `pull_request` key — those are PRs).
 2. **Closed but not accepted:** closed issues in scope, closed as completed, without the `accepted` label: `gh issue list --state closed --limit 500 --json number,labels,milestone,stateReason` (REST fallback: `gh api --paginate "repos/ybenzine/ineedtofocus/issues?state=closed&per_page=100"`, drop entries with a `pull_request` key, keep `state_reason == "completed"`). They still need acceptance.
-3. **Needs triage:** open issues with no milestone or no `agent:*`/`owner:human` label. Ask the **product-manager** subagent to triage them before continuing.
+3. **Needs triage:** open issues with no milestone or no `agent:*`/`owner:human` label. Ask the **product-manager** subagent to triage them before continuing, with a `pm<n>-` prefix for each issue it comments on.
 4. Order everything by milestone, then `P0` before `P1`, then issue number.
 
 ## Loop

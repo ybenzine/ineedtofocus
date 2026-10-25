@@ -12,6 +12,14 @@ class Tag(StrEnum):
     EXERCISE = "exercise"
 
 
+class Theme(StrEnum):
+    """Colour theme (#214); "system" follows the device's light/dark setting."""
+
+    SYSTEM = "system"
+    DARK = "dark"
+    LIGHT = "light"
+
+
 class Mode(StrEnum):
     COUNTDOWN = "countdown"
     POMODORO = "pomodoro"
@@ -24,6 +32,7 @@ class Status(StrEnum):
 
 
 TAGS: tuple[str, ...] = tuple(t.value for t in Tag)
+THEMES: tuple[str, ...] = tuple(t.value for t in Theme)
 MODES: tuple[str, ...] = tuple(m.value for m in Mode)
 STATUSES: tuple[str, ...] = tuple(s.value for s in Status)
 

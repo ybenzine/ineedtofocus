@@ -6,8 +6,12 @@ import { LocalActiveSessionStore, TimerController } from '../timer/index.ts'
 import { ACTIVE_SESSION_KEY } from '../timer/store.ts'
 import AccountBar from './AccountBar.tsx'
 import { useAccount } from './AccountContext.tsx'
-import { AuthError, type AuthApi, type User } from './api.ts'
-import AuthGate, { OFFLINE_SIGN_OUT_NOTICE } from './AuthGate.tsx'
+import { AuthError, httpAuthApi, SIGNOUT_TIMEOUT_MS, type AuthApi, type User } from './api.ts'
+import AuthGate, {
+  OFFLINE_SIGN_OUT_MESSAGE,
+  OFFLINE_SIGN_OUT_NOTICE,
+  SERVER_SIGN_OUT_MESSAGE,
+} from './AuthGate.tsx'
 import {
   OWNER_KEY,
   hasActiveTimer,
@@ -205,7 +209,9 @@ describe('AuthGate', () => {
     renderGate(makeApi())
     await screen.findByRole('heading', { name: 'Sign in' })
     fireEvent.click(screen.getByRole('button', { name: 'Create an account' }))
-    expect(screen.getByRole('heading', { name: 'Create your account' })).toHaveFocus()
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Create your account' })).toHaveFocus(),
+    )
     expect(screen.getByLabelText('Password')).toHaveAttribute('aria-describedby', 'password-hint')
     fill('a@b.co', 'short')
     fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
@@ -268,6 +274,15 @@ describe('sign out', () => {
     expect(sessionStorage.getItem('anything')).toBe('x')
   })
 
+  it('goes back to the System theme, so sign-in does not keep the last user choice (#214)', async () => {
+    const api = makeApi({ me: vi.fn().mockResolvedValue(user) })
+    document.documentElement.setAttribute('data-theme', 'light')
+    await signedIn(api)
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+    expect(document.documentElement).not.toHaveAttribute('data-theme')
+  })
+
   it('runs registered hooks: try to sync, count, then clear', async () => {
     const hook: LocalDataHook = {
       trySync: vi.fn().mockResolvedValue(undefined),
@@ -324,9 +339,11 @@ describe('sign out', () => {
     expect(
       await screen.findByText("1 session hasn't synced and will be deleted from this device."),
     ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    // Focus moves in an effect after the dialog renders: wait for it rather than assume it.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus())
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('button', { name: 'Sign out' })).toHaveFocus()
     expect(api.signOut).not.toHaveBeenCalled()
     expect(localStorage.getItem(ACTIVE_SESSION_KEY)).not.toBeNull()
     expect(localStorage.getItem(SETTINGS_KEY)).not.toBeNull()
@@ -459,6 +476,40 @@ describe('sign out', () => {
 })
 
 describe('offline sign out', () => {
+  it('treats the 10 s sign-out timeout as offline: clears data and queues the logout', async () => {
+    // A hung request: it ends only when the timeout signal fires. The signal is made by hand so
+    // the test controls the moment instead of waiting 10 s.
+    const timeout = new AbortController()
+    const timeouts: number[] = []
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      timeouts.push(ms)
+      return timeout.signal
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(
+        (_path: string, init: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () =>
+              reject(new DOMException('', 'TimeoutError')),
+            )
+          }),
+      ),
+    )
+    renderGate({ ...httpAuthApi, me: vi.fn().mockResolvedValue(user) })
+    await screen.findByText('the timer app')
+    seedUserData()
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await waitFor(() => expect(timeouts).toEqual([SIGNOUT_TIMEOUT_MS]))
+    expect(SIGNOUT_TIMEOUT_MS).toBe(10000)
+    expect(localStorage.getItem(PENDING_LOGOUT_KEY)).toBeNull()
+    act(() => timeout.abort())
+    expect(await screen.findByText(OFFLINE_SIGN_OUT_NOTICE)).toBeInTheDocument()
+    expect(localStorage.getItem(PENDING_LOGOUT_KEY)).not.toBeNull()
+    expect(localStorage.getItem(SETTINGS_KEY)).toBeNull()
+    vi.restoreAllMocks()
+  })
+
   it('clears data, sets the marker and explains', async () => {
     const api = makeApi({
       me: vi.fn().mockResolvedValue(user),
@@ -559,6 +610,58 @@ describe('offline sign out', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
     expect(await screen.findByText('the timer app')).toBeInTheDocument()
     expect(order).toEqual(['logout', 'logout', 'logout', 'signin'])
+  })
+
+  it('runs the queued logout before a sign-up request too', async () => {
+    localStorage.setItem(PENDING_LOGOUT_KEY, '1')
+    const order: string[] = []
+    const signOut = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        order.push('logout')
+        return Promise.reject(offline)
+      })
+      .mockImplementation(() => {
+        order.push('logout')
+        return Promise.resolve()
+      })
+    const signUp = vi.fn().mockImplementation(() => {
+      order.push('signup')
+      return Promise.resolve(user)
+    })
+    renderGate(makeApi({ signOut, signUp }))
+    await screen.findByRole('heading', { name: 'Sign in' })
+    await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Create an account' }))
+    fill('a@b.co', 'password1')
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
+    expect(await screen.findByText('the timer app')).toBeInTheDocument()
+    expect(order).toEqual(['logout', 'logout', 'signup'])
+  })
+
+  it('says the server could not be reached, not "connect to the internet", after a 5xx', async () => {
+    localStorage.setItem(PENDING_LOGOUT_KEY, '1')
+    const signOut = vi.fn().mockRejectedValue(new AuthError('server', 'down'))
+    const signIn = vi.fn().mockResolvedValue(user)
+    renderGate(makeApi({ signOut, signIn }))
+    await screen.findByRole('heading', { name: 'Sign in' })
+    await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
+    fill('a@b.co', 'password1')
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByText(SERVER_SIGN_OUT_MESSAGE)).toBeInTheDocument()
+    expect(screen.queryByText(/internet/)).not.toBeInTheDocument()
+    expect(signIn).not.toHaveBeenCalled()
+  })
+
+  it('keeps asking to connect to the internet when the device is offline', async () => {
+    localStorage.setItem(PENDING_LOGOUT_KEY, '1')
+    const signIn = vi.fn().mockResolvedValue(user)
+    renderGate(makeApi({ signOut: vi.fn().mockRejectedValue(offline), signIn }))
+    await screen.findByRole('heading', { name: 'Sign in' })
+    fill('a@b.co', 'password1')
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByText(OFFLINE_SIGN_OUT_MESSAGE)).toBeInTheDocument()
+    expect(signIn).not.toHaveBeenCalled()
   })
 })
 

@@ -3,6 +3,7 @@
 
 import { useState } from 'react'
 import { type AlertPlayer } from './alerts.ts'
+import RangeInput from '../RangeInput.tsx'
 
 export interface SoundPreviewProps {
   /** Owns the alert volume, so the slider and the playback can't disagree. */
@@ -25,8 +26,7 @@ export default function SoundPreview({ player, volume }: SoundPreviewProps) {
       <h2 id="alert-sounds-heading">Alert sounds</h2>
       <label>
         Alert volume
-        <input
-          type="range"
+        <RangeInput
           min={0}
           max={100}
           step={1}

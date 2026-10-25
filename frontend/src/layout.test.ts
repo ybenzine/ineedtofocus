@@ -2,10 +2,11 @@
 // The real check is a browser run at 360 x 740: document.documentElement.scrollWidth must equal 360.
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-// Vitest runs from frontend/ (the npm script's cwd).
-const css = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf8')
+// Resolved from this file, not the cwd, so it works however Vitest is started.
+const css = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'index.css'), 'utf8')
 
 function rule(selector: string): string {
   const match = css.match(new RegExp(`(?:^|\\n)${selector.replace('.', '\\.')}\\s*\\{([^}]*)\\}`))

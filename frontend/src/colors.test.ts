@@ -1,5 +1,7 @@
-// Pins the "Dusk 5°" design tokens (#213): the values, WCAG contrast of every text and control
-// pair (text 4.5:1, control borders 3:1), and that no colour literal lives outside `:root`.
+// Pins the design tokens: the dark "Dusk 5°" set (#213) and the light set that mirrors it (#214).
+// Checks the values, the WCAG contrast of every text and control pair in BOTH sets (text 4.5:1,
+// control borders 3:1), the shared hue family, how the sets are selected, and that no colour
+// literal lives outside the token blocks.
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -8,11 +10,14 @@ import { join, resolve } from 'node:path'
 const root = process.cwd()
 const css = readFileSync(resolve(root, 'src/index.css'), 'utf8')
 
+function rgb(hex: string): [number, number, number] {
+  return [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number]
+}
+
 function luminance(hex: string): number {
-  const [r, g, b] = [1, 3, 5].map((i) => {
-    const c = parseInt(hex.slice(i, i + 2), 16) / 255
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
-  }) as [number, number, number]
+  const [r, g, b] = rgb(hex).map((c) =>
+    c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4,
+  ) as [number, number, number]
   return 0.2126 * r + 0.7152 * g + 0.0722 * b
 }
 
@@ -21,27 +26,67 @@ function contrast(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05)
 }
 
-/** The `:root { ... }` block, where the tokens (the only colour literals) are defined. */
-const rootBlock = css.match(/:root\s*\{([^}]*)\}/)?.[1] ?? ''
-
-function tokens(): Record<string, string> {
-  const found: Record<string, string> = {}
-  for (const m of rootBlock.matchAll(/--([a-z-]+):\s*(#[0-9a-f]{6})\b/gi)) {
-    found[m[1] as string] = (m[2] as string).toLowerCase()
-  }
-  return found
+/** HSL hue in degrees, or null for greys. */
+function hue(hex: string): number | null {
+  const [r, g, b] = rgb(hex)
+  const max = Math.max(r, g, b)
+  const d = max - Math.min(r, g, b)
+  if (d === 0) return null
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4
+  return Math.round((h * 60 + 360) % 360)
 }
 
-const t = tokens()
-function tok(name: string): string {
-  const value = t[name]
-  if (!value) throw new Error(`token --${name} not found in :root`)
+type TokenSet = Record<string, string>
+
+function tk(set: TokenSet, name: string): string {
+  const value = set[name]
+  if (!value) throw new Error(`token --${name} missing`)
   return value
 }
 
-describe('design tokens (#213)', () => {
-  it('defines exactly the Dusk 5° palette once, in :root', () => {
-    expect(t).toEqual({
+/** Every token block: a rule whose selector starts at `:root`. */
+const blocks = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/(:root[^{}]*)\{([^}]*)\}/g)].map(
+  (m) => {
+    const tokens: TokenSet = {}
+    for (const t of (m[2] as string).matchAll(/--([a-z-]+):\s*(#[0-9a-f]{6})\b/gi)) {
+      tokens[t[1] as string] = (t[2] as string).toLowerCase()
+    }
+    return {
+      selector: (m[1] as string).trim(),
+      tokens,
+      scheme: (m[2] as string).match(/color-scheme:\s*(\w+)\s*;/)?.[1],
+    }
+  },
+)
+
+function block(selector: string) {
+  const found = blocks.find((b) => b.selector === selector)
+  if (!found) throw new Error(`no ${selector} block in index.css`)
+  return found
+}
+
+const DARK_SELECTORS = [':root', ':root:has(main.focus-screen)']
+const LIGHT_SELECTORS = [":root:not([data-theme='dark'])", ":root[data-theme='light']"]
+
+const DARK: TokenSet = block(':root').tokens
+const LIGHT: TokenSet = block(":root[data-theme='light']").tokens
+
+const NAMES = [
+  'bg',
+  'surface',
+  'border',
+  'control-border',
+  'text',
+  'muted',
+  'accent',
+  'accent-hover',
+  'on-accent',
+  'error',
+]
+
+describe('design tokens (#213, #214)', () => {
+  it('defines exactly the Dusk 5° dark palette', () => {
+    expect(DARK).toEqual({
       bg: '#11112a',
       surface: '#1b1b3c',
       border: '#33336a',
@@ -53,23 +98,81 @@ describe('design tokens (#213)', () => {
       'on-accent': '#0d0d33',
       error: '#ff8a80',
     })
-    expect(css.match(/:root\s*\{/g)).toHaveLength(1)
   })
 
-  it('is a dark colour scheme', () => {
-    expect(rootBlock).toMatch(/color-scheme:\s*dark\s*;/)
+  it('defines the light palette', () => {
+    expect(LIGHT).toEqual({
+      bg: '#eeeefa',
+      surface: '#fbfbff',
+      border: '#d3d3ec',
+      'control-border': '#6c6cae',
+      text: '#14143a',
+      muted: '#4a4a7c',
+      accent: '#4146d1',
+      'accent-hover': '#2a2ea8',
+      'on-accent': '#fafaff',
+      error: '#b3261e',
+    })
+  })
+
+  it('the light set mirrors every token of the dark set', () => {
+    expect(Object.keys(DARK).sort()).toEqual([...NAMES].sort())
+    expect(Object.keys(LIGHT).sort()).toEqual([...NAMES].sort())
+  })
+
+  it('every place a set is applied carries the same values', () => {
+    for (const selector of DARK_SELECTORS) expect(block(selector).tokens, selector).toEqual(DARK)
+    for (const selector of LIGHT_SELECTORS) expect(block(selector).tokens, selector).toEqual(LIGHT)
+    expect(blocks).toHaveLength(DARK_SELECTORS.length + LIGHT_SELECTORS.length)
+  })
+
+  it('declares the matching color-scheme with each set', () => {
+    for (const selector of DARK_SELECTORS) expect(block(selector).scheme, selector).toBe('dark')
+    for (const selector of LIGHT_SELECTORS) expect(block(selector).scheme, selector).toBe('light')
+  })
+
+  it('the light set follows the device only while the user has not chosen Dark', () => {
+    expect(css).toMatch(
+      /@media \(prefers-color-scheme: light\)\s*\{\s*:root:not\(\[data-theme='dark'\]\)\s*\{/,
+    )
+  })
+
+  it('the timer and summary screens stay dark in every mode (AC9.1)', () => {
+    // After the light rules, and more specific than all of them, so it always wins.
+    const forced = css.indexOf(':root:has(main.focus-screen) {')
+    expect(forced).toBeGreaterThan(css.indexOf(":root[data-theme='light'] {"))
+  })
+
+  it('keeps the blue-leaning hue family in both sets (errors are red)', () => {
+    for (const [name, set] of [
+      ['dark', DARK],
+      ['light', LIGHT],
+    ] as const) {
+      for (const [token, value] of Object.entries(set)) {
+        if (token === 'error') continue
+        const h = hue(value)
+        if (h === null) continue // a grey has no hue
+        expect(h, `${name} --${token}`).toBeGreaterThanOrEqual(225)
+        expect(h, `${name} --${token}`).toBeLessThanOrEqual(255)
+      }
+    }
   })
 
   it('sets the page chrome to the background token', () => {
     const html = readFileSync(resolve(root, 'index.html'), 'utf8')
-    expect(html).toContain(`<meta name="theme-color" content="${tok('bg')}"`)
+    expect(html).toContain(`content="${DARK['bg']}" media="(prefers-color-scheme: dark)"`)
+    expect(html).toContain(`content="${LIGHT['bg']}" media="(prefers-color-scheme: light)"`)
     const vite = readFileSync(resolve(root, 'vite.config.ts'), 'utf8')
-    expect(vite).toContain(`background_color: '${tok('bg')}'`)
-    expect(vite).toContain(`theme_color: '${tok('bg')}'`)
+    // The installed app's splash and title bar can't switch, so they stay on the dark reference.
+    expect(vite).toContain(`background_color: '${DARK['bg']}'`)
+    expect(vite).toContain(`theme_color: '${DARK['bg']}'`)
   })
 })
 
-describe('text contrast is at least 4.5:1 (WCAG AA)', () => {
+describe.each([
+  ['dark', DARK],
+  ['light', LIGHT],
+])('%s set: text contrast is at least 4.5:1 (WCAG AA)', (_name, set) => {
   const pairs: [string, string, string][] = [
     ['text', 'bg', 'body text on the page'],
     ['text', 'surface', 'body text on cards'],
@@ -85,29 +188,39 @@ describe('text contrast is at least 4.5:1 (WCAG AA)', () => {
     ['error', 'surface', 'error text on cards'],
   ]
   it.each(pairs)('%s on %s (%s)', (fg, bg) => {
-    expect(contrast(tok(fg), tok(bg))).toBeGreaterThanOrEqual(4.5)
-  })
-
-  it('matches the ratios in the design table', () => {
-    expect(contrast(tok('text'), tok('bg'))).toBeCloseTo(15.8, 0)
-    expect(contrast(tok('muted'), tok('bg'))).toBeCloseTo(8.3, 0)
-    expect(contrast(tok('accent'), tok('bg'))).toBeCloseTo(7.3, 0)
-    expect(contrast(tok('on-accent'), tok('accent'))).toBeCloseTo(7.4, 0)
-    expect(contrast(tok('error'), tok('bg'))).toBeCloseTo(8.1, 0)
+    expect(contrast(set[fg] as string, set[bg] as string)).toBeGreaterThanOrEqual(4.5)
   })
 })
 
-describe('control borders and focus are at least 3:1 (WCAG 1.4.11)', () => {
+describe('the dark ratios match the design table (#213)', () => {
+  it('matches', () => {
+    expect(contrast(tk(DARK, 'text'), tk(DARK, 'bg'))).toBeCloseTo(15.8, 0)
+    expect(contrast(tk(DARK, 'muted'), tk(DARK, 'bg'))).toBeCloseTo(8.3, 0)
+    expect(contrast(tk(DARK, 'accent'), tk(DARK, 'bg'))).toBeCloseTo(7.3, 0)
+    expect(contrast(tk(DARK, 'on-accent'), tk(DARK, 'accent'))).toBeCloseTo(7.4, 0)
+    expect(contrast(tk(DARK, 'error'), tk(DARK, 'bg'))).toBeCloseTo(8.1, 0)
+  })
+})
+
+describe.each([
+  ['dark', DARK],
+  ['light', LIGHT],
+])('%s set: control borders and focus are at least 3:1 (WCAG 1.4.11)', (_name, set) => {
   it.each(['bg', 'surface'])('control border on %s', (bg) => {
-    expect(contrast(tok('control-border'), tok(bg))).toBeGreaterThanOrEqual(3)
+    expect(contrast(tk(set, 'control-border'), tk(set, bg))).toBeGreaterThanOrEqual(3)
   })
   it.each(['bg', 'surface'])('the focus ring (accent) on %s', (bg) => {
-    expect(contrast(tok('accent'), tok(bg))).toBeGreaterThanOrEqual(3)
+    expect(contrast(tk(set, 'accent'), tk(set, bg))).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe('the focus ring', () => {
+  it('is drawn in the accent', () => {
     expect(css).toMatch(/:focus-visible\s*\{\s*outline:\s*3px solid var\(--accent\)/)
   })
 })
 
-describe('no colour literals outside :root (#213)', () => {
+describe('no colour literals outside the token blocks (#213, #214)', () => {
   // Every CSS named colour plus the system colours; `transparent`, `currentColor` and `inherit` are fine.
   const NAMED =
     'aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen'.split(
@@ -146,7 +259,7 @@ describe('no colour literals outside :root (#213)', () => {
   function offenders(source: string): string[] {
     const clean = source
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/:root\s*\{[^}]*\}/, '')
+      .replace(/:root[^{}]*\{[^}]*\}/g, '')
       .replace(/@font-face\s*\{[^}]*\}/g, '')
     const forced = [...clean.matchAll(FORCED)].map((m) => m[1] ?? '').join('\n')
     const rest = clean.replace(FORCED, '')
@@ -164,6 +277,25 @@ describe('no colour literals outside :root (#213)', () => {
 
   it('index.css uses only var(--token) for colours, in any property', () => {
     expect(offenders(css)).toEqual([])
+  })
+
+  /** Source without block and line comments, where issue references like (#120) look like hex colours. */
+  function withoutComments(source: string): string {
+    return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[\s;,{}()])\/\/.*$/gm, '$1')
+  }
+
+  it('ignores issue references in comments but still catches real colours in code', () => {
+    const comments = '// see #120 and (#214)\n/* fixes #152 */\nconst a = 1 // after code #131\n'
+    expect(FUNCTIONS.test(withoutComments(comments))).toBe(false)
+    expect(FUNCTIONS.test(withoutComments("const style = { color: '#fff' } // #120"))).toBe(true)
+    expect(FUNCTIONS.test(withoutComments("const c = '#123'\n// #120"))).toBe(true)
+    expect(FUNCTIONS.test(withoutComments("const u = 'https://x.example/#abc'"))).toBe(true)
+    expect(FUNCTIONS.test(withoutComments('const c = rgb(1 2 3) // note'))).toBe(true)
+  })
+
+  it('the CSS guard ignores issue references in comments but catches real hex colours', () => {
+    expect(offenders('/* see #120 */ a { color: var(--text); }')).toEqual([])
+    expect(offenders('a { color: #120; } /* #120 */')).toHaveLength(1)
   })
 
   it('the guard catches what it should', () => {
@@ -204,7 +336,7 @@ describe('no colour literals outside :root (#213)', () => {
     const styleValue =
       /\b(?:color|background|backgroundColor|borderColor|border|outline|fill|stroke|boxShadow|textShadow)\s*:\s*(['"`])(.*?)\1/g
     for (const file of files) {
-      const source = readFileSync(file, 'utf8')
+      const source = withoutComments(readFileSync(file, 'utf8'))
       expect(FUNCTIONS.test(source), file).toBe(false)
       for (const m of source.matchAll(styleValue)) {
         expect(namedIn(m[2] ?? ''), `${file}: ${m[0]}`).toEqual([])

@@ -23,7 +23,7 @@ from sqlalchemy.dialects.postgresql import insert
 from app.deps import CurrentUser, DbSession
 from app.errors import ErrorResponse
 from app.models import UserSettings, YoutubeRecentLink
-from app.models.enums import Tag
+from app.models.enums import Tag, Theme
 
 router = APIRouter(prefix="/api", tags=["settings"])
 
@@ -60,6 +60,7 @@ class SettingsOut(BaseModel):
     default_reminder_minutes: ReminderMinutes | None = Field(description="null = Off")
     pomodoro_config: PomodoroConfig | None = Field(description="null until first use")
     last_tag: Tag | None = Field(description="null means Work (AC7.2)")
+    theme: Theme = Field(description="system follows the device's light/dark setting (#214)")
     updated_at: datetime
 
 
@@ -83,6 +84,7 @@ class SettingsPatch(BaseModel):
     default_reminder_minutes: ReminderMinutes | None = None
     pomodoro_config: PomodoroConfig | None = None
     last_tag: Tag | None = None
+    theme: Theme = Theme.SYSTEM
 
 
 def _to_out(row: UserSettings) -> SettingsOut:
@@ -96,6 +98,7 @@ def _to_out(row: UserSettings) -> SettingsOut:
             PomodoroConfig.model_validate(row.pomodoro_config) if row.pomodoro_config else None
         ),
         last_tag=Tag(row.last_tag) if row.last_tag else None,
+        theme=Theme(row.theme),
         updated_at=row.updated_at,
     )
 
@@ -136,6 +139,8 @@ async def update_settings(body: SettingsPatch, user: CurrentUser, db: DbSession)
             value = body.pomodoro_config.model_dump() if body.pomodoro_config else None
         elif name == "last_tag":
             value = body.last_tag.value if body.last_tag else None
+        elif name == "theme":
+            value = body.theme.value
         setattr(row, name, value)
     row.updated_at = func.now()
     await db.commit()

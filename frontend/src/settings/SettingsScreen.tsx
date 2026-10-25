@@ -1,4 +1,4 @@
-// Settings (F12): week start, alert and background volume, keep screen awake, default reminder.
+// Settings (F12): appearance, week start, alert and background volume, keep screen awake, default reminder.
 // Every change is applied and saved on the device at once and synced when online (AC13.3).
 
 import { useId } from 'react'
@@ -6,8 +6,15 @@ import SoundPreview from '../sounds/SoundPreview.tsx'
 import type { AlertPlayer } from '../sounds/alerts.ts'
 import { REMINDER_OPTIONS } from '../timer/index.ts'
 import { wakeLockSupported } from '../timerscreen/wakeLock.ts'
-import type { ReminderSetting } from './api.ts'
+import type { ReminderSetting, ThemeSetting } from './api.ts'
 import { useSettingsState, useSettingsStore } from './SettingsContext.ts'
+import RangeInput from '../RangeInput.tsx'
+
+const THEME_CHOICES: { value: ThemeSetting; label: string }[] = [
+  { value: 'system', label: 'System (default)' },
+  { value: 'dark', label: 'Dark' },
+  { value: 'light', label: 'Light' },
+]
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
@@ -46,9 +53,8 @@ export default function SettingsScreen({ player }: { player: AlertPlayer }) {
 
       <div className="field">
         <label htmlFor={`${id}-bg`}>Background audio volume</label>
-        <input
+        <RangeInput
           id={`${id}-bg`}
-          type="range"
           min={0}
           max={100}
           step={1}
@@ -95,6 +101,27 @@ export default function SettingsScreen({ player }: { player: AlertPlayer }) {
           ))}
         </select>
       </div>
+
+      <fieldset className="field">
+        <legend>Appearance</legend>
+        <div className="choices">
+          {THEME_CHOICES.map(({ value, label }) => (
+            <label key={value} className="choice">
+              <input
+                type="radio"
+                name={`${id}-theme`}
+                value={value}
+                checked={values.theme === value}
+                onChange={() => store.update({ theme: value })}
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+        <p className="field-hint">
+          System follows this device&apos;s light or dark setting. The timer is always dark.
+        </p>
+      </fieldset>
 
       <p role="status" className="field-hint">
         {waiting ? "Saved on this device. It will sync when you're back online." : ''}

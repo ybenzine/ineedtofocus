@@ -616,6 +616,14 @@ def test_the_review_prompt_never_posts() -> None:
     assert "/tmp/oncall/review.md" in text and "/tmp/oncall/review.json" in text
 
 
+def test_the_reviewer_definition_keeps_the_on_call_review_files() -> None:
+    # oncall.yml runs `claude -p --agent reviewer`, which loads this definition.
+    # Its per-issue `rev<n>-` naming must not override the files the job uploads.
+    text = (o.REPO / ".claude" / "agents" / "reviewer.md").read_text()
+    assert "In the on-call workflow, write the files your prompt names" in text
+    assert "`/tmp/oncall/review.md`, `review.json`" in text
+
+
 @pytest.mark.parametrize(
     ("verdict", "body", "expected"),
     [

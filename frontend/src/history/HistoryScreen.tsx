@@ -6,7 +6,7 @@ import { HttpArchiveApi, type ArchiveApi } from '../archive/api.ts'
 import { useSettingsState } from '../settings/SettingsContext.ts'
 import { GOAL_MAX_LENGTH } from '../setup/options.ts'
 import { HttpSessionsApi, type SessionEdit, type SessionsApi } from '../sync/api.ts'
-import { reconcileMissing } from '../sync/reconcile.ts'
+import { clearArchivedOnDevice, reconcileMissing } from '../sync/reconcile.ts'
 import type { SessionStore } from '../sync/sessionStore.ts'
 import type { SyncEngine } from '../sync/syncEngine.ts'
 import { TAGS, type Tag } from '../timer/config.ts'
@@ -30,6 +30,7 @@ import {
   formatTime,
   localDate,
   mergeSessions,
+  listedAsLive,
   missingFromServer,
   oneLine,
   periodFor,
@@ -104,12 +105,21 @@ export default function HistoryScreen({
   const weekStart = values.week_start_day
   const heading = useRef<HTMLHeadingElement>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [undo, setUndo] = useState<string | null>(null)
+  // The archive to undo; `deviceOnly` for a rejected session, which only this device has.
+  const [undo, setUndo] = useState<{ id: string; deviceOnly: boolean } | null>(null)
   const [problem, setProblem] = useState('')
   const undoButton = useRef<HTMLButtonElement>(null)
   const mounted = useRef(true)
   // Sessions being archived: left out of every answer until the server has confirmed or refused.
   const archiving = useRef(new Set<string>())
+  // Archived on this screen (confirmed) and not undone since: a server answer read before that
+  // may still list the session, and must not clear the mark.
+  const archivedHere = useRef(new Set<string>())
+  // Undo started on this screen: a reconcile still in flight must not mark the session archived
+  // after Undo's own write.
+  const restored = useRef(new Set<string>())
+  const isSkipped = (id: string) =>
+    archiving.current.has(id) || archivedHere.current.has(id) || restored.current.has(id)
   // Read by the load effect without re-running it when a caller passes a fresh object.
   const archiveApiRef = useRef(archiveApi)
   useEffect(() => {
@@ -186,6 +196,7 @@ export default function HistoryScreen({
           status: d.record.status,
           indicator: d.indicator,
           unsaved: d.syncState !== 'synced',
+          rejected: d.syncState === 'rejected',
         } satisfies HistorySession,
         archived: d.archivedAt !== null,
         // Selected by upload state, not by the badge: a synced session with a queued edit also
@@ -200,7 +211,11 @@ export default function HistoryScreen({
       const changes = new Map<string, SessionChange>()
       for (const d of local) {
         if (d.editState !== null && d.edit !== null && d.archivedAt === null) {
-          changes.set(d.record.id, { ...d.edit, indicator: d.indicator })
+          changes.set(d.record.id, {
+            ...d.edit,
+            indicator: d.indicator,
+            editRejected: d.editState === 'rejected',
+          })
         }
       }
       const unsynced = alive.filter((d) => d.notUploaded).map((d) => d.session)
@@ -219,9 +234,19 @@ export default function HistoryScreen({
             query.tags,
             archiving.current,
           )
-          void reconcileMissing(sessions, archiveApiRef.current, owner, missing).catch(
+          void reconcileMissing(sessions, archiveApiRef.current, owner, missing, isSkipped).catch(
             () => undefined,
           )
+          // Restored on another device: the server lists it as live again.
+          void clearArchivedOnDevice(
+            sessions,
+            owner,
+            listedAsLive(
+              result.value,
+              local.map((d) => ({ id: d.record.id, archived: d.archivedAt !== null })),
+            ),
+            isSkipped,
+          ).catch(() => undefined)
         }
         setLoad({
           kind: 'ready',
@@ -348,6 +373,7 @@ export default function HistoryScreen({
     setEditingId(null)
     const gone = new Set([session.id])
     archiving.current.add(session.id)
+    restored.current.delete(session.id)
     setLoad({ ...load, data: removeSessions(load.data, gone) })
     // The cache is left alone until the server confirms: `archiving` keeps the session out of
     // every answer meanwhile, and a failed archive (offline) must not wipe what's cached for
@@ -377,22 +403,77 @@ export default function HistoryScreen({
     if (owner !== null) {
       await sessions?.setArchived(owner, session.id, result.value).catch(() => undefined)
     }
+    archivedHere.current.add(session.id)
     archiving.current.delete(session.id)
     for (const [key, data] of cache.current) cache.current.set(key, removeSessions(data, gone))
-    setUndo(session.id)
+    setUndo({ id: session.id, deviceOnly: false })
+    setReload((n) => n + 1)
+  }
+
+  /**
+   * A session the server rejected can never be archived there. Archive it on this device only:
+   * out of History and totals at once, nothing sent, offline included.
+   */
+  async function archiveOnDevice(session: HistorySession) {
+    if (load.kind !== 'ready' || owner === null || !sessions) return
+    setProblem('')
+    setUndo(null)
+    setEditingId(null)
+    setLoad({ ...load, data: removeSessions(load.data, new Set([session.id])) })
+    try {
+      await sessions.archiveOnDevice(owner, session.id)
+    } catch {
+      setReload((n) => n + 1)
+      setProblem('Couldn’t archive the session on this device. Try again.')
+      return
+    }
+    if (!mounted.current) return
+    setUndo({ id: session.id, deviceOnly: true })
+    setReload((n) => n + 1)
+  }
+
+  async function discardChange(session: HistorySession) {
+    if (owner === null || !sessions) return
+    setProblem('')
+    try {
+      await sessions.discardEdit(owner, session.id)
+    } catch {
+      setProblem('Couldn’t discard the change. Try again.')
+      return
+    }
+    if (!mounted.current) return
+    pendingFocus.current = session.id
     setReload((n) => n + 1)
   }
 
   async function undoArchive() {
     if (undo === null) return
     setProblem('')
-    const result = await archiveApi.restore(undo)
+    if (undo.deviceOnly) {
+      // Nothing was sent to the server, so nothing is sent to undo it.
+      if (owner === null || !sessions) return
+      try {
+        await sessions.restoreOnDevice(owner, undo.id)
+      } catch {
+        return setProblem('Couldn’t undo the archive. Try again.')
+      }
+      if (!mounted.current) return
+      setUndo(null)
+      setReload((n) => n + 1)
+      return
+    }
+    const id = undo.id
+    restored.current.add(id)
+    const result = await archiveApi.restore(id)
     if (!mounted.current) return
-    if (result.kind !== 'ok') return fail(result.kind, 'undo the archive')
+    if (result.kind !== 'ok') {
+      restored.current.delete(id)
+      return fail(result.kind, 'undo the archive')
+    }
+    archivedHere.current.delete(id)
     // Cleared before the next await, so the message is gone by the time the row is back.
-    const restored = undo
     setUndo(null)
-    if (owner !== null) await sessions?.setArchived(owner, restored, null).catch(() => undefined)
+    if (owner !== null) await sessions?.setArchived(owner, id, null).catch(() => undefined)
     cache.current.clear()
     setReload((n) => n + 1)
   }
@@ -485,7 +566,9 @@ export default function HistoryScreen({
       <div role="status" className="history-undo">
         {undo !== null && (
           <>
-            <span>Session archived.</span>{' '}
+            <span>
+              {undo.deviceOnly ? 'Session archived on this device only.' : 'Session archived.'}
+            </span>{' '}
             <button type="button" ref={undoButton} onClick={() => void undoArchive()}>
               Undo
             </button>
@@ -510,6 +593,8 @@ export default function HistoryScreen({
           onEdit={setEditingId}
           onSave={saveEdit}
           onArchive={archive}
+          onArchiveOnDevice={archiveOnDevice}
+          onDiscard={discardChange}
         />
       )}
     </section>
@@ -539,6 +624,8 @@ function Results({
   onEdit,
   onSave,
   onArchive,
+  onArchiveOnDevice,
+  onDiscard,
 }: {
   data: HistoryData
   offline: boolean
@@ -548,6 +635,8 @@ function Results({
   onEdit: (id: string | null) => void
   onSave: (session: HistorySession, change: SessionEdit) => Promise<void>
   onArchive: (session: HistorySession) => Promise<void>
+  onArchiveOnDevice: (session: HistorySession) => Promise<void>
+  onDiscard: (session: HistorySession) => Promise<void>
 }) {
   const unsynced = data.sessions.filter((s) => s.unsaved).length
   return (
@@ -614,6 +703,8 @@ function Results({
                   onCancel={() => onEdit(null)}
                   onSave={(change) => onSave(s, change)}
                   onArchive={() => void onArchive(s)}
+                  onArchiveOnDevice={() => void onArchiveOnDevice(s)}
+                  onDiscard={() => onDiscard(s)}
                 />
               ))}
             </ul>
@@ -662,6 +753,8 @@ interface SessionRowProps {
   onCancel: () => void
   onSave: (change: SessionEdit) => Promise<void>
   onArchive: () => void
+  onArchiveOnDevice: () => void
+  onDiscard: () => Promise<void>
 }
 
 function SessionRow({
@@ -672,8 +765,38 @@ function SessionRow({
   onCancel,
   onSave,
   onArchive,
+  onArchiveOnDevice,
+  onDiscard,
 }: SessionRowProps) {
   const label = `${formatDate(session.startedAt, timeZone)} ${formatTime(session.startedAt, timeZone)}`
+  const [discarding, setDiscarding] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const cancelDiscard = useRef<HTMLButtonElement>(null)
+  const discardButton = useRef<HTMLButtonElement>(null)
+  const returnFocus = useRef(false)
+  // The confirmation takes focus on Cancel (the default); closing it with Cancel or Escape hands
+  // focus back to the button that opened it. A confirmed discard leaves focus to the screen,
+  // which puts it on this row's Edit button once the list has reloaded.
+  useEffect(() => {
+    if (discarding) cancelDiscard.current?.focus()
+    else if (returnFocus.current) {
+      returnFocus.current = false
+      discardButton.current?.focus()
+    }
+  }, [discarding])
+  function closeDiscard() {
+    returnFocus.current = true
+    setDiscarding(false)
+  }
+  async function confirmDiscard() {
+    setBusy(true)
+    try {
+      await onDiscard()
+    } finally {
+      setBusy(false)
+      setDiscarding(false)
+    }
+  }
   return (
     <li className="history-row">
       <p className="history-row-when">
@@ -691,6 +814,29 @@ function SessionRow({
       {session.indicator === 'couldnt-sync' && (
         <p className="history-badge history-badge-error">Couldn’t sync</p>
       )}
+      {discarding && (
+        <div
+          role="alertdialog"
+          aria-label={`Discard change to session from ${label}`}
+          className="archive-confirm"
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') closeDiscard()
+          }}
+        >
+          <p>Discard this change? The session keeps its last synced tag and goal.</p>
+          <button type="button" ref={cancelDiscard} onClick={closeDiscard}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="danger"
+            disabled={busy}
+            onClick={() => void confirmDiscard()}
+          >
+            Discard change
+          </button>
+        </div>
+      )}
       {editing ? (
         <EditForm session={session} label={label} onCancel={onCancel} onSave={onSave} />
       ) : (
@@ -703,8 +849,31 @@ function SessionRow({
           >
             Edit
           </button>
-          {session.unsaved ? (
+          {session.editRejected && !discarding && (
+            <button
+              type="button"
+              ref={discardButton}
+              aria-label={`Discard change to session from ${label}`}
+              onClick={() => setDiscarding(true)}
+            >
+              Discard change
+            </button>
+          )}
+          {session.rejected ? (
+            <>
+              <button
+                type="button"
+                aria-label={`Archive session from ${label} on this device only`}
+                onClick={onArchiveOnDevice}
+              >
+                Archive on this device only
+              </button>
+              <span className="field-hint">The server didn’t accept this session.</span>
+            </>
+          ) : session.unsaved ? (
             <span className="field-hint">Can be archived once it has synced.</span>
+          ) : session.editRejected ? (
+            <span className="field-hint">Can be archived once the change is discarded.</span>
           ) : (
             <button type="button" aria-label={`Archive session from ${label}`} onClick={onArchive}>
               Archive
