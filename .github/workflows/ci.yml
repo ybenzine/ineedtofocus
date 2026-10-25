@@ -15,10 +15,14 @@
 #               Only on push to main, only after all five required jobs and `image` passed
 #               on that commit (`needs:`), with GITHUB_TOKEN limited to `packages: write`
 #               for this job. PRs (forks included) never push. No tag or release trigger
-#               publishes anything. Outputs the pushed digest.
+#               publishes anything. Outputs the pushed digest, and attests it (#128): a
+#               signed build provenance statement that ci.yml on refs/heads/main built
+#               those bytes from this commit. It's the only job with `id-token: write`
+#               and `attestations: write`.
 #   deploy-dev  (#28) deploys exactly that digest to focus-dev over SSH, then smoke-tests
 #               https://dev.ineedtofoc.us. `needs: publish`, so a red main never reaches
-#               dev. Runs in the `dev` environment, whose SSH key the server pins to the
+#               dev. Verifies the digest's attestation first, as deploy-prod.yml does
+#               (#128). Runs in the `dev` environment, whose SSH key the server pins to the
 #               forced command /opt/focus/bin/focus-ci dev (infra/server/focus-ci.sh).
 #               Skips with a notice while that environment's secrets aren't set. If the
 #               new release fails its checks after starting, the server starts the
@@ -296,6 +300,10 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Build provenance (#128): the OIDC token for the Sigstore signing certificate, and
+      # storing the attestation. No other job in any workflow gets either.
+      id-token: write
+      attestations: write
     outputs:
       # sha256:<64 hex>, what deploy-dev deploys and records (a re-push of the tag
       # can't change what this run deploys).
@@ -325,7 +333,6 @@ jobs:
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
           docker push "$IMAGE"
           digest=$(docker image inspect "$IMAGE" --format '{{ index .RepoDigests 0 }}')
-          docker logout ghcr.io
           [[ ${digest#*@} =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no digest for $IMAGE: $digest"; exit 1; }
           echo "digest=${digest#*@}" >> "$GITHUB_OUTPUT"
           {
@@ -335,6 +342,22 @@ jobs:
             echo "|---|---|"
             echo "| \`$IMAGE\` | \`$digest\` |"
           } >> "$GITHUB_STEP_SUMMARY"
+      # Build provenance (#128): a Sigstore-signed SLSA provenance statement for exactly
+      # the pushed digest, whose certificate names ci.yml, refs/heads/main and this
+      # commit. Stored in GitHub's attestation store and, with push-to-registry (using the
+      # login above), next to the image in GHCR. deploy-dev and deploy-prod.yml refuse a
+      # digest without it (`gh attestation verify`).
+      - name: Attest build provenance for the pushed digest
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/ybenzine/ineedtofocus
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false # storage records exist for organization-owned repositories only
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io
 
   deploy-dev:
     name: Deploy to dev
@@ -358,6 +381,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      attestations: read # gh attestation verify (#128)
     env:
       DEPLOY_HOST: 159.223.188.176
       DEV_URL: https://dev.ineedtofoc.us
@@ -386,6 +410,36 @@ jobs:
           msg="Not deployed: the dev environment has neither DEPLOY_SSH_KEY nor DEPLOY_KNOWN_HOSTS yet. The image is published; see _docs/deployment.md (Deploy to dev) for the one-time setup."
           echo "::notice title=Dev deploy skipped::$msg"
           printf '### Deploy to dev: skipped\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
+      # Before the key is even written: dev's releases.log only records bytes publish
+      # attested, so prod's check (deploy-prod.yml, the same script) never meets a digest
+      # dev ran without one. Keep the two `run` blocks identical (test_ci_workflow.py).
+      - name: Verify the image's build provenance (publish on main, this commit)
+        id: provenance
+        if: steps.config.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ $TAG =~ ^[0-9a-f]{40}$ && $DIGEST =~ ^sha256:[0-9a-f]{64}$ ]] ||
+            { echo "::error::bad tag or digest: '$TAG' '$DIGEST'"; exit 1; }
+          # Only an attestation of exactly these bytes, from this repository's attestation
+          # store, signed by ci.yml (its publish job) on a GitHub-hosted runner, for a push
+          # to main, at the commit being deployed. gh prints why it refused.
+          if ! built_by=$(gh attestation verify "oci://ghcr.io/ybenzine/ineedtofocus@$DIGEST" \
+            --repo ybenzine/ineedtofocus \
+            --signer-workflow ybenzine/ineedtofocus/.github/workflows/ci.yml \
+            --signer-digest "$TAG" \
+            --source-ref refs/heads/main \
+            --source-digest "$TAG" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --deny-self-hosted-runners \
+            --format json \
+            --jq '.[0].verificationResult.signature.certificate.runInvocationURI'); then
+            echo "::error title=Build provenance not verified::ghcr.io/ybenzine/ineedtofocus@$DIGEST has no valid attestation that .github/workflows/ci.yml built it on refs/heads/main from $TAG (gh's reason is above). Nothing was deployed."
+            exit 1
+          fi
+          [[ $built_by =~ ^https://github\.com/ybenzine/ineedtofocus/actions/runs/[0-9]+(/attempts/[0-9]+)?$ ]] || built_by=""
+          echo "Verified: ghcr.io/ybenzine/ineedtofocus@$DIGEST was built from $TAG by ${built_by:-a ci.yml run on main}"
+          echo "built_by=$built_by" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.config.outputs.configured == 'true'
         with:
@@ -442,6 +496,8 @@ jobs:
           DEPLOYED_AT: ${{ steps.record.outputs.deployed_at }}
           INFRA_REVISION: ${{ steps.record.outputs.infra_revision }}
           PREVIOUS_TAG: ${{ steps.record.outputs.previous_tag }}
+          PROVENANCE_OUTCOME: ${{ steps.provenance.outcome }}
+          BUILT_BY: ${{ steps.provenance.outputs.built_by }}
           DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
         run: |
@@ -453,10 +509,15 @@ jobs:
             echo "| URL | $DEV_URL |"
             echo "| Tag (commit) | \`$TAG\` |"
             echo "| Image | \`ghcr.io/ybenzine/ineedtofocus@$DIGEST\` |"
+            echo "| Build provenance | ${PROVENANCE_OUTCOME/success/verified}${BUILT_BY:+, built by $BUILT_BY} |"
             echo "| Deployed at (server, UTC) | ${DEPLOYED_AT:-not recorded} |"
             echo "| Previous tag (rollback target) | \`${PREVIOUS_TAG:-none}\` |"
             echo "| Infra revision on the server | \`${INFRA_REVISION:-unknown}\` |"
             echo ""
+            if [[ $PROVENANCE_OUTCOME == failure ]]; then
+              echo "Not deployed: the image has no valid build provenance attestation from publish on main for this commit (#128). See the verify step's log."
+              echo ""
+            fi
             if [[ $DEPLOY_OUTCOME == failure ]]; then
               echo "The deploy failed and the record is unchanged. If the new release failed its checks after starting, the server started the previous release again (automatic revert, #30): see the deploy step's log."
               echo ""
