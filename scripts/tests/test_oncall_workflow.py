@@ -211,8 +211,16 @@ def test_the_wrapper_checks_every_flag_it_passes() -> None:
     text = CLAUDE.read_text()
     (flags,) = re.findall(r"FLAGS=\(([^)]*)\)", text)
     checked = set(flags.split())
-    used = set(re.findall(r"(--[a-zA-Z-]+)", text.split("claude -p --agent", 1)[1]))
-    assert used <= checked | {"--agent"}, used - checked
+    # Every flag given to claude after the probe, comments and rule patterns aside.
+    code = "\n".join(
+        line.split(" #")[0]
+        for line in text.split("done\n", 1)[1].splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    code = re.sub(r"'[^']*'", "", code)
+    used = set(re.findall(r"(?<![\w-])(--[a-zA-Z][a-zA-Z-]*)", code))
+    assert "--agents" in used and "--allowedTools" in used, used
+    assert used <= checked, used - checked
     assert "--agent" in checked
     assert "--dangerously-skip-permissions" not in text and "bypassPermissions" not in text
     assert "--permission-mode dontAsk" in text
@@ -630,7 +638,7 @@ def test_simulated_review_session_that_leaves_nothing_says_why(
     assert calls(sim, "gh pr review") == [] and calls(sim, "gh pr merge") == []
     (not_merged,) = [b for _, b in sim.comments() if "didn't merge fix PR #600" in b]
     assert "No review was posted" in not_merged
-    assert "Claude Code: ended with success, after 9 turns; 1 tool calls refused: " in not_merged
+    assert "Claude Code: ended with success, after 9 turns; 1 tool calls refused, " in not_merged
     assert "Write(review.md) x1." in not_merged
 
 
@@ -761,7 +769,7 @@ def test_simulated_session_that_doesnt_finish(tmp_path: Path, grafana: str) -> N
     assert "the agent wrote no decision.json" in body and body.startswith("⛔ Needs Yacine:")
     assert (
         "Claude Code: ended with error_max_turns (an error), after 61 turns, for $2.50; 2 tool "
-        "calls refused: Bash(python3 scripts/oncall_grafana.py journey) x1, "
+        "calls refused, Bash(python3) x1, "
         "Write(decision.json) x1."
     ) in body
     assert "@someone" not in body

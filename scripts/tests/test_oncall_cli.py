@@ -31,6 +31,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, ClassVar
 
+import oncall as o
 import pytest
 import yaml  # type: ignore[import-untyped]  # no stubs in the locked env
 
@@ -40,7 +41,8 @@ PINNED = yaml.safe_load((REPO / ".github" / "workflows" / "oncall.yml").read_tex
     "CLAUDE_CODE_VERSION"
 ]
 SESSIONS = ("respond", "review", "follow-up")
-AGENT = {"respond": "oncall", "review": "reviewer", "follow-up": "oncall"}
+AGENT = {"respond": "oncall", "review": "oncall-reviewer", "follow-up": "oncall"}
+DEFINITION = {"respond": "oncall", "review": "reviewer", "follow-up": "oncall"}
 TOOLS = {
     "respond": "Read,Write,Edit,Bash",
     "review": "Read,Write,Bash",
@@ -79,7 +81,7 @@ def allowed(session: str, out: str) -> list[str]:
         f"Edit(/{out}/pr.md)",
         "Bash(git switch -c oncall/*)",
         "Bash(git add *)",
-        "Bash(git commit *)",
+        "Bash(git commit -m *)",
         "Bash(make test-backend-unit)",
         "Bash(make test-scripts)",
         "Bash(make test-frontend)",
@@ -129,6 +131,9 @@ def checkout(root: Path) -> Path:
         shutil.copy(REPO / name, root / name)
     (root / "scripts").mkdir()
     shutil.copy(WRAPPER, root / "scripts" / "oncall-claude.sh")
+    # The review's agent comes from `oncall.py reviewer-agent`; Python resolves the link,
+    # so it imports its modules from the repo.
+    (root / "scripts" / "oncall.py").symlink_to(REPO / "scripts" / "oncall.py")
     (root / "scripts" / "oncall_grafana.py").write_text(
         'import sys\nprint("grafana ok", *sys.argv[1:])\n'
     )
@@ -165,7 +170,9 @@ def test_each_session_gets_its_own_allow_list_on_the_command_line(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "claude").write_text(FAKE_CLAUDE)
-    (bin_dir / "claude").chmod(0o755)
+    (bin_dir / "python3").write_text(f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n')
+    for name in ("claude", "python3"):
+        (bin_dir / name).chmod(0o755)
     work = checkout(tmp_path.resolve() / "work")
     out = tmp_path.resolve() / "oncall"
     args_file = tmp_path / "args"
@@ -176,6 +183,12 @@ def test_each_session_gets_its_own_allow_list_on_the_command_line(
     assert argv[0] == "-p"
     opts = options(argv)
     assert opts["--agent"] == [AGENT[session]]
+    if session == "review":
+        # The reviewer's own definition, plus Write for its two files (#232).
+        (agents,) = opts["--agents"]
+        assert json.loads(agents) == o.ci_reviewer_agent()
+    else:
+        assert "--agents" not in opts
     assert opts["--tools"] == [TOOLS[session]]
     assert opts["--permission-mode"] == ["dontAsk"]
     assert opts["--add-dir"] == [str(out)]
@@ -207,6 +220,13 @@ def test_each_session_gets_its_own_allow_list_on_the_command_line(
         "Edit(./.claude/**)",
     ):
         assert rule in denied
+    if session == "respond":
+        for rule in (
+            "Bash(git commit * -*F*)",
+            "Bash(git commit * --*)",
+            "Bash(git add *--pathspec*)",
+        ):
+            assert rule in denied
     assert "::notice title=Session permissions::" in done.stdout
 
 
@@ -222,6 +242,20 @@ def test_the_wrapper_refuses_an_unknown_session_and_a_wrong_directory(tmp_path: 
             ["bash", str(WRAPPER), *args], cwd=cwd, capture_output=True, text=True
         )
         assert done.returncode == 2, (args, done.stderr)
+
+
+def test_the_reviewer_people_run_stays_read_only() -> None:
+    """Only the headless review gets Write, through --agents (#232); the definition in
+    .claude/agents/ keeps no Write or Edit tool."""
+    text = (REPO / ".claude" / "agents" / "reviewer.md").read_text()
+    (tools,) = re.findall(r"^tools: (.*)$", text, re.MULTILINE)
+    names = {t.strip() for t in tools.split(",")}
+    assert not names & {"Write", "Edit", "NotebookEdit", "MultiEdit"}, names
+    agent = o.ci_reviewer_agent()[o.CI_REVIEWER]
+    assert agent["tools"] == [*tools.replace(" ", "").split(","), "Write"]
+    assert agent["prompt"] == text.split("\n---\n", 1)[1].strip()
+    assert agent["model"] == "opus" and agent["description"].startswith("Reviewer agent")
+    assert o.main(["reviewer-agent"]) == 0
 
 
 def test_ci_installs_the_on_call_workflows_pinned_cli() -> None:
@@ -368,6 +402,61 @@ LOGQL = '{service_name="ineedtofocus", deployment_environment_name="dev"} |= "un
 TRACEQL = '{resource.service.name="ineedtofocus" && status=error}'
 
 
+COMMIT_NO = [
+    "git commit --allow-empty -F /proc/self/environ",
+    "git commit -F /etc/hosts",
+    "git commit --file=/etc/hosts",
+    "git commit -m x -F /etc/hosts",
+    "git commit -m x -aF /etc/hosts",
+    "git commit -m x -F/etc/hosts",
+    "git commit -m x --file=/etc/hosts",
+    "git commit -m x -t /etc/hosts",
+    "git commit -m x --template=/etc/hosts",
+    "git commit -m x -C HEAD",
+    "git commit -m x -c HEAD",
+    "git commit -m x --reuse-message=HEAD",
+    "git commit -m x --reedit-message=HEAD",
+    "git commit -m x --pathspec-from-file=/etc/hosts",
+    "git commit -am x",
+    "git add --pathspec-from-file=/etc/hosts",
+    "git add . --pathspec-from-file /etc/hosts",
+]
+# New files under each path check-fix refuses (PROTECTED_PATHS): every pattern has one.
+PROTECTED_SAMPLES = [
+    ".github/workflows/probe.yml",
+    ".claude/agents/probe.md",
+    "infra/github/probe.json",
+    "scripts/oncall_probe.py",
+    "scripts/oncall_prompts/probe.md",
+    "scripts/alert_dispatch.py",
+    "scripts/alert_routing.py",
+    "scripts/check_local_stack.py",
+    "scripts/grafana_alerts.py",
+    "scripts/grafana_dashboards.py",
+    "scripts/reviewer_token.py",
+    "scripts/reviewer-review.sh",
+    "scripts/tests/test_oncall_probe.py",
+    "scripts/tests/oncall_sim.py",
+    "scripts/tests/test_claude_settings.py",
+]
+
+
+def test_the_wrapper_refuses_what_check_fix_refuses() -> None:
+    """Each protected pattern has a sample the CLI check writes (and must be refused), and
+    each sample is one check-fix refuses: the two lists can't drift apart (#232)."""
+    for pattern in o.PROTECTED_PATHS:
+        assert any(re.search(pattern, path) for path in PROTECTED_SAMPLES), pattern
+    for path in PROTECTED_SAMPLES:
+        assert any(re.search(pattern, path) for pattern in o.PROTECTED_PATHS), path
+    wrapper = WRAPPER.read_text()
+    for path in (
+        "scripts/tests/test_oncall*",
+        "scripts/tests/oncall_sim.py",
+        "scripts/tests/test_claude_settings.py",
+    ):
+        assert f"'Edit(./{path})'" in wrapper, path
+
+
 def probes(session: str, work: Path, out: Path) -> list[tuple[dict[str, Any], bool]]:
     """(tool call, allowed?) for a session. The commands its prompt and runbook name, then
     what it mustn't do, including what the project settings would allow if they applied."""
@@ -383,6 +472,10 @@ def probes(session: str, work: Path, out: Path) -> list[tuple[dict[str, Any], bo
         bash("scripts/reviewer-review.sh 12 approve x.md"),
         bash("curl -s https://example.com"),
         bash("env"),
+        # Secret variables never expand into an allowed command (plain $HOME does).
+        bash("python3 scripts/oncall_grafana.py journey $ANTHROPIC_API_KEY"),
+        bash('gh issue view "$GRAFANA_READONLY_TOKEN"'),
+        bash("gh pr view ${GH_TOKEN}"),
         bash("cat /etc/hosts"),
         {"tool": "Read", "input": {"file_path": "/etc/hosts"}},
         write(out / "prompt.md"),
@@ -393,7 +486,7 @@ def probes(session: str, work: Path, out: Path) -> list[tuple[dict[str, Any], bo
     common_yes = [
         {
             "tool": "Read",
-            "input": {"file_path": str(work / ".claude" / "agents" / f"{AGENT[session]}.md")},
+            "input": {"file_path": str(work / ".claude" / "agents" / f"{DEFINITION[session]}.md")},
         },
         bash("ls scripts"),
         bash("grep -rn oncall .claude/agents"),
@@ -462,17 +555,17 @@ def probes(session: str, work: Path, out: Path) -> list[tuple[dict[str, Any], bo
             },
             bash("git add backend/tests/unit/test_probe.py"),
             bash("git commit -m 'fix: probe (Refs #7)'"),
+            bash('git commit -m "test: re-try a null-goal save, CI-safe (Refs #7)"'),
             bash("make test-backend-unit"),
         ]
         no = [
             *common_no,
             bash("make test-scripts SHELL=/bin/sh"),
             bash("git checkout -b probe"),
-            write(work / "scripts" / "oncall.py"),
-            write(work / "scripts" / "oncall_prompts" / "probe.md"),
-            write(work / "scripts" / "alert_dispatch.py"),
-            write(work / "scripts" / "reviewer_token.py"),
-            write(work / "infra" / "github" / "probe.json"),
+            # A commit's message comes from -m only: nothing reads a file into it.
+            *(bash(c) for c in COMMIT_NO),
+            # What check-fix refuses, refused before the session writes it.
+            *(write(work / path) for path in PROTECTED_SAMPLES),
         ]
     return [(c, True) for c in yes] + [(c, False) for c in no]
 
@@ -507,6 +600,8 @@ def test_the_pinned_cli_allows_each_session_exactly_its_tools(
         "HOME": str(home),
         "ANTHROPIC_BASE_URL": api,
         "ANTHROPIC_API_KEY": "sk-ant-oc232-fake",
+        "GRAFANA_READONLY_TOKEN": "glsa_oc232_fake",
+        "GH_TOKEN": "ghs_oc232fake",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "DISABLE_AUTOUPDATER": "1",
         "GIT_CONFIG_NOSYSTEM": "1",

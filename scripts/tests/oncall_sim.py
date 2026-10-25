@@ -82,6 +82,8 @@ agent=""
 args=("$@")
 for ((i = 0; i < ${#args[@]}; i++)); do
   [[ ${args[i]} == --agent ]] && agent=${args[i + 1]}
+  # The headless review's agent (#232) is the reviewer's, with Write.
+  [[ $agent == oncall-reviewer ]] && agent=reviewer
 done
 n=$(ls "$SIM/sessions" | wc -l | tr -d ' ')
 session="$SIM/sessions/$((n + 1))-$agent"

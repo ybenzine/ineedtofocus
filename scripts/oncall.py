@@ -33,6 +33,7 @@ checked values in its prompt, never through what an earlier session wrote on the
     follow-up-prompt <out dir> --key value ...
     stalled-body <alert> <status> <environment> <incident title> <run url> <reason>
         [<session line>]
+    reviewer-agent                       # the headless review's agent, as `--agents` JSON
     session-summary <result.json> respond|review|follow-up
         # after a session: Claude Code's result (subtype, turns, cost, refused tool calls,
         # named safely) in the step summary; GITHUB_OUTPUT: session (one line)
@@ -102,7 +103,14 @@ PROTECTED_PATHS = (
     "^scripts/grafana_dashboards\\.py$",
     "^scripts/reviewer_token\\.py",
     "^scripts/reviewer-review\\.sh$",
+    # The tests that pin those guards (#232): a fix mustn't loosen them with its change.
+    "^scripts/tests/test_oncall",
+    "^scripts/tests/oncall_sim\\.py$",
+    "^scripts/tests/test_claude_settings\\.py$",
 )
+# Token-shaped text a fix branch must never carry, in a commit message or an added line
+# (#232): the Claude key, a Grafana token, a GitHub token, a PEM key.
+SECRET_SHAPES = re.compile(r"sk-ant-|glsa_|gh[opsu]_[A-Za-z0-9]|github_pat_|-----BEGIN")
 VERDICTS = ("approve", "request-changes")
 RUN_URL = re.compile(rf"https://github\.com/{re.escape(d.REPOSITORY)}/actions/runs/[0-9]+")
 RUN_RESULTS = ("success", "failure", "skipped-recent", "not-run")
@@ -489,6 +497,15 @@ def check_fix(branch: str, number: str) -> list[str]:
         problems.append(
             "a commit message has a closing keyword (Closes/Fixes/Resolves and an issue): use Refs"
         )
+    if SECRET_SHAPES.search(messages):
+        problems.append("a commit message holds token-shaped text (a key or a token)")
+    new_lines = [
+        line
+        for line in _git("diff", "--no-renames", "-U0", f"origin/main...{branch}").splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    ]
+    if any(SECRET_SHAPES.search(line) for line in new_lines):
+        problems.append("the fix adds token-shaped text (a key or a token)")
     if not any(re.search(r"(^|/)tests?/|(^|/)test_[^/]*\.py$|\.test\.tsx?$", f) for f in files):
         problems.append("the fix has no test file (a regression test comes with it)")
     return problems
@@ -509,6 +526,33 @@ def patch_body(branch: str, number: str) -> str:
 
 
 # --- Review and merge -----------------------------------------------------------------
+
+
+REVIEWER = REPO / ".claude" / "agents" / "reviewer.md"
+CI_REVIEWER = "oncall-reviewer"
+
+
+def ci_reviewer_agent(path: Path = REVIEWER) -> dict[str, Any]:
+    """The headless review's agent (#232), for `claude --agents`: the reviewer's own
+    definition (description, model, instructions) plus Write, so it can leave review.md
+    and review.json. The reviewer people run stays read-only (no Write or Edit in its
+    file); this one's Write is scoped to those two files by scripts/oncall-claude.sh."""
+    text = path.read_text()
+    if not text.startswith("---\n") or "\n---\n" not in text[4:]:
+        raise Invalid(f"{path.name} has no front matter")
+    front, body = text[4:].split("\n---\n", 1)
+    meta = dict(line.split(": ", 1) for line in front.splitlines() if ": " in line)
+    tools = [t.strip() for t in meta.get("tools", "").split(",") if t.strip()]
+    if not body.strip() or not meta.get("description") or not tools:
+        raise Invalid(f"{path.name} lacks a description, tools or instructions")
+    agent: dict[str, Any] = {
+        "description": meta["description"],
+        "prompt": body.strip(),
+        "tools": [*tools, "Write"] if "Write" not in tools else tools,
+    }
+    if meta.get("model"):
+        agent["model"] = meta["model"]
+    return {CI_REVIEWER: agent}
 
 
 def review_prompt(pr: int, incident_number: int) -> str:
@@ -708,33 +752,39 @@ def stalled_body(
 # --- What a session's Claude Code run ended with (#232) -------------------------------
 
 SESSIONS = ("respond", "review", "follow-up")
-# Words from a session's result that may reach a comment: no spaces, no @ (a mention), no
-# # (a reference), no Markdown or shell syntax. The tool input around them stays out: a
-# command or a path can carry text the session read from Grafana or GitHub.
-SAFE_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/=+-]{0,59}")
-SAFE_LINE = re.compile(r"[^A-Za-z0-9 _.,:;()/=+$'-]")
+# What of a refused tool call may reach a comment (#232): the tool's name, and for Bash
+# the command's first word and at most one subcommand-like word, each a lowercase word
+# (no `/`, `:`, `_`, `@`, `#`, digits first or dots). A file tool's file only when it's one
+# of the sessions' own output files. Everything else in the input stays out: a command,
+# a URL or a path can carry text the session read from Grafana or GitHub, a token, or a
+# user's goal.
+TOOL_NAME = re.compile(r"[A-Z][A-Za-z]{0,30}")
+COMMAND_WORD = re.compile(r"[a-z][a-z0-9-]{0,30}")
+OUTPUT_FILES = ("decision.json", "comment.md", "pr.md", "review.md", "review.json", "prompt.md")
+# The line as posted, checked again where it's posted: letters, digits, spaces and
+# `_ . , ; ( ) $ ' -` only.
+SAFE_LINE = re.compile(r"[^A-Za-z0-9 _.,;()$'-]")
 MAX_LABELS = 5
 
 
 def _denied_label(denial: Any) -> str:
-    """A refused tool call, named safely: the tool, and for Bash the command's first words
-    up to the first flag, or for a file tool the file's name."""
+    """A refused tool call, named safely (see TOOL_NAME, COMMAND_WORD, OUTPUT_FILES)."""
     if not isinstance(denial, dict):
         return "?"
     tool = str(denial.get("tool_name", ""))
-    if not SAFE_WORD.fullmatch(tool):
+    if not TOOL_NAME.fullmatch(tool):
         return "?"
     given = denial.get("tool_input")
     given = given if isinstance(given, dict) else {}
     if tool == "Bash":
         words = []
-        for word in str(given.get("command", "")).split()[:3]:
-            if word.startswith("-") or not SAFE_WORD.fullmatch(word):
+        for word in str(given.get("command", "")).split()[:2]:
+            if not COMMAND_WORD.fullmatch(word):
                 break
             words.append(word)
         return f"Bash({' '.join(words)})" if words else "Bash"
     name = Path(str(given.get("file_path", ""))).name
-    return f"{tool}({name})" if SAFE_WORD.fullmatch(name) else tool
+    return f"{tool}({name})" if name in OUTPUT_FILES else tool
 
 
 def session_result(raw: Any) -> tuple[str, list[str]]:
@@ -761,7 +811,7 @@ def session_result(raw: Any) -> tuple[str, list[str]]:
     if denials:
         shown = ", ".join(labels[:MAX_LABELS])
         more = f" and {len(labels) - MAX_LABELS} more" if len(labels) > MAX_LABELS else ""
-        line += f"; {len(denials)} tool calls refused: {shown}{more}"
+        line += f"; {len(denials)} tool calls refused, {shown}{more}"
     else:
         line += "; no tool call refused"
     return line, labels
@@ -884,6 +934,9 @@ def main(argv: list[str]) -> int:
             return 0
         if command == "session-summary" and len(args) == 2:
             return session_summary(args[0], args[1])
+        if command == "reviewer-agent" and not args:
+            print(json.dumps(ci_reviewer_agent()))
+            return 0
         if command == "open-fix-pr" and len(args) == 2:
             found = open_fix_pr(json.loads(Path(args[0]).read_text()), _number(args[1], "incident"))
             print(found or "")
