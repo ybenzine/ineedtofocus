@@ -1,6 +1,6 @@
 # Observability
 
-Instrumented in #31; Grafana Cloud wiring and the key-journey dashboards in #32. Alerts follow in #33.
+Instrumented in #31; Grafana Cloud wiring and the key-journey dashboards in #32; routing alerts to the on-call workflow in #34. The alert rules follow in #33.
 
 ## Key user journey
 
@@ -41,6 +41,106 @@ Never sent to logs, traces or metrics: email addresses, passwords, cookies or se
 | Session saves failing | Error rate > 5% over 5 min, with a minimum request count |
 | History slow | p95 latency > 2 s over 5 min |
 
+## Alert routing (#34)
+
+A firing or resolved alert in prod or dev wakes the on-call workflow:
+
+```text
+Grafana Cloud alert rule (#33; labels service, environment, alert)
+  -> notification policy: service=ineedtofocus, environment=~prod|dev
+  -> contact point focus-oncall-github (webhook, custom payload, Authorization: Bearer <token>)
+  -> POST https://api.github.com/repos/ybenzine/ineedtofocus/dispatches
+  -> repository_dispatch event, type grafana-alert
+  -> .github/workflows/oncall.yml (#34: checks and logs the payload; #35: the on-call agent)
+```
+
+### Decision: Grafana calls GitHub directly, no relay
+
+Grafana's webhook contact point (Grafana 12 and later, so Grafana Cloud and the local grafana/otel-lgtm 13) can do everything GitHub's dispatch endpoint needs:
+
+- **Authorization header:** the `authorization_scheme` (`Bearer`) and `authorization_credentials` settings. The credentials are a secure field: Grafana stores them encrypted and reads them back as `[REDACTED]`.
+- **Body:** a custom payload template (`payload.template`), a Go template rendered for each notification. Its `coll.Dict` and `data.ToJSON` functions build the JSON, so every value is escaped, an annotation's quotes and apostrophes included.
+- **Headers:** `Accept: application/vnd.github+json` and `X-GitHub-Api-Version` as extra headers. Grafana adds `Content-Type: application/json` and `User-Agent: Grafana`, which GitHub requires.
+
+So nothing of ours sits between Grafana and GitHub: no relay to host, secure, monitor or keep up while prod is down. A relay wouldn't make the GitHub token any less powerful either. It would need the same kind of token, kept in a server `.env` file instead of Grafana Cloud, and would add a public endpoint of its own. Checked on the local Grafana 13.2: the payload template, the stored token and the extra headers, both with a real alert and through the contact point test ([below](#proof-on-the-local-stack-34)).
+
+### The token
+
+The token is a **fine-grained personal access token** of `ybenzine`, limited to this repository. It has **Contents: Read and write** and nothing else; GitHub adds Metadata read-only by itself. It lives **only** in the Grafana Cloud contact point. It's never in git, in GitHub secrets or variables, or in a server `.env` file. Yacine creates it and enters it at `apply`'s hidden prompt ([below](#set-up-in-grafana-cloud-yacine)). It expires after 90 days; to rotate it, create a new one and run `apply cloud` again.
+
+- **Why Contents write:** it's the only permission GitHub's `POST /repos/{owner}/{repo}/dispatches` accepts. Actions write would only allow a `workflow_dispatch`, and it would also let the token start, cancel and re-run any workflow, `rollback` included. A GitHub App token would have the same Contents permission and expire after an hour, and Grafana can't renew it.
+- **What a leaked token could do:** push to branches other than `main`, create tags and releases, and send dispatches. It can't push a change to a workflow file, which needs the Workflows permission, and it can't open a pull request. It **can't** change `main`: branch protection requires the CI checks and an approval, for administrators too ([process.md](process.md#4-review)). It **can't** deploy: `deploy-prod` starts only by hand and waits for Yacine's approval, `scripts/tests/test_ci_workflow.py` checks that no tag or dispatch starts it, and it reads no environment's secrets. The fix is to revoke the token in GitHub (**Settings → Developer settings → Fine-grained tokens**).
+- **Authenticated only:** GitHub accepts a dispatch only with a token that can write to the repo. Grafana's token is one. The other is the agent account's, and `.claude/settings.json` denies `gh api …dispatches…` to agents. So an unauthenticated caller can't start the workflow, and there's no public endpoint of ours to attack. The `oncall` workflow still treats the payload as untrusted. It reads it from `$GITHUB_EVENT_PATH`, never through `${{ }}` in a script, checks it against the contract below and fails red otherwise. The job summary names the sender.
+
+### The notification policy and contact point
+
+`scripts/alert_routing.py` generates both, like the dashboards and the alert rules. The committed `infra/grafana/routing/oncall-github.json` is what `apply cloud` sends, minus the token. `make test-scripts` fails when that file and the script disagree.
+
+| Setting | Value | Why |
+|---|---|---|
+| Matchers | `service=ineedtofocus`, `environment=~prod\|dev` | The labels #33's rules carry. A local rule never reaches Grafana Cloud anyway |
+| Group by | `alertname`, `alert`, `environment` | One notification is one alert in one environment, so one dispatch is one incident |
+| Group wait / interval | 10 s / 1 min | The rule's 1-minute pending period already debounces. A resolved notification follows within a minute |
+| Repeat interval | 4 h | A still-firing alert is sent again every 4 hours. #35 updates the open incident rather than opening another |
+| Resolved messages | sent | #35 confirms that the alert resolves |
+| Position | first child of the root policy, `continue: false` | `apply` replaces only its own route and leaves every other policy as it was |
+
+### The payload (contract for #35)
+
+Event type **`grafana-alert`**; `client_payload` (`scripts/alert_dispatch.py` is the reference and the check):
+
+| Field | Example | From |
+|---|---|---|
+| `alert` | `session-save-errors` or `history-latency` | the rule's `alert` label; the runbook is `_docs/runbooks/<alert>.md` |
+| `environment` | `prod` or `dev` | the rule's `environment` label |
+| `status` | `firing` or `resolved` | Grafana |
+| `title` | `Session saves failing (prod)` | the rule's title (`alertname`) |
+| `summary`, `description` | `Over 5% of session saves are failing in prod`; `19.67% of the 65 sessions submitted …` | the rule's annotations (aggregates only) |
+| `started_at` | `2026-10-25T08:37:51Z` | when the alert started firing, UTC |
+| `resolved_at` | empty while firing, then `2026-10-25T08:43:46Z` | UTC |
+| `links.dashboard` | `https://ineedtofocus.grafana.net/d/focus-key-journey-prod?orgId=1&from=…&to=…` | the environment's key-journey dashboard, from 30 minutes before the alert to now (or to 10 minutes after it resolved) |
+| `links.traces` | `https://ineedtofocus.grafana.net/explore?…` | Tempo, same time range: failed save requests (`status=error` on the save routes) or history loads over 1 s |
+| `links.runbook` | `https://github.com/ybenzine/ineedtofocus/blob/main/_docs/runbooks/session-save-errors.md` | the rule's `runbook_url` |
+| `links.alert` | `https://ineedtofocus.grafana.net/alerting/grafana/focus-session-save-errors-prod/view?orgId=1` | the rule in Grafana; a contact point test, which has no rule, links the alert list instead |
+
+**No customer data:** the template copies only these named labels and annotations, never all of them, and the rules' labels and annotations hold only fixed words and aggregate numbers. The check refuses a missing or unexpected field, an environment other than prod or dev, a link outside `https://ineedtofocus.grafana.net/` or this repo's runbooks, and any text holding an email address or a YouTube link. GitHub allows at most 10 top-level `client_payload` fields; this has 9.
+
+**For #35:** keep `python3 scripts/alert_dispatch.py check-event "$GITHUB_EVENT_PATH"` as the workflow's first step and add the agent job after it. That job needs `needs:` on the check and the `oncall` environment. A `repository_dispatch` always runs on the default branch, `main`, which the environment's branch rule allows. Pass the payload to the agent as the event file or through `env:`, never with `${{ }}` inside a `run:` script. A concurrency group per `alert` and `environment`, never cancelling, makes a resolved event wait for its firing run. Repeats and resolutions come as new runs, so look up the open `type:incident` issue for the same alert and environment first.
+
+### Proof on the local stack (#34)
+
+`make check-stack` (in CI too) has the local Grafana render the payload template for both alerts, prod and dev, firing, resolved and a contact point test. Every result must pass the workflow's check (`python3 scripts/alert_routing.py verify`).
+
+**The full loop locally**, with a stand-in for GitHub's endpoint. It requires the bearer token, validates every dispatch the way the workflow does and answers 204, or 401, 404 or 422 like GitHub. It needs Docker Desktop, whose `host.docker.internal` lets the Grafana container reach the host, and #33's rules and fault injection:
+
+1. `python3 scripts/alert_dispatch.py receive --out /tmp/dispatches.jsonl`. It prints a throwaway stand-in token.
+2. `python3 scripts/alert_routing.py apply local --grafana http://127.0.0.1:<GRAFANA_PORT>`, and paste the stand-in token. This adds the same contact point to the local Grafana, posting to the stand-in, with a route for `environment=local`. Blank keeps the stored token on later runs.
+3. `python3 scripts/alert_routing.py test local --env local --alert history-latency --grafana http://127.0.0.1:<GRAFANA_PORT>` sends a contact point test. The stand-in prints `204   history-latency firing in local`.
+4. Fire and resolve **Session saves failing** with fault injection and `scripts/traffic.py` ([#33](#alerts-user-impact-not-resources)). The stand-in prints one line per dispatch.
+
+On 2026-10-25, on the local stack with #33's rules, `FAULT_SAVE_ERROR_PERCENT=30` from 17:07:50Z and off again at 17:11:11Z, with `traffic.py --rate 30` running:
+
+```text
+17:09:21Z  session-save-errors: pending
+17:10:21Z  session-save-errors: firing
+204   session-save-errors firing in local (started 2026-10-25T17:10:10Z, resolved -)
+17:15:22Z  session-save-errors: normal
+204   session-save-errors resolved in local (started 2026-10-25T17:10:10Z, resolved 2026-10-25T17:15:10Z)
+```
+
+Both dispatches arrived with `Authorization: Bearer <stand-in token>`, `Accept: application/vnd.github+json`, `Content-Type: application/json` and `User-Agent: Grafana`. Both passed the check, with the description `30.95% of the 87 sessions submitted in the last 5 minutes failed (outcome="error"); … Users' sessions stay queued …`. The traces link's query found the 19 failed save requests in Tempo. A request without the token gets 401 (covered by `scripts/tests/test_alert_dispatch.py`).
+
+### Set up in Grafana Cloud (Yacine)
+
+Do this once, after the PR that adds `.github/workflows/oncall.yml` is merged: a dispatch only starts workflows that are on `main`. The exact steps are on [#34](https://github.com/ybenzine/ineedtofocus/issues/34):
+
+1. Create the fine-grained token ([above](#the-token)).
+2. Create a Grafana service account token (Editor, one day), as for the alert rules.
+3. `python3 scripts/alert_routing.py apply cloud --grafana https://ineedtofocus.grafana.net`, pasting the Grafana token and then the GitHub token at the hidden prompts. A re-run updates both in place. A blank GitHub token keeps the stored one, which `apply` only ever sends back as `[REDACTED]`.
+4. `python3 scripts/alert_routing.py test cloud --env dev --alert session-save-errors --grafana https://ineedtofocus.grafana.net`, then check that **Actions → oncall** shows a green run named **Alert: session-save-errors firing in dev**.
+
+The contact point and policy stay editable in the Grafana UI, but the next `apply` overwrites them, so make changes in the script.
+
 ## Where to look
 
 | Where | Grafana | Dashboard |
@@ -79,8 +179,9 @@ The local stack sets `local` (`compose.yaml`).
 |---|---|---|---|
 | OTLP write token (`GRAFANA_CLOUD_OTLP_TOKEN`) | `metrics:write`, `logs:write`, `traces:write` | `/opt/focus/prod/.env` and `/opt/focus/dev/.env` on the server (mode 600), next to `GRAFANA_CLOUD_OTLP_ENDPOINT` and `GRAFANA_CLOUD_INSTANCE_ID` ([.env.example](../.env.example), "Deployed environments") | That environment's collector |
 | Read-only token (`GRAFANA_READONLY_TOKEN`) | read metrics, logs, traces | The GitHub `oncall` environment's secrets | The on-call workflow (#35) |
+| GitHub dispatch token (#34), the other way round: Grafana → GitHub | fine-grained, this repo only, Contents write | The Grafana Cloud contact point `focus-oncall-github` (encrypted, read back as `[REDACTED]`) | Grafana's webhook ([Alert routing](#the-token)) |
 
-Neither token is ever in git, in repo-level GitHub secrets or in any other environment. `scripts/tests/test_grafana_dashboards.py` fails if a workflow mentions the OTLP token, or reads the read-only token outside a job in the `oncall` environment. To rotate the OTLP token, put the new value in both `.env` files and recreate each collector: `APP_TAG=<current tag> infra/compose.sh <env> up -d otel-collector`.
+None of these tokens is ever in git, in repo-level GitHub secrets or in any other environment; the dispatch token isn't in any GitHub environment either. `scripts/tests/test_grafana_dashboards.py` fails if a workflow mentions the OTLP token, or reads the read-only token outside a job in the `oncall` environment. To rotate the OTLP token, put the new value in both `.env` files and recreate each collector: `APP_TAG=<current tag> infra/compose.sh <env> up -d otel-collector`.
 
 ### Check that both environments arrive
 

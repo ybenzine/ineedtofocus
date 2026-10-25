@@ -53,7 +53,7 @@ Prerequisite: the domain's nameservers at Gandi must be the four Route 53 namese
 - **Where to look:** locally in Grafana from `grafana/otel-lgtm`; deployed in Grafana Cloud (dashboards for the key journey per environment).
 - **Alert on user impact:** fires when the session-save error rate exceeds 5% over 5 minutes (with a minimum number of requests), or when history loads' p95 latency exceeds 2 s over 5 minutes (with at least 5 loads; fewer counts as no data). Not on CPU or memory. The one exception is a DigitalOcean disk-usage alert (above 80% for 10 minutes) that emails Yacine and is not routed to on-call (#202).
 - **Alert trigger for the demo:** a fault-injection setting, off by default and only changeable by the operator, makes a percentage of session saves fail; a small traffic script generates realistic load so the alert fires.
-- **Alert routing:** Grafana alert → webhook → GitHub `repository_dispatch` (through a small relay if Grafana's payload can't call GitHub directly) → on-call agent workflow.
+- **Alert routing:** Grafana alert → webhook → GitHub `repository_dispatch` → on-call agent workflow. There's no relay: Grafana's webhook contact point calls GitHub's API directly, with a custom payload template and a fine-grained token that only Grafana Cloud holds (#34, [observability.md](observability.md#alert-routing-34)).
 
 ## 5. Agent team and on-call responder
 

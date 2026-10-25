@@ -21,6 +21,9 @@
    telemetry (_docs/observability.md). An unmatched path is exported as `UNMATCHED`.
 6. The key-journey dashboard (#32) is provisioned in Grafana and every one of its queries
    runs against Prometheus, Loki and Tempo (scripts/grafana_dashboards.py verify).
+7. Grafana renders the alert routing's payload template (#34) into a GitHub dispatch that
+   the on-call workflow's check accepts, for every alert, environment and status
+   (scripts/alert_routing.py verify).
 
 Ports: APP_PORT (8000) and GRAFANA_PORT (3000), from the environment or .env. Stdlib only.
 """
@@ -38,6 +41,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import alert_routing
 import grafana_dashboards
 
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
@@ -308,6 +312,11 @@ def main() -> None:
     if problems:
         sys.exit("FAIL  key-journey dashboard: " + "; ".join(problems))
     print(f"ok    dashboard {grafana_dashboards.uid('local')} is provisioned and its queries run")
+
+    problems = alert_routing.verify(GRAFANA)
+    if problems:
+        sys.exit("FAIL  alert routing: " + "; ".join(problems))
+    print("ok    the alert dispatch template renders a valid GitHub dispatch for every alert")
 
 
 if __name__ == "__main__":
