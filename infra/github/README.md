@@ -32,7 +32,7 @@ Because the required checks apply to administrators too, a direct push to `main`
 
 ## Agent account (#127)
 
-Agents don't act as Yacine. They use a machine account of their own, so the `production` environment's approval holds against them: that account can't approve a prod deploy or change an environment, whatever command it runs.
+Agents don't act as Yacine. They use a machine account of their own, so the `production` environment's approval holds against them: that account can't approve a prod deploy or change an environment's protection rules, whatever command it runs.
 
 | Identity | Kind | Used for | Access |
 |---|---|---|---|
@@ -68,13 +68,15 @@ Agents don't act as Yacine. They use a machine account of their own, so the `pro
 
    The alias may also set `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` to `merciful-poseidon` and `GIT_AUTHOR_EMAIL`/`GIT_COMMITTER_EMAIL` to `347635949+merciful-poseidon@users.noreply.github.com`, so commits show the bot as author. That's cosmetic: no gate depends on the commit author, only on who pushes, opens and approves.
 
-3. **Make `git push` go out as the bot too.** git asks a credential helper for the password. For `https://github.com` that helper must be `gh auth git-credential`, which honours `GH_CONFIG_DIR`. `gh auth setup-git` writes these lines (in `~/.gitconfig`; this repo's `.git/config` has the same pair):
+3. **Make `git push` go out as the bot too.** git asks a credential helper for the password. For `https://github.com` that helper must be `gh auth git-credential`, which honours `GH_CONFIG_DIR`. `gh auth setup-git` writes these lines to `~/.gitconfig`:
 
    ```ini
    [credential "https://github.com"]
    	helper =
    	helper = !/opt/homebrew/bin/gh auth git-credential
    ```
+
+   Yacine's clone also has the pair in its own `.git/config` (local to the clone, not committed), with `helper = !gh auth git-credential`, which finds `gh` through `PATH` instead of the absolute path. Either is enough.
 
    The empty `helper =` resets the list of helpers, so the system-wide `osxkeychain` helper (Homebrew git's `/opt/homebrew/etc/gitconfig`) is skipped. That keychain entry is Yacine's login. **If these lines are removed, `git push` silently falls back to the keychain and pushes as Yacine.** `gh auth setup-git`, run in a `claude-focus` session, restores them.
 
@@ -90,11 +92,12 @@ If `gh auth status` shows `ybenzine`, the session wasn't started with `claude-fo
 | Action | Why it can't |
 |---|---|
 | Approve or reject a `production` deployment (`pending_deployments`, the GraphQL `approveDeployments` mutation, the run page) | Only the environment's required reviewers can, and the only one is `ybenzine`. Administrators can't bypass it (`can_admins_bypass: false`), and the account isn't one anyway |
-| Create, edit or delete an environment, its protection rules, branch rules or secrets | GitHub requires admin access for these. The account has write |
+| Create, edit or delete an environment, its protection rules or branch rules | GitHub requires admin access for these. The account has write |
+| Read a secret's value, in any environment | The API only ever returns secret names. Values reach only the jobs of an approved run |
 | Change branch protection, rulesets, collaborators, webhooks, deploy keys or Actions settings | Admin only, as above |
 | Approve its own PRs, or merge without the bot's approval and the five checks | Branch protection, administrators included |
 
-What it **can** do, as any writer: push to every branch except `main`, open and merge approved PRs, dispatch any workflow and re-run runs, and create tags and releases. Dispatching includes `deploy-prod`: #126's deny rules in `.claude/settings.json` stop agents from starting it, and a run started anyway waits for Yacine's approval at the `deploy` job. #126's rules stay as a second line. No deploy starts on a tag or release (#29).
+What it **can** do, as any writer: push to every branch except `main`, open and merge approved PRs, dispatch any workflow and re-run runs, and create tags and releases. It can list secret names, and it can most likely **overwrite** environment secrets, `production`'s included: GitHub lets collaborators with write access create and update them. That could break prod deploys (a replaced `DEPLOY_SSH_KEY` can't log in to the server, a wrong `DEPLOY_KNOWN_HOSTS` fails the host check), but not get a deploy through, since every run still waits for Yacine's approval. `.claude/settings.json` denies `gh secret set` and asks before `gh api` calls on environments; like all its rules, they match command text only. Overwriting wasn't tried. Dispatching includes `deploy-prod`: #126's deny rules in `.claude/settings.json` stop agents from starting it, and a run started anyway waits for Yacine's approval at the `deploy` job. #126's rules stay as a second line. No deploy starts on a tag or release (#29).
 
 **Verified on 2026-10-25**, read-only, from a session running as `merciful-poseidon`:
 
@@ -105,9 +108,10 @@ What it **can** do, as any writer: push to every branch except `main`, open and 
 | `gh api repos/ybenzine/ineedtofocus/collaborators/merciful-poseidon/permission --jq .role_name` | `write` |
 | `gh api repos/ybenzine/ineedtofocus/environments/production` | `can_admins_bypass: false`; one `required_reviewers` rule whose only reviewer is the user `ybenzine`; deployment branches: custom policies (`main`) |
 | Admin-only reads: `gh api repos/ybenzine/ineedtofocus/hooks`, `…/keys`, `…/actions/permissions` | `404`, `404`, `403`: GitHub treats the account as a non-admin |
+| `gh secret list --env production` | Names only: `DEPLOY_KNOWN_HOSTS`, `DEPLOY_SSH_KEY`. The account can see the secrets exist; this check doesn't say whether it can overwrite them (above) |
 | `git credential fill` for `github.com` | `username=merciful-poseidon` |
 
-No request that could change a setting was sent to prove the negative: if it had worked, it would have changed the setting. Approving a deployment isn't tried either. `.claude/settings.json` denies `pending_deployments` and `approveDeployments` commands (#126), and the reviewer list above already rules it out. The normal loop (issue comments, board moves, pushing a branch, opening and merging the PR) is #127's own trail, all done as `merciful-poseidon`.
+These checks cover approving deployments and editing environments and their protection rules, not secrets: see above for what the account can do to secrets. No request that could change a setting or a secret was sent to prove the negative: if it had worked, it would have changed it. Approving a deployment isn't tried either. `.claude/settings.json` denies `pending_deployments` and `approveDeployments` commands (#126), and the reviewer list above already rules it out. The normal loop (issue comments, board moves, pushing a branch, opening and merging the PR) is #127's own trail, all done as `merciful-poseidon`.
 
 **Residual risk:** the bot shares the machine and the macOS user with Yacine. If Yacine's own login is still there (gh's default config directory `~/.config/gh`, or the keychain entry git used before step 3), a command that drops `GH_CONFIG_DIR` (`env -u GH_CONFIG_DIR gh …`), or a session started with plain `claude`, acts as Yacine again. So the separation holds against mistakes and against the agent's own credential, not against an agent on Yacine's machine set on getting past it. Closing that gap needs Yacine's login off the machine while agents run, for example a separate macOS user for agent sessions.
 

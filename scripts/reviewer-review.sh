@@ -11,9 +11,9 @@
 # and its approval counts toward the review that branch protection on `main` requires.
 #
 # Fallback: if the App's private key is missing or unreadable (reviewer_token.py exits 3),
-# the review is posted as a COMMENT review from your own gh login instead, and this
-# script says so. A comment can't approve, so the merge waits for Yacine to restore the
-# key (_docs/process.md §4). Any other failure (GitHub refused the token, network) stops
+# the review is posted as a COMMENT review from the session's own gh login (the agent
+# account) instead, and this script says so. A comment can't approve, so the merge waits
+# for Yacine to restore the key (_docs/process.md §4). Any other failure (GitHub refused the token, network) stops
 # without posting, so it gets looked at instead of silently downgrading the review.
 #
 # Env: REVIEWER_APP_ID, REVIEWER_INSTALLATION_ID, REVIEWER_APP_KEY_PATH (see .env.example);
@@ -66,7 +66,7 @@ case "$status" in
   3)
     token=""
     echo "Fallback: the reviewer App key is unavailable (see the message above)." >&2
-    echo "Posting a COMMENT review from the default gh login instead; it can't approve," >&2
+    echo "Posting a COMMENT review from the session's own gh login (the agent account) instead; it can't approve," >&2
     echo "so the merge waits for Yacine to restore the key (_docs/process.md §4)." >&2
     post --comment COMMENT
     echo "Fallback: posted a COMMENT review on #$pr (verdict $verdict is in the body, not an approval)."

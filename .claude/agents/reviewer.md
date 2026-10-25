@@ -29,7 +29,7 @@ Write the body to a file under `/tmp` (**outside the repo**), then post exactly 
 
 The script mints a short-lived App token and runs `gh pr review <pr> --approve` or `--request-changes` with `--body-file <file>` (where GraphQL is unreachable, prefix it with `REVIEWER_REVIEW_API=rest` to post through the REST reviews endpoint). Branch protection on `main` requires one approving review, and the bot's approval is it: every agent acts through one account, `merciful-poseidon`, which authored the PR and can't approve its own PR (#127). Never pass the body inline (`_docs/process.md` → Posting to the tracker).
 
-- **Key unavailable:** if the App's private key is missing, the script posts the same body as a COMMENT review from the default login instead and prints `Fallback:`. Say so in your report to the lead: a comment can't approve, so the merge waits for Yacine to restore the key.
+- **Key unavailable:** if the App's private key is missing, the script posts the same body as a COMMENT review from the session's own gh login (the agent account) instead and prints `Fallback:`. Say so in your report to the lead: a comment can't approve, so the merge waits for Yacine to restore the key.
 - **Other failures** (the script exits non-zero, nothing posted): report the error to the lead. Don't post the review another way.
 - **Never** read, print or copy the App's private key (`~/.config/ineedtofocus/`) or a token, and never run `scripts/reviewer_token.py` on its own: its stdout is the token.
 

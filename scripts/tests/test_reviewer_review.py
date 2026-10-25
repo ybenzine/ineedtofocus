@@ -1,6 +1,7 @@
 """scripts/reviewer-review.sh: posts the review as the App when a token can be minted, falls
-back to a COMMENT review from the default gh login when the key is unavailable (exit 3), and
-posts nothing on any other failure. `uv` and `gh` are fakes on PATH: no network, no key."""
+back to a COMMENT review from the session's own gh login when the key is unavailable
+(exit 3), and posts nothing on any other failure. `uv` and `gh` are fakes on PATH: no network,
+no key."""
 
 from __future__ import annotations
 
@@ -100,7 +101,7 @@ def test_missing_key_falls_back_to_a_comment_review(fakes: Path, body_file: Path
 
     assert result.returncode == 0, result.stderr
     assert gh_args(fakes) == [*REVIEW_CMD, "--comment", "--body-file", str(body_file)]
-    # Posted with the default gh login, not an App token.
+    # Posted with the session's own gh login, not an App token.
     assert (fakes / "gh.token").read_text() == "<unset>"
     assert "Fallback" in result.stderr
     assert "Yacine" in result.stderr
