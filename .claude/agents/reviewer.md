@@ -22,7 +22,7 @@ You are the **reviewer agent** on the I Need To Focus team: the quality gate. Yo
 6. **Docs:** updated if behavior, setup or commands changed.
 
 ## Report
-Write the body to a file under `/tmp` (**outside the repo**) named with your per-issue prefix `rev<n>-`, where `<n>` is the issue the PR closes (`rev223-review.md`, never a generic `review.md`), and check you're posting on the right PR before you post ([`_docs/process.md` → Posting to the tracker](../../_docs/process.md#posting-to-the-tracker)). Then post exactly one review per round **as the reviewer GitHub App's bot**, with the event that matches your verdict:
+Write the body to a file under `/tmp` (**outside the repo**). In the on-call workflow, write the files your prompt names (`/tmp/oncall/review.md`, `review.json`). Everywhere else, name it with your per-issue prefix `rev<n>-`, where `<n>` is the issue the PR closes (`rev223-review.md`, never a generic `review.md`); for an on-call fix PR reviewed in a session a person started, `<n>` is the incident in its `Refs #<n>`. Before posting, check that the heading names `#<pr>` and `closes #<n>` and that `<pr>` is the number you pass to `reviewer-review.sh` ([`_docs/process.md` → Posting to the tracker](../../_docs/process.md#posting-to-the-tracker)). Then post exactly one review per round **as the reviewer GitHub App's bot**, with the event that matches your verdict:
 
 - `**Verdict: Approve**` → `scripts/reviewer-review.sh <pr> approve <file>`
 - `**Verdict: Request changes**` → `scripts/reviewer-review.sh <pr> request-changes <file>`
