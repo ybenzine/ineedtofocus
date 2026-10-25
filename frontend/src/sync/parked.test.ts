@@ -143,6 +143,23 @@ describe('quarantine when IndexedDB fails (F13, owner ruling on #9)', () => {
     expect(localStorage.getItem(ACTIVE_OWNER_KEY)).toBeNull()
   })
 
+  it('a parked-list lock that is never granted is cut off; sign-in proceeds and the timer keeps its copy', async () => {
+    const { record } = await alicesUnsavedSession()
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      locks: { request: () => new Promise(() => undefined) },
+    })
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const claiming = claimLocalData(bob)
+    await vi.advanceTimersByTimeAsync(10_000)
+    await claiming
+    vi.unstubAllGlobals()
+    expect(localStorage.getItem(OWNER_KEY)).toBe(BOB)
+    // Not parked, so not deleted either: it stays where the next start-up finds it.
+    expect(localStorage.getItem(ACTIVE_SESSION_KEY)).toContain(record.id)
+    expect(loadParked()).toEqual([])
+  })
+
   it('never deletes the session if it can be neither stored nor parked', async () => {
     await alicesUnsavedSession()
     const setItem = Storage.prototype.setItem

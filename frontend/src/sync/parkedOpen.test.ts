@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createAppServices } from '../services.ts'
 import { freshDbName, makeRecord } from '../test/fakeSessionsServer.ts'
 import { ACTIVE_SESSION_KEY } from '../timer/index.ts'
-import { PARKED_KEY, PARKED_LOCK, drainParked, loadParked, parkSession } from './parked.ts'
+import {
+  PARKED_KEY,
+  PARKED_LOCK,
+  clearParked,
+  drainParked,
+  loadParked,
+  parkSession,
+} from './parked.ts'
 import { IndexedDbSessionStore } from './sessionStore.ts'
 
 const ALICE = 'user-alice'
@@ -55,12 +62,30 @@ describe('updates to the parked list are atomic across tabs (AC3)', () => {
     expect(loadParked()).toEqual([])
   })
 
-  it('two writers at once keep both entries', async () => {
-    vi.stubGlobal('navigator', { ...navigator, locks: fakeLocks() })
-    const a = makeRecord()
-    const b = makeRecord()
-    await Promise.all([parkSession(ALICE, a), parkSession(BOB, b)])
-    expect(loadParked().map((p) => p.record.id)).toEqual([a.id, b.id])
+  it('a writer waits for another tab’s lock and builds on what that tab wrote', async () => {
+    // jsdom runs one thread, so a second tab is played by a lock holder that writes the shelf
+    // while it holds the lock. Without the lock the park would run at once and be overwritten.
+    const locks = fakeLocks()
+    vi.stubGlobal('navigator', { ...navigator, locks })
+    const theirs = makeRecord()
+    const mine = makeRecord()
+    let release = (): void => undefined
+    const otherTab = locks.request(
+      PARKED_LOCK,
+      () =>
+        new Promise<void>((resolve) => {
+          release = () => {
+            localStorage.setItem(PARKED_KEY, JSON.stringify([{ ownerId: BOB, record: theirs }]))
+            resolve()
+          }
+        }),
+    )
+    const parking = parkSession(ALICE, mine)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(loadParked()).toEqual([])
+    release()
+    await Promise.all([otherTab, parking])
+    expect(loadParked().map((p) => p.record.id)).toEqual([theirs.id, mine.id])
   })
 
   it('works without Web Locks (jsdom, older browsers)', async () => {
@@ -77,6 +102,35 @@ describe('updates to the parked list are atomic across tabs (AC3)', () => {
     })
     await expect(parkSession(ALICE, makeRecord())).rejects.toThrow()
     spy.mockRestore()
+  })
+})
+
+describe('a pass re-checks the shelf under the lock (AC4)', () => {
+  it('a sign-out during a pass leaves no later entry to be saved after the data was cleared', async () => {
+    vi.stubGlobal('navigator', { ...navigator, locks: fakeLocks() })
+    const sessions = openStore()
+    await parkSession(ALICE, makeRecord())
+    await parkSession(ALICE, makeRecord())
+    // The first write is held up; the second is not.
+    let open = (): void => undefined
+    const gate = new Promise<void>((resolve) => {
+      open = resolve
+    })
+    const save = sessions.save.bind(sessions)
+    let calls = 0
+    vi.spyOn(sessions, 'save').mockImplementation(async (record, owner) => {
+      if (calls++ === 0) await gate
+      await save(record, owner)
+    })
+
+    const draining = drainParked(sessions)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    // Alice signs out while the first entry is being moved: shelf first, then her sessions.
+    const signOut = clearParked(ALICE).then(() => sessions.clearOwner(ALICE))
+    open()
+    await Promise.all([draining, signOut])
+    expect(await sessions.list(ALICE)).toEqual([])
+    expect(loadParked()).toEqual([])
   })
 })
 

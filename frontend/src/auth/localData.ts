@@ -202,7 +202,8 @@ export async function claimLocalData(user: User): Promise<void> {
     const finished = finishedRecordOf(parseStoredTimer(read(ACTIVE_SESSION_KEY)), Date.now())
     if (finished !== null) {
       try {
-        await parkSession(owner, finished)
+        // Bounded like the quarantine above: a lock that is never granted can't hold sign-in.
+        await withTimeout(parkSession(owner, finished), QUARANTINE_TIMEOUT_MS)
       } catch {
         keepActive = true
       }
