@@ -285,6 +285,55 @@ describe('SyncEngine', () => {
     expect(second.dropped).toEqual([record.id])
   })
 
+  it('#133 a 409 also marks the device copy archived, so offline History stops showing it', async () => {
+    const { server, store, engine } = setup()
+    const record = makeRecord()
+    await store.save(record, ALICE)
+    await engine.syncNow()
+    server.archive(record.id)
+    await store.edit(ALICE, record.id, { goal: 'Lost' })
+    await engine.syncNow()
+    expect((await store.get(record.id))?.archivedAt).not.toBeNull()
+  })
+
+  it('lists a session once in dropped even when two passes both got a 409, and gives each caller its own copy', async () => {
+    const server = new FakeSessionsServer()
+    const store = new IndexedDbSessionStore({ name: freshDbName() })
+    stores.push(store)
+    const real = new HttpSessionsApi({ fetch: server.fetch })
+    const record = makeRecord()
+    let edits = 0
+    const api = {
+      sync: real.sync.bind(real),
+      edit: async (id: string, change: Parameters<typeof real.edit>[1]) => {
+        edits += 1
+        // A new edit lands while the first is in flight, so the second pass sends (and drops) it too.
+        if (edits === 1) await store.edit(ALICE, record.id, { goal: 'Again' })
+        return real.edit(id, change)
+      },
+    }
+    const engine = new SyncEngine({
+      store,
+      api,
+      currentOwner: () => ALICE,
+      scheduler: new ManualScheduler(),
+      isOnline: () => true,
+      exclusive: (run) => run(),
+    })
+    await store.save(record, ALICE)
+    await engine.syncNow()
+    server.archive(record.id)
+    await store.edit(ALICE, record.id, { goal: 'Lost' })
+
+    const [first, second] = await Promise.all([engine.syncNow(), engine.syncNow()])
+
+    expect(edits).toBe(2)
+    expect(first.dropped).toEqual([record.id])
+    expect(second.dropped).toEqual([record.id])
+    first.dropped.push('mutated')
+    expect(second.dropped).toEqual([record.id])
+  })
+
   it('reports no dropped edit when the edit was applied or nothing was queued', async () => {
     const { store, engine } = setup()
     const record = makeRecord()
