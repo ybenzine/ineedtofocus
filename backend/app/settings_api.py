@@ -4,9 +4,12 @@ Privacy: YouTube links are user content. They are never logged, put in span attr
 or used as metric labels, and validation errors never echo them (see errors.py).
 """
 
+import re
+import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Annotated, Any, Literal
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi import APIRouter
 from pydantic import (
@@ -204,19 +207,71 @@ class YoutubeLinksOut(BaseModel):
     links: list[YoutubeLinkOut] = Field(description="Newest first, at most 5")
 
 
-async def _recent(db: DbSession, user: CurrentUser) -> YoutubeLinksOut:
-    rows = await db.execute(
-        select(YoutubeRecentLink.url, YoutubeRecentLink.last_used_at)
+_VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+_PLAYLIST_ID = re.compile(r"[A-Za-z0-9_-]{12,64}")
+_PATH_VIDEO = re.compile(r"/(?:embed|shorts|live|v)/([^/]+)")
+
+
+def youtube_key(url: str) -> str:
+    """The identity of a link in the recent list: the id the player plays (#249).
+
+    Mirrors `findTarget` in frontend/src/sounds/youtubeLink.ts: a video id (youtu.be/<id>,
+    `v=`, or /embed|shorts|live|v/<id>) wins over a playlist id, so a video inside a playlist is
+    keyed as the video, as the player plays it; otherwise the `list=` playlist id. Host, scheme,
+    other parameters (t, si, feature) and parameter order don't matter. A link with no id (the
+    server doesn't check the path) is keyed by its own text. Never logged or returned.
+    """
+    parts = urlsplit(url.strip())
+    host = (parts.hostname or "").lower()
+    query = parse_qs(parts.query, keep_blank_values=True)
+    if host == "youtu.be":
+        segments = parts.path.split("/")
+        video = segments[1] if len(segments) > 1 else None
+    else:
+        path_match = _PATH_VIDEO.match(parts.path)
+        video = query["v"][0] if "v" in query else (path_match.group(1) if path_match else None)
+    if video is not None and video != "videoseries" and _VIDEO_ID.fullmatch(video):
+        return f"video:{video}"
+    playlist = query["list"][0] if "list" in query else None
+    if playlist is not None and _PLAYLIST_ID.fullmatch(playlist):
+        return f"playlist:{playlist}"
+    return f"url:{url.strip()}"
+
+
+_LinkRow = tuple[uuid.UUID, str, datetime]  # id, url, last_used_at
+
+
+def _newest_per_key(rows: Sequence[_LinkRow]) -> list[_LinkRow]:
+    """Rows (newest first) with one per key, the newest, at most RECENT_LINKS_LIMIT."""
+    seen: set[str] = set()
+    kept: list[_LinkRow] = []
+    for row in rows:
+        key = youtube_key(row[1])
+        if key not in seen:
+            seen.add(key)
+            kept.append(row)
+    return kept[:RECENT_LINKS_LIMIT]
+
+
+async def _user_rows(db: DbSession, user: CurrentUser) -> list[_LinkRow]:
+    result = await db.execute(
+        select(YoutubeRecentLink.id, YoutubeRecentLink.url, YoutubeRecentLink.last_used_at)
         .where(YoutubeRecentLink.user_id == user.id)
         .order_by(YoutubeRecentLink.last_used_at.desc(), YoutubeRecentLink.id)
-        .limit(RECENT_LINKS_LIMIT)
     )
-    return YoutubeLinksOut(links=[YoutubeLinkOut(url=u, last_used_at=t) for u, t in rows.all()])
+    return [(i, u, t) for i, u, t in result.all()]
+
+
+async def _recent(db: DbSession, user: CurrentUser) -> YoutubeLinksOut:
+    # Rows written before #249 can hold one id under several URLs: collapse them on read.
+    rows = _newest_per_key(await _user_rows(db, user))
+    return YoutubeLinksOut(links=[YoutubeLinkOut(url=r[1], last_used_at=r[2]) for r in rows])
 
 
 @router.get("/youtube-links", responses=_ERRORS)
 async def list_youtube_links(user: CurrentUser, db: DbSession) -> YoutubeLinksOut:
-    """The user's 5 most recently used YouTube links, newest first (AC8.6)."""
+    """The user's 5 most recently used YouTube links, newest first, one per video or
+    playlist id (AC8.6)."""
     return await _recent(db, user)
 
 
@@ -224,22 +279,21 @@ async def list_youtube_links(user: CurrentUser, db: DbSession) -> YoutubeLinksOu
 async def use_youtube_link(
     body: YoutubeLinkIn, user: CurrentUser, db: DbSession
 ) -> YoutubeLinksOut:
-    """Record a link as just used (moves it to the top if known) and drop all but the 5
-    newest. Returns the updated list."""
+    """Record a link as just used and drop all but the 5 newest ids. A link whose video or
+    playlist id is already listed replaces that entry and moves to the top, with the URL just
+    used. Returns the updated list."""
+    # One writer per user at a time, so two pastes of the same id can't both insert.
+    await db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(str(user.id), 0))))
+    key = youtube_key(body.url)
+    stale = [row[0] for row in await _user_rows(db, user) if youtube_key(row[1]) == key]
+    if stale:
+        await db.execute(delete(YoutubeRecentLink).where(YoutubeRecentLink.id.in_(stale)))
     await db.execute(
-        insert(YoutubeRecentLink)
-        .values(user_id=user.id, url=body.url, last_used_at=func.clock_timestamp())
-        .on_conflict_do_update(
-            constraint="uq_youtube_recent_links_user_url",
-            set_={"last_used_at": func.clock_timestamp()},
+        insert(YoutubeRecentLink).values(
+            user_id=user.id, url=body.url, last_used_at=func.clock_timestamp()
         )
     )
-    keep = (
-        select(YoutubeRecentLink.id)
-        .where(YoutubeRecentLink.user_id == user.id)
-        .order_by(YoutubeRecentLink.last_used_at.desc(), YoutubeRecentLink.id)
-        .limit(RECENT_LINKS_LIMIT)
-    )
+    keep = [row[0] for row in _newest_per_key(await _user_rows(db, user))]
     await db.execute(
         delete(YoutubeRecentLink).where(
             YoutubeRecentLink.user_id == user.id, YoutubeRecentLink.id.not_in(keep)

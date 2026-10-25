@@ -430,6 +430,27 @@ describe('recent links (AC8.6)', () => {
     expect(t.api.use).toHaveBeenCalledWith(`https://www.youtube.com/watch?v=${ID2}`)
   })
 
+  it('shows each video or playlist once, keeping the newest entry (#249)', async () => {
+    setup({
+      links: [
+        `https://youtu.be/${ID}?t=5`,
+        `https://www.youtube.com/watch?v=${ID2}`,
+        `https://www.youtube.com/watch?v=${ID}&list=${LIST}`,
+        `https://www.youtube.com/playlist?list=${LIST}`,
+        `https://youtu.be/${ID2}`,
+      ],
+    })
+    await screen.findByRole('button', { name: `Video ${ID}` })
+    const names = screen
+      .getAllByRole('button')
+      .filter((b) => /^(Video|Playlist) /.test(b.textContent ?? ''))
+    expect(names.map((b) => b.textContent)).toEqual([
+      `Video ${ID}`,
+      `Video ${ID2}`,
+      `Playlist ${LIST}`,
+    ])
+  })
+
   it('never uses a stored string as a link target, and skips ones it cannot read', async () => {
     setup({ links: ['javascript:alert(1)', `https://youtu.be/${ID}`] })
     await screen.findByRole('button', { name: `Video ${ID}` })

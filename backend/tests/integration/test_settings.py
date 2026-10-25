@@ -273,6 +273,88 @@ def test_ac8_6_reusing_a_link_moves_it_to_the_top_without_duplicating(
     assert urls(client) == [link(0), link(2), link(1)]
 
 
+ID = "dQw4w9WgXcQ"
+PLAYLIST = "PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf"
+# Every way of writing one video (#249): short link, hosts, scheme, extra parameters.
+SAME_VIDEO = [
+    f"https://www.youtube.com/watch?v={ID}",
+    f"https://youtu.be/{ID}",
+    f"https://youtu.be/{ID}?t=30&si=abc",
+    f"http://youtube.com/watch?v={ID}",
+    f"https://m.youtube.com/watch?v={ID}&feature=share",
+    f"https://music.youtube.com/watch?si=x&v={ID}",
+    f"https://www.youtube-nocookie.com/embed/{ID}",
+    f"https://www.youtube.com/shorts/{ID}",
+    f"https://www.youtube.com/watch?v={ID}&list={PLAYLIST}",
+    f"https://www.youtube.com/watch?v={ID}#t=5",
+]
+
+
+@pytest.mark.parametrize("variant", SAME_VIDEO[1:])
+def test_ac_249_variant_forms_of_one_video_are_one_entry(client: TestClient, variant: str) -> None:
+    use(client, SAME_VIDEO[0])
+    body_ = use(client, variant).json()
+    assert [x["url"] for x in body_["links"]] == [variant]  # the URL just used is stored
+    assert urls(client) == [variant]
+
+
+def test_ac_249_repasting_a_variant_moves_it_to_the_top(client: TestClient) -> None:
+    use(client, SAME_VIDEO[0])
+    use(client, link(1))
+    use(client, link(2))
+    use(client, f"https://youtu.be/{ID}?t=9")
+    assert urls(client) == [f"https://youtu.be/{ID}?t=9", link(2), link(1)]
+
+
+def test_ac_249_a_video_in_a_playlist_is_keyed_as_the_video(client: TestClient) -> None:
+    """The player plays the video id when a link has both, so the video is the identity."""
+    playlist = f"https://www.youtube.com/playlist?list={PLAYLIST}"
+    both = f"https://www.youtube.com/watch?v={ID}&list={PLAYLIST}"
+    use(client, playlist)
+    use(client, both)  # not the playlist's entry: a different thing is played
+    assert urls(client) == [both, playlist]
+    use(client, f"https://www.youtube.com/embed/videoseries?list={PLAYLIST}")
+    assert urls(client) == [f"https://www.youtube.com/embed/videoseries?list={PLAYLIST}", both]
+
+
+def test_ac_249_limit_of_five_counts_ids_not_urls(client: TestClient) -> None:
+    for n in range(4):
+        use(client, link(n))
+    for variant in SAME_VIDEO:
+        use(client, variant)
+    assert urls(client) == [SAME_VIDEO[-1], link(3), link(2), link(1), link(0)]
+    use(client, link(9))
+    assert len(urls(client)) == 5 and link(0) not in urls(client)
+
+
+def test_ac_249_rows_that_are_already_duplicated_collapse(
+    client: TestClient, test_db_url: str
+) -> None:
+    uid = run(_scalar(test_db_url, "SELECT id FROM users"))[0][0]
+    rows = [
+        (f"https://www.youtube.com/watch?v={ID}", 1),
+        (link(1), 2),
+        (f"https://youtu.be/{ID}", 3),
+        (f"https://m.youtube.com/watch?v={ID}&t=1", 4),
+        (link(2), 5),
+    ]
+    for url, minute in rows:
+        run(
+            _exec(
+                test_db_url,
+                f"INSERT INTO youtube_recent_links (user_id, url, last_used_at) VALUES "
+                f"('{uid}', '{url}', now() - interval '{10 - minute} minutes')",
+            )
+        )
+    # The newest of the duplicates stands for the id, in its place in the order.
+    expected = [link(2), f"https://m.youtube.com/watch?v={ID}&t=1", link(1)]
+    assert urls(client) == expected
+    use(client, link(3))  # a write cleans the table too
+    assert urls(client) == [link(3), *expected]
+    left = run(_scalar(test_db_url, "SELECT count(*) FROM youtube_recent_links"))[0][0]
+    assert left == 4
+
+
 def test_ac8_6_reusing_an_old_link_does_not_evict_the_others(client: TestClient) -> None:
     for n in range(5):
         use(client, link(n))
@@ -370,6 +452,14 @@ _FIXTURE = json.loads(
 )
 def test_ac8_6_shared_fixture_server_verdict(client: TestClient, case: dict[str, Any]) -> None:
     assert use(client, case["url"]).status_code == (200 if case["server_ok"] else 422)
+
+
+@pytest.mark.parametrize(
+    "case", [pytest.param(c, id=c["reason"]) for c in _FIXTURE if c["client_ok"]]
+)
+def test_ac_249_server_key_matches_the_client_parse(case: dict[str, Any]) -> None:
+    # `key` is the id the client's parse finds (youtubeLink.test.ts checks the same value).
+    assert settings_api.youtube_key(case["sent"]) == case["key"]
 
 
 @pytest.mark.parametrize(
