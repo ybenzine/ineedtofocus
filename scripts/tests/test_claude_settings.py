@@ -364,6 +364,24 @@ def test_harmless_neighbours_are_not_denied() -> None:
         assert matching("deny", command) == [], command
 
 
+HELPER_CHECK = "git config --show-origin --get-all credential.https://github.com.helper"
+
+
+def test_helper_check_runs_without_a_prompt() -> None:
+    """The read-only check in infra/github/README.md (Checking a session) that git's helper
+    for github.com is gh: allowed in exactly that form, never a wildcard `git config`, which
+    would also allow writes."""
+    assert f"Bash({HELPER_CHECK})" in PERMISSIONS["allow"]
+    config_rules = [r for r in PERMISSIONS["allow"] if r.startswith("Bash(git config")]
+    assert config_rules == [f"Bash({HELPER_CHECK})"]
+    assert matching("allow", HELPER_CHECK)
+    assert matching("deny", HELPER_CHECK) == []
+    assert matching("ask", HELPER_CHECK) == []
+    assert matching("allow", "git config credential.https://github.com.helper x") == []
+    readme = (REPO / "infra" / "github" / "README.md").read_text()
+    assert f"`{HELPER_CHECK}`" in readme
+
+
 def test_git_credential_fill_is_documented_as_human_only() -> None:
     """The setup doc's username check pipes `git credential fill`, which the deny rule
     blocks for agents, so the doc must say it's for Yacine's own terminal."""
