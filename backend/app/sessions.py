@@ -12,7 +12,7 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import (
     AfterValidator,
     AwareDatetime,
@@ -29,6 +29,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.deps import CurrentUser, DbSession
 from app.errors import ErrorDetail, ErrorInfo, ErrorResponse, error_field
+from app.faults import maybe_fail_save
 from app.metrics import SESSION_SAVE_DURATION, SESSION_SAVES, SYNC_BATCH_SIZE, observe
 from app.models import FocusSession, Mode, Status, Tag
 from app.models.enums import GOAL_MAX_LENGTH
@@ -307,13 +308,20 @@ async def _save(
     return created, rows
 
 
+def _injected_fault(request: Request) -> None:
+    """Fail this save on purpose when the operator turned fault injection on (#33,
+    `app/faults.py`). Before anything is written, so the client's retry saves it."""
+    maybe_fail_save(request.app.state.settings.fault_save_error_percent)
+
+
 @router.post("", status_code=201, responses={**_ERRORS, 200: {"model": SessionOut}})
 async def save_session(
-    body: SessionIn, user: CurrentUser, db: DbSession, response: Response
+    body: SessionIn, user: CurrentUser, db: DbSession, request: Request, response: Response
 ) -> SessionOut:
     """Save one finished session (AC6.3). Idempotent on `id` (AC13.4): a repeat returns 200 with
     the stored session and changes nothing."""
     with observe(SESSION_SAVES, SESSION_SAVE_DURATION, {"kind": "single"}):
+        _injected_fault(request)
         created, rows = await _save(db, user.id, [body])
         if body.id not in rows:
             raise HTTPException(409, "A session id is already in use")
@@ -339,7 +347,9 @@ def _raw_id(raw: object) -> uuid.UUID | None:
 
 
 @router.post("/sync", responses=_ERRORS)
-async def sync_sessions(body: SyncRequest, user: CurrentUser, db: DbSession) -> SyncResult:
+async def sync_sessions(
+    body: SyncRequest, user: CurrentUser, db: DbSession, request: Request
+) -> SyncResult:
     """Save a batch of 1 to 100 sessions (AC13.3), idempotent per `id` (AC13.4).
 
     Returns 200 with one result per item, in request order: `created`, `existing` (already
@@ -355,6 +365,7 @@ async def sync_sessions(body: SyncRequest, user: CurrentUser, db: DbSession) -> 
         {"kind": "sync"},
         weight=len(body.sessions),
     ):
+        _injected_fault(request)
         results: list[SyncItemResult | None] = [None] * len(body.sessions)
         valid: list[tuple[int, SessionIn]] = []
         for index, raw in enumerate(body.sessions):

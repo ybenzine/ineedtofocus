@@ -12,7 +12,8 @@
 3. Saves a session the way the browser does (a sync batch, with its own `traceparent`) and
    checks that the three signals link up (#31): the trace has the request and its database
    spans, Loki has the app's log line for that same `trace_id`, and Prometheus holds an
-   exemplar of the save-latency histogram pointing at that trace ID.
+   exemplar of the save-latency histogram pointing at that trace ID. Then loads history
+   once, so the history metrics have data for steps 6 and 7.
 4. Polls Grafana (from grafana/otel-lgtm) until it has, for service `ineedtofocus`:
    traces (Tempo), metrics (Prometheus) and logs (Loki).
 5. Fails if the marker or the probe's raw path shows up in the probe's trace or in any log
@@ -20,7 +21,10 @@
    `DETAIL: Key (...)` line: query strings, cookies, paths and row values must never reach
    telemetry (_docs/observability.md). An unmatched path is exported as `UNMATCHED`.
 6. The key-journey dashboard (#32) is provisioned in Grafana and every one of its queries
-   runs against Prometheus, Loki and Tempo (scripts/grafana_dashboards.py verify).
+   runs against Prometheus, Loki and Tempo; each metrics query returns data, so a renamed
+   metric or label can't blank a panel silently (scripts/grafana_dashboards.py verify).
+7. The user-impact alert rules (#33) are provisioned, Grafana evaluates them without
+   errors, and each of their queries returns data (scripts/grafana_alerts.py verify).
 
 Ports: APP_PORT (8000) and GRAFANA_PORT (3000), from the environment or .env. Stdlib only.
 """
@@ -38,6 +42,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import grafana_alerts
 import grafana_dashboards
 
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
@@ -213,6 +218,11 @@ def main() -> None:
     if status != 200 or '"created":1' not in body.replace(" ", ""):
         sys.exit(f"FAIL  POST /api/sessions/sync -> {status}: {body[:200]}")
     print("ok    POST /api/sessions/sync saved a session")
+    cookie = {"Cookie": f"{SESSION_COOKIE}={token}"}
+    status, body = get(f"{APP}/api/history?view=all&tz=UTC", cookie)
+    if status != 200 or '"session_count":1' not in body.replace(" ", ""):
+        sys.exit(f"FAIL  GET /api/history -> {status}: {body[:200]}")
+    print("ok    GET /api/history loads the saved session")
 
     def journey_has_database_spans() -> bool:
         body = trace_body(journey_trace)
@@ -304,10 +314,20 @@ def main() -> None:
         "(url.query is REDACTED, an unmatched url.path is UNMATCHED)"
     )
 
-    problems = grafana_dashboards.verify(GRAFANA)
+    problems = grafana_dashboards.verify(GRAFANA, wait_s=TIMEOUT_S)
     if problems:
         sys.exit("FAIL  key-journey dashboard: " + "; ".join(problems))
-    print(f"ok    dashboard {grafana_dashboards.uid('local')} is provisioned and its queries run")
+    print(
+        f"ok    dashboard {grafana_dashboards.uid('local')} is provisioned, its queries run "
+        "and every metrics query returns data"
+    )
+    problems = grafana_alerts.verify(GRAFANA, wait_s=TIMEOUT_S)
+    if problems:
+        sys.exit("FAIL  alert rules: " + "; ".join(problems))
+    print(
+        f"ok    alert rules {grafana_alerts.group_name('local')} are provisioned, evaluate "
+        "without errors and their queries return data"
+    )
 
 
 if __name__ == "__main__":

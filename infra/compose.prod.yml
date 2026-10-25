@@ -52,6 +52,11 @@ services:
       # uvicorn --proxy-headers (image CMD) trusts X-Forwarded-For/-Proto only from
       # Caddy's fixed address, so the sign-in rate limiter sees the real client.
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:?set by infra/env/<env>.env}
+      # The alert trigger (#33): off (0) unless the operator sets it in the server's
+      # /opt/focus/<env>/.env and recreates the app. Never set in infra/env/<env>.env,
+      # which would win over the server file (checked by scripts/check_prod_compose.py
+      # and infra/tests/check_config.sh). _docs/observability.md, Alert trigger.
+      FAULT_SAVE_ERROR_PERCENT: ${FAULT_SAVE_ERROR_PERCENT:-0}
       # Telemetry goes to this project's collector, which forwards to Grafana Cloud.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf

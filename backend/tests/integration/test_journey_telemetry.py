@@ -356,3 +356,57 @@ def test_duration_histograms_use_second_buckets() -> None:
         points = _points(name)
         assert points, f"no data points for {name}"
         assert all(list(p.explicit_bounds) == bounds for p in points.values())
+
+
+# --- The alert's inputs (#33) ----------------------------------------------------------
+
+
+@pytest.fixture
+def faulty(app_url: str) -> Iterator[TestClient]:
+    """An app whose operator turned fault injection on for every save."""
+    settings = Settings(database_url=app_url, cookie_secure=False, fault_save_error_percent=100)
+    with TestClient(create_app(settings), raise_server_exceptions=False) as c:
+        yield c
+
+
+def test_every_journey_counter_series_exists_from_startup(
+    traced: tuple[TestClient, InMemorySpanExporter],
+) -> None:
+    """Zero-initialised at startup, so the alert sees the first errors as an increase."""
+    saves = {(dict(key)["kind"], dict(key)["outcome"]) for key in _points("focus.session.saves")}
+    assert saves >= {
+        (kind, outcome)
+        for kind in ("single", "sync")
+        for outcome in ("created", "existing", "rejected", "error")
+    }
+    loads = {dict(key)["outcome"] for key in _points("focus.history.loads")}
+    assert loads >= {"ok", "invalid", "error"}
+
+
+def test_injected_faults_fail_saves_as_errors_and_store_nothing(
+    faulty: TestClient, app_url: str
+) -> None:
+    c = faulty
+    _signed_in(c)
+    single = _value("focus.session.saves", kind="single", outcome="error")
+    sync = _value("focus.session.saves", kind="sync", outcome="error")
+    body = make_session()
+    r = c.post("/api/sessions", json=body)
+    assert r.status_code == 500
+    assert r.json() == {"error": {"code": "internal_error", "message": "Internal server error"}}
+    batch = [make_session(), make_session(), make_session()]
+    assert c.post("/api/sessions/sync", json={"sessions": batch}).status_code == 500
+    assert _value("focus.session.saves", kind="single", outcome="error") == single + 1
+    assert _value("focus.session.saves", kind="sync", outcome="error") == sync + 3
+    # History loads are untouched, and nothing was stored.
+    history = c.get("/api/history?view=all&tz=UTC")
+    assert history.status_code == 200
+    assert history.json()["total_focus_seconds"] == 0
+
+    # The operator turns it off (a new app, as after recreating the container): the
+    # client's retry of the same session saves it.
+    settings = Settings(database_url=app_url, cookie_secure=False)
+    with TestClient(create_app(settings)) as again:
+        signin = again.post("/api/auth/signin", json={"email": EMAIL, "password": PASSWORD})
+        assert signin.status_code == 200
+        assert again.post("/api/sessions", json=body).status_code == 201

@@ -1,0 +1,153 @@
+{
+  "apiVersion": 1,
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "key-journey-dev",
+      "folder": "I Need To Focus",
+      "interval": "60s",
+      "rules": [
+        {
+          "uid": "focus-session-save-errors-dev",
+          "title": "Session saves failing (dev)",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "grafanacloud-prom",
+              "model": {
+                "refId": "A",
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "grafanacloud-prom"
+                },
+                "expr": "((sum(increase(focus_session_saves_total{service_name=\"ineedtofocus\", deployment_environment_name=\"dev\", outcome=\"error\"}[5m]))) or vector(0)) / (sum(increase(focus_session_saves_total{service_name=\"ineedtofocus\", deployment_environment_name=\"dev\"}[5m])) > 0)",
+                "instant": true,
+                "range": false,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "grafanacloud-prom",
+              "model": {
+                "refId": "B",
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "grafanacloud-prom"
+                },
+                "expr": "sum(increase(focus_session_saves_total{service_name=\"ineedtofocus\", deployment_environment_name=\"dev\"}[5m]))",
+                "instant": true,
+                "range": false,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "C",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "datasource": {
+                  "type": "__expr__",
+                  "uid": "__expr__"
+                },
+                "type": "math",
+                "expression": "$A > 0.05 && $B >= 10"
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "KeepLast",
+          "for": "1m",
+          "annotations": {
+            "summary": "Over 5% of session saves are failing in dev",
+            "description": "{{ humanizePercentage $values.A.Value }} of the {{ printf \"%.0f\" $values.B.Value }} sessions submitted in the last 5 minutes failed (outcome=\"error\"); the alert fires above 5% with at least 10 sessions. Users' sessions stay queued on their devices and sync once saves work again.",
+            "runbook_url": "https://github.com/ybenzine/ineedtofocus/blob/main/_docs/runbooks/session-save-errors.md",
+            "__dashboardUid__": "focus-key-journey-dev",
+            "__panelId__": "3"
+          },
+          "labels": {
+            "service": "ineedtofocus",
+            "environment": "dev",
+            "alert": "session-save-errors"
+          },
+          "isPaused": false
+        },
+        {
+          "uid": "focus-history-latency-dev",
+          "title": "History slow (dev)",
+          "condition": "C",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "grafanacloud-prom",
+              "model": {
+                "refId": "A",
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "grafanacloud-prom"
+                },
+                "expr": "histogram_quantile(0.95, sum by (le) (increase(focus_history_load_duration_seconds_bucket{service_name=\"ineedtofocus\", deployment_environment_name=\"dev\"}[5m]))) > 0",
+                "instant": true,
+                "range": false,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
+              "refId": "C",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "C",
+                "datasource": {
+                  "type": "__expr__",
+                  "uid": "__expr__"
+                },
+                "type": "math",
+                "expression": "$A > 2"
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "KeepLast",
+          "for": "1m",
+          "annotations": {
+            "summary": "History loads are slow in dev (p95 over 2 s)",
+            "description": "The 95th percentile of GET /api/history over the last 5 minutes is {{ humanizeDuration $values.A.Value }}; the alert fires above 2 s.",
+            "runbook_url": "https://github.com/ybenzine/ineedtofocus/blob/main/_docs/runbooks/history-latency.md",
+            "__dashboardUid__": "focus-key-journey-dev",
+            "__panelId__": "10"
+          },
+          "labels": {
+            "service": "ineedtofocus",
+            "environment": "dev",
+            "alert": "history-latency"
+          },
+          "isPaused": false
+        }
+      ]
+    }
+  ]
+}

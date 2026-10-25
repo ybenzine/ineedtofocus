@@ -16,6 +16,7 @@ from app.errors import fix_openapi, register_error_handlers
 from app.health import router as health_router
 from app.history_api import router as history_router
 from app.logging_config import configure_logging
+from app.metrics import zero_journey_series
 from app.rate_limit import FailureLimiter
 from app.sessions import router as sessions_router
 from app.settings_api import router as settings_router
@@ -39,6 +40,14 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logger.info("app starting", extra={"version": __version__})
+        # At startup, not import: `opentelemetry-instrument` has set the meter provider by now.
+        zero_journey_series()
+        if settings.fault_save_error_percent > 0:
+            # Loud on purpose: the operator turned on the alert trigger (#33, app/faults.py).
+            logger.warning(
+                "fault injection on: session saves fail on purpose",
+                extra={"fault_save_error_percent": settings.fault_save_error_percent},
+            )
         yield
         await engine.dispose()
 
