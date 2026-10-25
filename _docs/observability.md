@@ -1,6 +1,6 @@
 # Observability
 
-Instrumented in #31. Alerts and dashboards follow in later issues.
+Instrumented in #31; Grafana Cloud wiring and the key-journey dashboards in #32. Alerts follow in #33.
 
 ## Key user journey
 
@@ -134,12 +134,12 @@ Do this once, and again after a PR changes a dashboard. Grafana Cloud doesn't re
 
 ### Screenshots
 
-Taken on the local stack (the same model as prod and dev), running the #31 instrumentation (PR #193's image), after 15 minutes of saves, sync batches and history loads with a few seconds of database outage (Postgres stopped). `node scripts/grafana_screenshots.mjs` takes them again.
+These come from the local stack, which uses the same model as prod and dev. They show the last 15 minutes of saves, sync batches (some with an invalid item) and history loads (some with a bad time zone), including a few seconds with Postgres stopped. Retake them with `node scripts/grafana_screenshots.mjs`.
 
-![Key-journey dashboard, local stack: errors, logs, traces and HTTP rows](images/observability/key-journey-errors-http.png)
+![Key-journey dashboard, local stack: session saves and history loads](images/observability/key-journey-saves-history.png)
+
+![Key-journey dashboard, local stack: errors, logs, traces and every API route](images/observability/key-journey-errors-http.png)
 
 Clicking a `trace_id` in **Error logs with their traces** opens the failed request's trace in Explore:
 
-![The trace of a failed history load, opened from an error log line](images/observability/error-log-to-trace.png)
-
-The session-saves and history rows get their screenshot (`key-journey-saves-history.png`) once #31's duration histograms have bucket boundaries in seconds. Until then, both latency panels read about 4.75 s whatever the real latency is.
+![The trace of a failed request, opened from its error log line](images/observability/error-log-to-trace.png)
