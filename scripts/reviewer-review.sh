@@ -13,8 +13,9 @@
 # Fallback: if the App's private key is missing or unreadable (reviewer_token.py exits 3),
 # the review is posted as a COMMENT review from the session's own gh login (the agent
 # account) instead, and this script says so. A comment can't approve, so the merge waits
-# for Yacine to restore the key (_docs/process.md §4). Any other failure (GitHub refused the token, network) stops
-# without posting, so it gets looked at instead of silently downgrading the review.
+# for Yacine to restore the key (_docs/process.md §4). Any other failure (GitHub refused
+# the token, network) stops without posting, so it gets looked at instead of silently
+# downgrading the review.
 #
 # Env: REVIEWER_APP_ID, REVIEWER_INSTALLATION_ID, REVIEWER_APP_KEY_PATH (see .env.example);
 #      REVIEWER_REPO (default ybenzine/ineedtofocus);
