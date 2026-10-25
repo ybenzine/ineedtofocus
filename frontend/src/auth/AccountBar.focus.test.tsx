@@ -21,7 +21,9 @@ describe('sign-out confirmation keyboard use (#151)', () => {
     })
     const user = { id: 'u1', email: 'a@b.co', created_at: '2026-10-23T00:00:00Z' }
     render(
-      <AccountContext.Provider value={{ user, signOut }}>
+      <AccountContext.Provider
+        value={{ user, expired: false, leaveExpired: () => undefined, signOut }}
+      >
         <AccountBar controller={controller} />
       </AccountContext.Provider>,
     )

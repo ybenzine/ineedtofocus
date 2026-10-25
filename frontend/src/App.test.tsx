@@ -29,6 +29,8 @@ async function runningStore() {
 describe('App account bar', () => {
   const account = {
     user: { id: 'u', email: 'a@b.co', created_at: '' },
+    expired: false,
+    leaveExpired: () => undefined,
     signOut: () => Promise.resolve(null),
   }
   function renderSignedIn(store = new MemoryActiveSessionStore()) {
