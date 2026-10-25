@@ -148,7 +148,7 @@ export class TimerController {
   /** Starts a new session. Only one can be active at a time (AC6.1). */
   async start(options: StartOptions): Promise<TimerUpdate> {
     const stored = this.#store.load()
-    const pending = stored === null ? this.#held : this.#pendingFor(stored)
+    const pending = this.#held ?? (stored === null ? null : this.#pendingFor(stored))
     if (pending !== null) {
       if (!(await this.#handOff(pending))) {
         throw new TimerError('The previous session has not been saved yet')
@@ -214,7 +214,7 @@ export class TimerController {
   /** Hands a finished session that couldn't be saved earlier to `saveRecord` again. */
   async retryPending(): Promise<boolean> {
     const stored = this.#store.load()
-    const pending = stored === null ? this.#held : this.#pendingFor(stored)
+    const pending = this.#held ?? (stored === null ? null : this.#pendingFor(stored))
     if (pending === null) return true
     return this.#handOff(pending)
   }

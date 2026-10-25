@@ -715,4 +715,23 @@ describe('a failed write to the device store is retried', () => {
     expect(store.load()?.session.config).toEqual(countdown(5))
     expect(controller.current()?.paused).toBe(false)
   })
+
+  it('hands over a held record even when another tab has put a session in the store', async () => {
+    const { store, state } = flaky()
+    const saved: SessionRecord[] = []
+    let failSave = true
+    const { make } = setup(store)
+    const tabA = make((r) => {
+      if (failSave) throw new Error('IndexedDB unavailable')
+      saved.push(r)
+    })
+    state.failures = 3 // the start write, its retry at stop, and the pendingRecord write
+    await tabA.start(startOptions(countdown(25)))
+    wait(2 * MINUTE_MS)
+    expect((await tabA.stop()).recordPending).toBe(true)
+    await make().start(startOptions(countdown(10))) // tab B reaches the store
+    failSave = false
+    expect(await tabA.retryPending()).toBe(true)
+    expect(saved).toHaveLength(1)
+  })
 })
