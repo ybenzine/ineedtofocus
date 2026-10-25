@@ -83,7 +83,10 @@ Agents don't act as Yacine. They use a machine account of their own, so the `pro
 ### Checking a session
 
 - `gh auth status` should say `Logged in to github.com account merciful-poseidon`, with token scopes including `repo`, `workflow`, `project` and `read:org`. `gh api user --jq .login` prints `merciful-poseidon`.
-- `git config --show-origin --get-all credential.https://github.com.helper` should show the empty entry followed by `gh auth git-credential`. To see which account git would push as without printing the token: `printf 'protocol=https\nhost=github.com\n\n' | git credential fill | grep '^username='` should print `username=merciful-poseidon`.
+- `git config --show-origin --get-all credential.https://github.com.helper` should show the empty entry followed by `gh auth git-credential`. git then pushes as whichever account `gh auth status` shows, so for agents these two checks are enough.
+- To see directly which account git would push as, in your own terminal (agents can't: `.claude/settings.json` denies `git credential fill`, whose unfiltered output is the token, #174): `printf 'protocol=https\nhost=github.com\n\n' | git credential fill | grep '^username='` should print `username=merciful-poseidon`.
+
+Agents never run `gh auth status --show-token` (`-t`), `gh auth token`, `gh auth git-credential`, `git credential fill`, a `git credential-<helper>` or the `security` keychain reads: each prints the bot's token, and `.claude/settings.json` denies them (#174). Only plain `gh auth status` and a few exact variants run without a prompt; see [CLAUDE.md](../../CLAUDE.md#permissions-for-unattended-runs).
 
 If `gh auth status` shows `ybenzine`, the session wasn't started with `claude-focus`. Agents stop and ask for a restart instead of working as Yacine.
 

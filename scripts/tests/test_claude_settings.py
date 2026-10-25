@@ -233,3 +233,140 @@ def test_concurrent_agents_are_capped_at_four(variable: str) -> None:
     Claude Code ignores a subagent cap that isn't a positive whole number in plain digits,
     so the value is exactly the string "4"."""
     assert ENV.get(variable) == "4", variable
+
+
+# --- Commands that print the agent account's GitHub token (#174) --------------------------
+# Since #127 every session's gh and git push use merciful-poseidon's long-lived token. None of
+# these samples is ever run: printing the token into a transcript is the leak.
+
+STATUS_ALLOWS = [
+    "Bash(gh auth status)",
+    "Bash(gh auth status --active)",
+    "Bash(gh auth status -a)",
+    "Bash(gh auth status --hostname github.com)",
+    "Bash(gh auth status -h github.com)",
+    "Bash(gh auth status --active --hostname github.com)",
+]
+
+TOKEN_DENIES = [
+    "Bash(gh auth status *--show-token*)",
+    "Bash(gh auth status -t*)",
+    "Bash(gh auth status * -t*)",
+    "Bash(gh auth status *-at*)",
+    "Bash(gh auth token*)",
+    "Bash(gh auth git-credential*)",
+    "Bash(git credential fill*)",
+    "Bash(git credential-*)",
+    "Bash(security find-generic-password*)",
+    "Bash(security find-internet-password*)",
+    "Bash(security dump-keychain*)",
+]
+
+# How agents check which account they are (AGENTS.md, infra/github/README.md): no prompt.
+STATUS_COMMANDS = [
+    "gh auth status",
+    "gh auth status --active",
+    "gh auth status -a",
+    "gh auth status --hostname github.com",
+    "gh auth status -h github.com",
+    "gh auth status --active --hostname github.com",
+]
+
+# Each prints the token (gh's -t is --show-token, a bool, so it can lead a short-flag
+# cluster or sit after -a; `-th github.com` is -t plus -h github.com).
+TOKEN_COMMANDS = [
+    "gh auth status --show-token",
+    "gh auth status -t",
+    "gh auth status --show-token=true",
+    "gh auth status -h github.com --show-token",
+    "gh auth status -h github.com -t",
+    "gh auth status --hostname github.com -t",
+    "gh auth status --active -t",
+    "gh auth status -th github.com",
+    "gh auth status -ta",
+    "gh auth status -at",
+    "gh auth status -ath github.com",
+    "gh auth status --json hosts --show-token",
+    "gh auth status --json hosts -t",
+    "gh auth token",
+    "gh auth token -h github.com",
+    "gh auth token --user merciful-poseidon",
+    "gh auth git-credential get",
+    "git credential fill",
+    "git credential fill --no-such-flag",
+    "git credential-osxkeychain get",
+    "git credential-store get",
+    "git credential-cache get",
+    "security find-generic-password -s gh:github.com -w",
+    "security find-internet-password -s github.com -w",
+    "security dump-keychain -d",
+]
+
+# Forms the rules can't see. They match no deny rule, but they don't match an allow rule
+# either, so they prompt instead of running unattended. Only the exact forms above run
+# without a prompt.
+UNCAUGHT_TOKEN_COMMANDS = [
+    "gh auth status -aat",
+    "gh auth status -h github.com -aat",
+]
+
+
+@pytest.mark.parametrize("command", UNCAUGHT_TOKEN_COMMANDS)
+def test_uncaught_forms_are_really_uncaught(command: str) -> None:
+    """Keeps the list honest: if a rule starts catching one, move it to TOKEN_COMMANDS."""
+    assert matching("deny", command) == [], command
+
+
+@pytest.mark.parametrize("rule", TOKEN_DENIES)
+def test_token_deny_rule_is_present(rule: str) -> None:
+    assert rule in PERMISSIONS["deny"]
+
+
+@pytest.mark.parametrize("rule", STATUS_ALLOWS)
+def test_status_allow_rule_is_present(rule: str) -> None:
+    assert rule in PERMISSIONS["allow"]
+
+
+def test_status_is_allowed_only_in_exact_forms() -> None:
+    """A wildcard allow (the old `gh auth status *`) runs every flag form nobody denied, so
+    only exact commands are allowed: whatever the deny rules miss prompts instead."""
+    status_rules = [r for r in PERMISSIONS["allow"] if r.startswith("Bash(gh auth")]
+    assert sorted(status_rules) == sorted(STATUS_ALLOWS)
+    assert all("*" not in rule for rule in status_rules)
+
+
+@pytest.mark.parametrize("command", STATUS_COMMANDS)
+def test_plain_auth_status_runs_without_a_prompt(command: str) -> None:
+    assert matching("allow", command), command
+    assert matching("deny", command) == [], command
+    assert matching("ask", command) == [], command
+
+
+@pytest.mark.parametrize("command", TOKEN_COMMANDS)
+def test_token_printing_commands_are_denied(command: str) -> None:
+    assert matching("deny", command), command
+
+
+@pytest.mark.parametrize("command", TOKEN_COMMANDS + UNCAUGHT_TOKEN_COMMANDS)
+def test_token_printing_commands_are_never_allowed(command: str) -> None:
+    assert matching("allow", command) == [], command
+
+
+def test_harmless_neighbours_are_not_denied() -> None:
+    """--template contains `-t` but no ` -t`, and --active no `-at`; -ht is -h with the
+    value "t", not -t. None of them shows a token, so no deny rule may match."""
+    for command in [
+        "gh auth status --json hosts --template '{{.hosts}}'",
+        "gh auth status -ht",
+        "gh auth status --no-refresh",
+        "git config --show-origin --get-all credential.https://github.com.helper",
+    ]:
+        assert matching("deny", command) == [], command
+
+
+def test_git_credential_fill_is_documented_as_human_only() -> None:
+    """The setup doc's username check pipes `git credential fill`, which the deny rule
+    blocks for agents, so the doc must say it's for Yacine's own terminal."""
+    readme = (REPO / "infra" / "github" / "README.md").read_text()
+    line = next(line for line in readme.splitlines() if "| git credential fill | grep" in line)
+    assert "own terminal" in line
