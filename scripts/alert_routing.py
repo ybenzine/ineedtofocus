@@ -15,9 +15,11 @@
         # the local drill: the same contact point in the local Grafana, posting to
         # `alert_dispatch.py receive` with its stand-in token, for environment=local
     python3 scripts/alert_routing.py test cloud|local --env <env> --alert <alert>
-        [--grafana <url>]
+        [--grafana <url>] [--namespace <namespace>]
         # send one synthetic notification through the stored contact point; in Grafana
-        # Cloud that's a real dispatch, which runs the on-call workflow
+        # Cloud that's a real dispatch, which runs the on-call workflow. The receivers API's
+        # namespace comes from Grafana's frontend settings (`stacks-<id>` in Grafana
+        # Cloud, `default` locally); --namespace overrides that lookup
 
 Grafana alert -> notification policy -> webhook contact point -> GitHub REST API
 `POST /repos/ybenzine/ineedtofocus/dispatches` -> `repository_dispatch` event
@@ -36,6 +38,7 @@ from __future__ import annotations
 
 import getpass
 import json
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -64,8 +67,15 @@ GROUP_INTERVAL = "1m"  # a resolved notification follows within a minute
 REPEAT_INTERVAL = "4h"  # re-sent while still firing; #35 updates the open incident
 TRACES_BEFORE = timedelta(minutes=30)  # the trace links start this long before the alert
 TRACES_AFTER = timedelta(minutes=10)  # and end this long after it resolved
-# Grafana's receivers API (the older .../config/api/v1/receivers/test is gone in Grafana 13).
-RECEIVERS_API = "/apis/notifications.alerting.grafana.app/v1beta1/namespaces/default"
+# Grafana's receivers API (the older .../config/api/v1/receivers/test is gone in Grafana 13),
+# a Kubernetes-style API under a namespace: `default` for org 1 of an OSS Grafana (the local
+# stack), `stacks-<stack id>` in Grafana Cloud, where `default` gets 403 "invalid namespace"
+# (#219). Grafana names it in its frontend settings; see namespace().
+RECEIVERS_API = "/apis/notifications.alerting.grafana.app/v1beta1/namespaces/{namespace}"
+FRONTEND_SETTINGS = "/api/frontend/settings"
+DEFAULT_NAMESPACE = "default"
+# A Kubernetes namespace is a DNS label: it can't add a path segment, a query or a host.
+NAMESPACE = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
 TIME = "2006-01-02T15:04:05Z"  # Go's layout for d.TIMESTAMP (Grafana passes UTC)
 # The traces worth opening first, per alert.
 TRACES = {
@@ -444,12 +454,45 @@ def apply(
     print(f"ok    notification policy: service={g.SERVICE}, environment=~{envs} -> {CONTACT_POINT}")
 
 
-def send_test(grafana: str, token: str | None, target: str, env: str, alert: str) -> None:
+def check_namespace(value: str) -> str:
+    """`value` if it's a valid Kubernetes namespace, so it can only ever name one path
+    segment of the receivers API on the same Grafana."""
+    if not NAMESPACE.fullmatch(value):
+        raise RuntimeError(f"{value!r} isn't a Grafana namespace (like default or stacks-123)")
+    return value
+
+
+def namespace(grafana: str, token: str | None) -> str:
+    """The namespace of the token's org, as Grafana's frontend settings name it (the
+    Grafana UI reads it from there too): `stacks-<stack id>` in Grafana Cloud, `default`
+    for org 1 of an OSS Grafana. `default` if the settings don't name one."""
+    settings = call(grafana, token, "GET", FRONTEND_SETTINGS)
+    found = settings.get("namespace") if isinstance(settings, dict) else None
+    if not found:
+        print(
+            f"note  {FRONTEND_SETTINGS} names no namespace: using {DEFAULT_NAMESPACE!r}"
+            " (pass --namespace to choose another)"
+        )
+        return DEFAULT_NAMESPACE
+    return check_namespace(str(found))
+
+
+def send_test(
+    grafana: str,
+    token: str | None,
+    target: str,
+    env: str,
+    alert: str,
+    ns: str | None = None,
+) -> None:
     """One synthetic notification through the stored contact point, with its stored token:
     what the contact point's **Test** button does with custom labels. Grafana sends a
-    test as a firing alert with no rule behind it."""
+    test as a firing alert with no rule behind it. `ns` is the receivers API's namespace,
+    looked up in Grafana unless given."""
     grafana = check_grafana_url(target, grafana)
-    receivers = call(grafana, token, "GET", f"{RECEIVERS_API}/receivers") or {}
+    ns = check_namespace(ns) if ns is not None else namespace(grafana, token)
+    api = RECEIVERS_API.format(namespace=ns)
+    receivers = call(grafana, token, "GET", f"{api}/receivers") or {}
     found = [
         (item["metadata"]["name"], integration)
         for item in receivers.get("items", [])
@@ -457,14 +500,16 @@ def send_test(grafana: str, token: str | None, target: str, env: str, alert: str
         if integration.get("uid") == CONTACT_POINT
     ]
     if not found:
-        raise RuntimeError(f"no contact point {CONTACT_POINT}: run apply {target} first")
+        raise RuntimeError(
+            f"no contact point {CONTACT_POINT} in namespace {ns}: run apply {target} first"
+        )
     name, integration = found[0]
     sample = synthetic_alert(grafana + "/", env, alert, "firing")
     result = call(
         grafana,
         token,
         "POST",
-        f"{RECEIVERS_API}/receivers/{urllib.parse.quote(name)}/test",
+        f"{api}/receivers/{urllib.parse.quote(name, safe='')}/test",
         {
             "integration": {
                 "uid": integration["uid"],
@@ -480,7 +525,7 @@ def send_test(grafana: str, token: str | None, target: str, env: str, alert: str
     )
     if (result or {}).get("status") != "success":
         raise RuntimeError(f"the test notification failed: {(result or {}).get('error')}")
-    print(f"ok    sent a synthetic {alert} firing in {env} through {CONTACT_POINT}")
+    print(f"ok    sent a synthetic {alert} firing in {env} through {CONTACT_POINT} ({ns})")
 
 
 def _option(argv: list[str], name: str) -> str | None:
@@ -521,15 +566,21 @@ def main(argv: list[str]) -> int:
         url = _option(argv, "--url") or LOCAL_URL
         env = _option(argv, "--env")
         alert = _option(argv, "--alert")
+        ns = _option(argv, "--namespace")
         if len(argv) != 1 or argv[0] not in TARGETS:
             print(__doc__, file=sys.stderr)
             return 2
         target = argv[0]
+        if ns is not None and command != "test":
+            print("--namespace is for test only", file=sys.stderr)
+            return 2
         if target == "cloud" and not grafana:
             print("apply cloud and test cloud need --grafana <Grafana Cloud URL>", file=sys.stderr)
             return 2
         try:
             grafana = check_grafana_url(target, grafana or GRAFANA)
+            if ns is not None:
+                ns = check_namespace(ns)
         except RuntimeError as e:
             print(f"FAIL  {e}", file=sys.stderr)
             return 2
@@ -562,7 +613,7 @@ def main(argv: list[str]) -> int:
                         file=sys.stderr,
                     )
                     return 2
-                send_test(grafana, token, target, env, alert)
+                send_test(grafana, token, target, env, alert, ns)
         except (RuntimeError, OSError) as e:
             print(f"FAIL  {e}", file=sys.stderr)
             return 1

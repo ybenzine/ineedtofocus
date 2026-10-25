@@ -4,13 +4,17 @@ resolved alerts to GitHub, and the workflow that receives them. No Grafana here:
 
 from __future__ import annotations
 
+import io
 import json
 import re
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
 import alert_dispatch as d
 import alert_routing as r
+import grafana_alerts as ga
 import grafana_dashboards as g
 import pytest
 import yaml  # type: ignore[import-untyped]  # no stubs in the locked env
@@ -309,12 +313,150 @@ def test_a_redirect_is_never_followed_with_the_token() -> None:
                 "/api/v1/provisioning/contact-points",
                 {"settings": {"authorization_credentials": "dispatch-token"}},
             )
+        # The namespace lookup (#219) is the first request `test` makes.
+        with pytest.raises(RuntimeError, match=r"/api/frontend/settings -> HTTP 302 redirect"):
+            r.send_test(f"http://127.0.0.1:{port}", "tok", "local", "local", "history-latency")
     finally:
         server.shutdown()
         server.server_close()
-    assert len(seen) == 2
+    assert len(seen) == 3
     assert not [s for s in seen if "/elsewhere" in s]  # never followed
     assert seen[0].startswith("GET /api/datasources Bearer tok")
+    assert seen[2].startswith("GET /api/frontend/settings Bearer tok")
+
+
+# --- The receivers API's namespace (#219) ------------------------------------------------
+
+CLOUD = "https://ineedtofocus.grafana.net"
+RECEIVER = "Zm9jdXMtb25jYWxsLWdpdGh1Yg"  # how Grafana names a receiver: its name, base64url
+TEST_CLOUD = ["test", "cloud", "--grafana", CLOUD, "--env", "dev", "--alert", "session-save-errors"]
+
+
+class FakeOpener:
+    """Stands in for #33's no-redirect opener, so every request goes through the real
+    call(): records each request and answers like Grafana's API. `settings` is what
+    /api/frontend/settings returns."""
+
+    def __init__(self, settings: Any) -> None:
+        self.settings = settings
+        self.requests: list[urllib.request.Request] = []
+
+    def open(self, req: urllib.request.Request, timeout: float) -> io.BytesIO:
+        self.requests.append(req)
+        path = urllib.parse.urlsplit(req.full_url).path
+        answer: Any
+        if path == "/api/frontend/settings":
+            answer = self.settings
+        elif path.endswith("/receivers"):
+            integration = {
+                "uid": r.CONTACT_POINT,
+                "type": "webhook",
+                "version": "v1",
+                "settings": {"url": r.DISPATCH_URL},
+                "secureFields": {"authorization_credentials": True},
+            }
+            item = {"metadata": {"name": RECEIVER}, "spec": {"integrations": [integration]}}
+            answer = {"items": [item]}
+        elif path.endswith(f"/receivers/{RECEIVER}/test"):
+            answer = {"status": "success"}
+        else:
+            raise AssertionError(f"unexpected request {req.get_method()} {req.full_url}")
+        return io.BytesIO(json.dumps(answer).encode())
+
+    def urls(self) -> list[str]:
+        return [f"{q.get_method()} {q.full_url}" for q in self.requests]
+
+
+def run_test_cloud(
+    monkeypatch: pytest.MonkeyPatch, settings: Any, *extra: str
+) -> tuple[int, FakeOpener]:
+    """`alert_routing.py test cloud …` against a fake Grafana Cloud."""
+    opener = FakeOpener(settings)
+    monkeypatch.setattr(ga, "_OPENER", opener)
+    monkeypatch.setattr("getpass.getpass", lambda prompt: "sa-token")
+    return r.main([*TEST_CLOUD, *extra]), opener
+
+
+def test_test_cloud_uses_the_namespace_grafana_names(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Grafana Cloud's namespace is `stacks-<stack id>`, and `default` gets 403 "invalid
+    namespace" there. The receivers API is called in the one the frontend settings name."""
+    code, opener = run_test_cloud(monkeypatch, {"namespace": "stacks-123", "appUrl": CLOUD})
+    assert code == 0
+    api = f"{CLOUD}/apis/notifications.alerting.grafana.app/v1beta1/namespaces/stacks-123"
+    assert opener.urls() == [
+        f"GET {CLOUD}/api/frontend/settings",
+        f"GET {api}/receivers",
+        f"POST {api}/receivers/{RECEIVER}/test",
+    ]
+    out = capsys.readouterr().out
+    assert "through focus-oncall-github (stacks-123)" in out and "sa-token" not in out
+
+
+def test_the_grafana_token_only_goes_to_the_grafana_it_was_given_for(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lookup goes through call(), like every other request: https, the --grafana
+    host, and never a redirect (test_a_redirect_is_never_followed_with_the_token)."""
+    code, opener = run_test_cloud(monkeypatch, {"namespace": "stacks-123"})
+    assert code == 0
+    assert len(opener.requests) == 3
+    for req in opener.requests:
+        parts = urllib.parse.urlsplit(req.full_url)
+        assert (parts.scheme, parts.netloc) == ("https", "ineedtofocus.grafana.net")
+        assert req.get_header("Authorization") == "Bearer sa-token"
+
+
+@pytest.mark.parametrize("settings", [{}, {"namespace": ""}, {"namespace": None}, None])
+def test_test_falls_back_to_the_default_namespace(
+    settings: Any, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, opener = run_test_cloud(monkeypatch, settings)
+    assert code == 0
+    assert "/namespaces/default/receivers" in opener.urls()[1]
+    assert "names no namespace: using 'default'" in capsys.readouterr().out
+
+
+def test_the_namespace_flag_skips_the_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    code, opener = run_test_cloud(monkeypatch, {"namespace": "stacks-123"}, "--namespace", "org-2")
+    assert code == 0
+    urls = opener.urls()
+    assert not [u for u in urls if "frontend/settings" in u]
+    assert [u.split("/namespaces/")[1].split("/")[0] for u in urls] == ["org-2", "org-2"]
+
+
+@pytest.mark.parametrize(
+    "bad", ["", "../default", "stacks-1/receivers", "x?y=1", "a b", "Stacks-1", "-x", "a.b"]
+)
+def test_a_namespace_that_could_change_the_request_is_refused(
+    bad: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """From --namespace: refused before the token is asked for. From Grafana's settings:
+    refused before the receivers API is called."""
+
+    def no_prompt(prompt: str) -> str:
+        raise AssertionError("asked for a token")
+
+    monkeypatch.setattr("getpass.getpass", no_prompt)
+    assert r.main([*TEST_CLOUD, "--namespace", bad]) == 2
+    assert "isn't a Grafana namespace" in capsys.readouterr().err
+    if bad:  # an empty namespace in the settings is the fallback case
+        code, opener = run_test_cloud(monkeypatch, {"namespace": bad})
+        assert code == 1
+        assert opener.urls() == [f"GET {CLOUD}/api/frontend/settings"]
+        assert "isn't a Grafana namespace" in capsys.readouterr().err
+
+
+def test_the_namespace_flag_is_for_test_only() -> None:
+    assert r.main(["apply", "local", "--namespace", "default"]) == 2
+
+
+def test_no_api_path_hardcodes_a_namespace() -> None:
+    """Every Kubernetes-style /apis/... path takes the namespace it's given (#219)."""
+    source = (REPO / "scripts" / "alert_routing.py").read_text()
+    assert re.findall(r"/namespaces/[^{]", source) == []
+    assert "/namespaces/{namespace}" in r.RECEIVERS_API
 
 
 def test_apply_cloud_needs_the_grafana_url() -> None:
