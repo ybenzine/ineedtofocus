@@ -161,7 +161,7 @@ describe('quarantine when IndexedDB fails (F13, owner ruling on #9)', () => {
 
   it('a later drain that fails leaves the session parked for next time', async () => {
     const record = makeRecord()
-    parkSession(ALICE, record)
+    await parkSession(ALICE, record)
     expect(await drainParked(brokenStore(() => Promise.reject(new Error('x'))))).toBe(0)
     expect(
       await drainParked(
@@ -216,9 +216,9 @@ describe('parked sessions belong to their owner', () => {
       active: new OwnedActiveSessionStore(new LocalActiveSessionStore(), () => who.owner),
       currentOwner: () => who.owner,
     })
-    parkSession(ALICE, makeRecord())
+    await parkSession(ALICE, makeRecord())
     const bobs = makeRecord()
-    parkSession(BOB, bobs)
+    await parkSession(BOB, bobs)
     const nobodys = makeRecord()
     await sessions.save(nobodys, null)
     expect(await hook.countUnsynced()).toEqual({ sessions: 1, edits: 0 })
