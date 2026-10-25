@@ -71,6 +71,12 @@ export class TimerController {
   readonly #now: () => number
   readonly #newId: () => string
   #session: ActiveSession | null = null
+  /**
+   * A change whose write to the store failed. `base` is the stored session it was made from.
+   * It is written again on the next call, as long as the store still holds `base`; if another
+   * tab has changed the stored session meanwhile, the stored one wins and this is dropped.
+   */
+  #unsaved: { base: ActiveSession; session: ActiveSession } | null = null
 
   constructor(options: TimerControllerOptions) {
     this.#store = options.store
@@ -84,7 +90,7 @@ export class TimerController {
    * in other tabs; reports and persists nothing.
    */
   current(): TimerSnapshot | null {
-    this.#refresh()
+    this.#refresh(false)
     return this.#session ? snapshot(this.#session, this.#now()) : null
   }
 
@@ -144,10 +150,10 @@ export class TimerController {
     if (endedAt !== null) {
       return this.#finish(session, finishSession(session, endedAt, 'completed'), events)
     }
-    this.#session = session
     // Only write when there is something other tabs must not replay (events already reported).
     // A quiet tick changes nothing worth storing, so two tabs never write back and forth.
-    if (events.length > 0) this.#persist(session)
+    if (events.length > 0) this.#commit(session)
+    else this.#session = session
     return { ...NOTHING, snapshot: snapshot(session, now), events }
   }
 
@@ -189,8 +195,22 @@ export class TimerController {
    * The device's copy is the truth: another tab may have paused, resumed, skipped or stopped
    * since this one last looked. Adopt what is stored instead of overwriting it with a stale copy.
    */
-  #refresh(): void {
+  #refresh(write = true): void {
     const stored = this.#store.load()
+    const unsaved = this.#unsaved
+    if (unsaved !== null) {
+      const same =
+        stored !== null &&
+        stored.pendingRecord === null &&
+        JSON.stringify(stored.session) === JSON.stringify(unsaved.base)
+      if (same) {
+        if (write) this.#writeUnsaved(unsaved)
+        this.#session = unsaved.session
+        return
+      }
+      // Another tab (or a finish) moved the stored session on: the stored one is the truth.
+      this.#unsaved = null
+    }
     this.#session = stored === null || stored.pendingRecord !== null ? null : stored.session
   }
 
@@ -211,8 +231,7 @@ export class TimerController {
       return this.#finish(session, finishSession(session, endedAt, 'completed'), events)
     }
     const next = apply(session, now)
-    this.#session = next
-    this.#persist(next)
+    this.#commit(next)
     return { ...NOTHING, snapshot: snapshot(next, now), events }
   }
 
@@ -241,6 +260,28 @@ export class TimerController {
     const stored = this.#store.load()
     if (stored?.pendingRecord?.id === record.id) this.#store.clear()
     return true
+  }
+
+  /**
+   * Writes a tick's or an action's new session, then adopts it. If the write fails the session
+   * is still adopted here (so the display and events stay right) but is kept in `#unsaved` and
+   * written again by the next call, so memory never runs ahead of the store without a retry.
+   */
+  #commit(session: ActiveSession): void {
+    const base = this.#unsaved?.base ?? this.#session
+    this.#session = session
+    if (base === null) return this.#persist(session)
+    this.#unsaved = { base, session }
+    this.#writeUnsaved(this.#unsaved)
+  }
+
+  #writeUnsaved(unsaved: { base: ActiveSession; session: ActiveSession }): void {
+    try {
+      this.#persist(unsaved.session)
+    } catch {
+      return
+    }
+    if (this.#unsaved === unsaved) this.#unsaved = null
   }
 
   #persist(session: ActiveSession): void {

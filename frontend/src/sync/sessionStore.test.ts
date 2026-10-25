@@ -204,4 +204,48 @@ describe('archive state on the device', () => {
     expect(await store.get(archivedBobs.id)).toBeDefined()
     expect(await store.get(unsynced.id)).toBeDefined()
   })
+
+  it('#133 removeArchived also removes the synced sessions it is told were archived elsewhere', async () => {
+    const { store } = openStore()
+    const elsewhere = await synced(store, ALICE)
+    const live = await synced(store, ALICE)
+    const unsynced = makeRecord()
+    await store.save(unsynced, ALICE)
+
+    await store.removeArchived(ALICE, [elsewhere.id, unsynced.id])
+
+    expect(await store.get(elsewhere.id)).toBeUndefined()
+    expect(await store.get(live.id)).toBeDefined()
+    expect(await store.get(unsynced.id)).toBeDefined()
+  })
+
+  it('#133 forget removes only the owner’s synced sessions it is given', async () => {
+    const { store } = openStore()
+    const mine = await synced(store, ALICE)
+    const keep = await synced(store, ALICE)
+    const bobs = await synced(store, BOB)
+    const unsynced = makeRecord()
+    await store.save(unsynced, ALICE)
+
+    await store.forget(ALICE, [mine.id, bobs.id, unsynced.id])
+
+    expect(await store.get(mine.id)).toBeUndefined()
+    expect(await store.get(keep.id)).toBeDefined()
+    expect(await store.get(bobs.id)).toBeDefined()
+    expect(await store.get(unsynced.id)).toBeDefined()
+  })
+
+  it('#133 forget keeps a session with a pending edit, and removes one whose edit was rejected', async () => {
+    const { store } = openStore()
+    const pending = await synced(store, ALICE)
+    const rejected = await synced(store, ALICE)
+    await store.edit(ALICE, pending.id, { goal: 'a' })
+    await store.edit(ALICE, rejected.id, { goal: 'b' })
+    await store.rejectEdit(rejected.id, 1, null)
+
+    await store.forget(ALICE, [pending.id, rejected.id])
+
+    expect(await store.get(pending.id)).toBeDefined()
+    expect(await store.get(rejected.id)).toBeUndefined()
+  })
 })

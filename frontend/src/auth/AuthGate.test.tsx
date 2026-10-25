@@ -1,13 +1,16 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useEffect } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SETTINGS_KEY } from '../settings/store.ts'
 import { LocalActiveSessionStore, TimerController } from '../timer/index.ts'
 import { ACTIVE_SESSION_KEY } from '../timer/store.ts'
 import AccountBar from './AccountBar.tsx'
+import { useAccount } from './AccountContext.tsx'
 import { AuthError, type AuthApi, type User } from './api.ts'
 import AuthGate, { OFFLINE_SIGN_OUT_NOTICE } from './AuthGate.tsx'
 import {
   OWNER_KEY,
+  hasActiveTimer,
   PENDING_LOGOUT_KEY,
   USER_KEY,
   notifySessionExpired,
@@ -54,10 +57,21 @@ async function pendingSession() {
   return controller
 }
 
+/** Stands in for the app: leaves the expired state when no timer runs (as `App` does). */
+function LeaveWhenIdle() {
+  const account = useAccount()
+  const leave = account?.expired ? account.leaveExpired : null
+  useEffect(() => {
+    if (leave && !hasActiveTimer()) leave()
+  }, [leave])
+  return null
+}
+
 function renderGate(api: AuthApi, controller = makeController().controller) {
   return render(
     <AuthGate api={api}>
       <AccountBar controller={controller} />
+      <LeaveWhenIdle />
       <p>the timer app</p>
     </AuthGate>,
   )

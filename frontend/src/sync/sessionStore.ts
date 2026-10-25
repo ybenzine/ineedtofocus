@@ -100,8 +100,18 @@ export interface SessionStore {
    * device's copy follows. Does nothing for another account's session.
    */
   setArchived(ownerId: string, id: string, archivedAt: string | null): Promise<void>
-  /** Forgets the owner's archived sessions on the device (the server just deleted them all). */
-  removeArchived(ownerId: string): Promise<void>
+  /**
+   * Forgets the owner's archived sessions on the device (the server just deleted them all), and
+   * the synced ones in `alsoIds` (archived on another device, so not yet marked here).
+   */
+  removeArchived(ownerId: string, alsoIds?: readonly string[]): Promise<void>
+  /**
+   * Forgets the owner's synced sessions in `ids`: the server no longer has them (deleted on
+   * another device). Never touches a session the server hasn't accepted, or another account's,
+   * nor one with a pending edit (an edit is never silently discarded: if the session really is
+   * gone, the edit's 404 makes it `rejected` and the next call removes it).
+   */
+  forget(ownerId: string, ids: readonly string[]): Promise<void>
   /** Deletes every session (and edit) of this owner from the device; others' stay. */
   clearOwner(ownerId: string | null): Promise<void>
 
@@ -206,16 +216,36 @@ export class IndexedDbSessionStore implements SessionStore {
   }
 
   async setArchived(ownerId: string, id: string, archivedAt: string | null): Promise<void> {
-    await this.#update(id, (entry) => (entry.ownerId === ownerId ? { archivedAt } : {}))
+    await this.#update(id, (entry) =>
+      entry.ownerId === ownerId && entry.archivedAt !== archivedAt ? { archivedAt } : {},
+    )
   }
 
-  async removeArchived(ownerId: string): Promise<void> {
+  async removeArchived(ownerId: string, alsoIds: readonly string[] = []): Promise<void> {
+    const extra = new Set(alsoIds)
     const sessions = this.#db.sessions
     await this.#db.transaction('rw', sessions, async () => {
       const ids = (await this.#owned(ownerId))
-        .filter((entry) => entry.syncState === 'synced' && entry.archivedAt !== null)
+        .filter(
+          (entry) =>
+            entry.syncState === 'synced' && (entry.archivedAt !== null || extra.has(entry.id)),
+        )
         .map((entry) => entry.id)
       await sessions.bulkDelete(ids)
+    })
+  }
+
+  async forget(ownerId: string, ids: readonly string[]): Promise<void> {
+    const wanted = new Set(ids)
+    const sessions = this.#db.sessions
+    await this.#db.transaction('rw', sessions, async () => {
+      const found = (await this.#owned(ownerId))
+        .filter(
+          (entry) =>
+            entry.syncState === 'synced' && entry.editState !== 'pending' && wanted.has(entry.id),
+        )
+        .map((entry) => entry.id)
+      await sessions.bulkDelete(found)
     })
   }
 

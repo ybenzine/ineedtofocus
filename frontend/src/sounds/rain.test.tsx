@@ -1,7 +1,8 @@
 /// <reference types="node" />
 import { readFileSync, statSync } from 'node:fs'
 import { MPEGDecoder } from 'mpg123-decoder'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from '../App.tsx'
@@ -231,7 +232,7 @@ describe('device stores', () => {
 })
 
 describe('rain.mp3 (AC8.3)', () => {
-  const path = resolve(process.cwd(), 'public/audio/rain.mp3')
+  const path = resolve(dirname(fileURLToPath(import.meta.url)), '../../public/audio/rain.mp3')
   const SILENT = 0.001 // about -60 dBFS
 
   async function decode() {

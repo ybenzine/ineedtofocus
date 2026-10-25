@@ -85,6 +85,11 @@ export const loadYoutubeApi: LoadYoutubeApi = () => {
   return apiPromise
 }
 
+/** Test-only: forgets a cached load so each loader test starts clean. */
+export function resetYoutubeApiForTests(): void {
+  apiPromise = null
+}
+
 export const PLAYER_ERROR_MESSAGE =
   "This video can't be played. It may be unavailable, private or not allowed to be embedded. Your session carries on."
 /** How long the skip note stays. */

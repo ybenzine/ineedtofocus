@@ -5,6 +5,7 @@ import {
   bucketUnitFor,
   emptyData,
   localDate,
+  missingFromServer,
   applyChanges,
   mergeSessions,
   oneLine,
@@ -168,5 +169,67 @@ describe('applyChanges', () => {
 describe('oneLine', () => {
   it('turns line breaks into single spaces (AC7.3)', () => {
     expect(oneLine('a\nb\r\n  c')).toBe('a b c')
+  })
+})
+
+describe('missingFromServer', () => {
+  const dev = (
+    id: string,
+    startedAt: string,
+    o: { synced?: boolean; archived?: boolean } = {},
+  ) => ({
+    id,
+    startedAt,
+    synced: true,
+    archived: false,
+    ...o,
+  })
+  const none = new Set<string>()
+  const week = emptyData('week', 'UTC', 1, { start: '2026-10-19', end: '2026-10-25' })
+
+  it('lists synced sessions inside the period that the server does not', () => {
+    const base = { ...week, sessions: [session({ id: 'known' })] }
+    const device = [dev('known', '2026-10-21T10:00:00Z'), dev('gone', '2026-10-21T11:00:00Z')]
+    expect(missingFromServer(base, device, [], none)).toEqual(['gone'])
+  })
+
+  it('returns nothing when a tag filter is on', () => {
+    expect(missingFromServer(week, [dev('a', '2026-10-21T10:00:00Z')], ['work'], none)).toEqual([])
+  })
+
+  it('leaves out ids in skip, archived and unsynced sessions', () => {
+    const device = [
+      dev('skipped', '2026-10-21T10:00:00Z'),
+      dev('archived', '2026-10-21T10:00:00Z', { archived: true }),
+      dev('unsynced', '2026-10-21T10:00:00Z', { synced: false }),
+    ]
+    expect(missingFromServer(week, device, [], new Set(['skipped']))).toEqual([])
+  })
+
+  it('checks every synced session in the All time view, which has no start or end', () => {
+    const all = emptyData('all', 'UTC', 1, null)
+    expect(missingFromServer(all, [dev('old', '2020-01-01T00:00:00Z')], [], none)).toEqual(['old'])
+  })
+
+  it('uses the local date, not the UTC date', () => {
+    // 2026-10-26 02:00 UTC is still Sunday 25th, the last day of the week, in Los Angeles.
+    const la = emptyData('week', 'America/Los_Angeles', 1, {
+      start: '2026-10-19',
+      end: '2026-10-25',
+    })
+    expect(missingFromServer(la, [dev('late', '2026-10-26T02:00:00Z')], [], none)).toEqual(['late'])
+    // 2026-10-19 03:00 UTC is still Sunday 18th in Los Angeles: before the week.
+    expect(missingFromServer(la, [dev('early', '2026-10-19T03:00:00Z')], [], none)).toEqual([])
+  })
+
+  it('checks the first and last days of a custom range, with a margin at the edges', () => {
+    const range = emptyData('custom', 'UTC', 1, { start: '2026-10-10', end: '2026-10-12' })
+    const ids = (startedAt: string) => missingFromServer(range, [dev('x', startedAt)], [], none)
+    expect(ids('2026-10-10T12:00:00Z')).toEqual(['x'])
+    expect(ids('2026-10-12T12:00:00Z')).toEqual(['x'])
+    expect(ids('2026-10-10T01:00:00Z')).toEqual([])
+    expect(ids('2026-10-12T22:30:00Z')).toEqual([])
+    expect(ids('2026-10-13T01:00:00Z')).toEqual([])
+    expect(ids('2026-10-09T23:00:00Z')).toEqual([])
   })
 })
