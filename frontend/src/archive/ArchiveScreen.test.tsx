@@ -198,6 +198,47 @@ describe('ArchiveScreen', () => {
     expect(screen.getByRole('heading', { name: 'Archive' })).toHaveFocus()
   })
 
+  describe('#263 a device copy marked archived that the server no longer lists', () => {
+    it('hides it on the first load and deletes it on a second confirming load', async () => {
+      const record = await archived('Gone elsewhere')
+      server.sessions.delete(record.id) // deleted on another device
+      const first = renderScreen()
+      await screen.findByText('No archived sessions.')
+      await waitFor(async () =>
+        expect((await store.get(record.id))?.goneOnServer ?? null).not.toBeNull(),
+      )
+      first.unmount()
+      renderScreen()
+      await screen.findByText('No archived sessions.')
+      await waitFor(async () => expect(await store.get(record.id)).toBeUndefined())
+    })
+
+    it('keeps it when the list cannot be loaded', async () => {
+      const record = await archived('Offline')
+      server.sessions.delete(record.id)
+      vi.spyOn(HttpArchiveApi.prototype, 'list').mockResolvedValue({ kind: 'unavailable' })
+      renderScreen()
+      await screen.findByRole('button', { name: /try again|retry/i })
+      expect((await store.get(record.id))?.goneOnServer ?? null).toBeNull()
+    })
+
+    it('never touches device-only archived or unsynced sessions', async () => {
+      const rejected = makeRecord({ goal: 'Refused' })
+      await store.save(rejected, 'me')
+      await store.markRejected(rejected.id, null)
+      await store.archiveOnDevice('me', rejected.id)
+      const pending = makeRecord({ goal: 'Pending' })
+      await store.save(pending, 'me')
+      for (let i = 0; i < 2; i++) {
+        renderScreen().unmount()
+        await new Promise((r) => setTimeout(r, 20))
+      }
+      expect((await store.get(rejected.id))?.goneOnServer ?? null).toBeNull()
+      expect(await store.get(pending.id)).toBeDefined()
+      expect(await store.get(rejected.id)).toBeDefined()
+    })
+  })
+
   async function syncedLive() {
     await new HttpSessionsApi({ fetch: server.fetch }).sync([makeRecord()])
   }

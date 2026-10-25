@@ -69,3 +69,34 @@ export async function reconcileMissing(
     loadStartedAt,
   )
 }
+
+/**
+ * The server's archived list (`listed`, loaded just now) is the whole truth for device copies
+ * marked archived (#263): a synced one it doesn't list was deleted on another device, or
+ * restored there. The copy is already hidden (archived), so it is only marked `goneOnServer`
+ * the first time; a later Archive load that started after the mark and still misses it deletes
+ * it, as for #227. Never touches device-only archived sessions (rejected), unsynced ones or ones
+ * with a pending edit (`markGone` skips those), nor ids in `isSkipped`. Call only after the list
+ * loaded.
+ */
+export async function reconcileArchivedGone(
+  store: SessionStore,
+  owner: string,
+  listed: readonly Pick<ArchivedSession, 'id'>[],
+  isSkipped: (id: string) => boolean = () => false,
+  /** When this load's Archive request started (ms since the epoch). */
+  loadStartedAt: number = Date.now(),
+): Promise<void> {
+  const present = new Set(listed.map((s) => s.id))
+  const device = await store.list(owner)
+  const missing = device
+    .filter(
+      (d) =>
+        d.syncState === 'synced' &&
+        d.archivedAt !== null &&
+        !present.has(d.record.id) &&
+        !isSkipped(d.record.id),
+    )
+    .map((d) => d.record.id)
+  if (missing.length > 0) await store.markGone(owner, missing, loadStartedAt)
+}
