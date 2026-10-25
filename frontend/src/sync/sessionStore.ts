@@ -101,8 +101,22 @@ export interface SessionStore {
    */
   setArchived(ownerId: string, id: string, archivedAt: string | null): Promise<void>
   /**
-   * Forgets the owner's archived sessions on the device (the server just deleted them all), and
-   * the synced ones in `alsoIds` (archived on another device, so not yet marked here).
+   * Archives a session the server rejected on this device only: nothing is sent to the server,
+   * which never had it. It leaves History and totals, and stays counted as unsynced until
+   * deleted. Does nothing for a session the server has, or for another account's.
+   */
+  archiveOnDevice(ownerId: string, id: string): Promise<void>
+  /** Puts a device-only archived session back in History, otherwise unchanged. */
+  restoreOnDevice(ownerId: string, id: string): Promise<void>
+  /**
+   * Discards a tag/goal edit the server refused (`editState: 'rejected'`): the session keeps the
+   * tag and goal it last synced with. A pending edit, or another account's, is left alone.
+   */
+  discardEdit(ownerId: string, id: string): Promise<void>
+  /**
+   * Forgets the owner's archived sessions on the device (the server just deleted them all),
+   * including the ones archived on this device only (the server never had those), and the synced
+   * ones in `alsoIds` (archived on another device, so not yet marked here).
    */
   removeArchived(ownerId: string, alsoIds?: readonly string[]): Promise<void>
   /**
@@ -216,8 +230,36 @@ export class IndexedDbSessionStore implements SessionStore {
   }
 
   async setArchived(ownerId: string, id: string, archivedAt: string | null): Promise<void> {
+    // Only the server's archive state is followed here: a device-only archive (a rejected
+    // session) is never changed by it.
     await this.#update(id, (entry) =>
-      entry.ownerId === ownerId && entry.archivedAt !== archivedAt ? { archivedAt } : {},
+      entry.ownerId === ownerId && entry.syncState === 'synced' && entry.archivedAt !== archivedAt
+        ? { archivedAt }
+        : {},
+    )
+  }
+
+  async archiveOnDevice(ownerId: string, id: string): Promise<void> {
+    await this.#update(id, (entry) =>
+      entry.ownerId === ownerId && entry.syncState === 'rejected' && entry.archivedAt === null
+        ? { archivedAt: new Date(this.#now()).toISOString() }
+        : {},
+    )
+  }
+
+  async restoreOnDevice(ownerId: string, id: string): Promise<void> {
+    await this.#update(id, (entry) =>
+      entry.ownerId === ownerId && entry.syncState === 'rejected' && entry.archivedAt !== null
+        ? { archivedAt: null }
+        : {},
+    )
+  }
+
+  async discardEdit(ownerId: string, id: string): Promise<void> {
+    await this.#update(id, (entry) =>
+      entry.ownerId === ownerId && entry.editState === 'rejected'
+        ? { edit: null, editState: null, editRejection: null }
+        : {},
     )
   }
 
@@ -228,7 +270,9 @@ export class IndexedDbSessionStore implements SessionStore {
       const ids = (await this.#owned(ownerId))
         .filter(
           (entry) =>
-            entry.syncState === 'synced' && (entry.archivedAt !== null || extra.has(entry.id)),
+            // Device-only archived sessions (rejected) go too: the server never had them.
+            (entry.syncState === 'rejected' && entry.archivedAt !== null) ||
+            (entry.syncState === 'synced' && (entry.archivedAt !== null || extra.has(entry.id))),
         )
         .map((entry) => entry.id)
       await sessions.bulkDelete(ids)

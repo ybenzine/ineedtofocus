@@ -293,6 +293,7 @@ export interface SessionChange {
   tag?: Tag
   goal?: string | null
   indicator?: HistorySession['indicator']
+  editRejected?: boolean
 }
 
 /**
