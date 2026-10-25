@@ -9,7 +9,8 @@
 #      export.grafana-cloud.yaml with them, and `otelcol validate` accepts both;
 #   3. `caddy validate` accepts infra/caddy/Caddyfile and `caddy fmt` finds nothing to change;
 #   4. scripts/check_prod_compose.py checks the rendered result against the deploy rules
-#      (memory budget, dev below prod, ports, proxy trust, routing, cookie, migrations).
+#      (memory budget, dev below prod, ports, proxy trust, routing, cookie, migrations,
+#      pinned images, and the process, privilege and disk limits of #117).
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

@@ -24,6 +24,10 @@ them. Exits non-zero, listing every broken rule:
   - Caddy routes ineedtofoc.us to the prod app and dev.ineedtofoc.us to the dev app;
   - every image but the app's (Postgres, the collector, Caddy) is pinned by tag and
     digest, `name:tag@sha256:<64 hex>`, so the deploys pull exactly those bytes (#170);
+  - host resources (#117): every service of prod and dev has a positive pids_limit,
+    drops every capability (cap_drop ALL, no cap_add, not privileged) and runs with
+    no-new-privileges; the app and the collector have a read-only root filesystem, and
+    every tmpfs of theirs has a size, so a container can't fill the shared disk;
   - with --tag, the app image is ghcr.io/ybenzine/ineedtofocus:<tag>.
 
 Stdlib only.
@@ -52,6 +56,11 @@ PG_DATA = "/var/lib/postgresql/data"
 PINNED_IMAGE = re.compile(
     r"^[a-z0-9]+([._/-][a-z0-9]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}$"
 )
+# Services of prod and dev whose root filesystem must be read-only (#117). Postgres isn't:
+# outside its data volume it writes only its socket and lock file, and its data, the one
+# thing that grows, is the volume anyway (_docs/deployment.md, Host resources).
+READ_ONLY_SERVICES = ("app", "otel-collector")
+NO_NEW_PRIVILEGES = {"no-new-privileges", "no-new-privileges:true", "no-new-privileges=true"}
 
 Config = dict[str, Any]
 
@@ -152,6 +161,29 @@ def caddy_routes(caddy: Config) -> dict[str, list[str]]:
     return routes
 
 
+def hardening_errors(where: str, name: str, service: Config) -> list[str]:
+    """Process, privilege and disk limits of one service of prod or dev (#117)."""
+    errors: list[str] = []
+    pids = service.get("pids_limit")
+    if not isinstance(pids, int) or isinstance(pids, bool) or pids <= 0:
+        errors.append(f"{where}: needs a positive pids_limit, got {pids!r}")
+    if "ALL" not in [str(cap).upper() for cap in service.get("cap_drop") or []]:
+        errors.append(f"{where}: must drop every capability (cap_drop: [ALL])")
+    if service.get("cap_add"):
+        errors.append(f"{where}: adds capabilities {service['cap_add']}; none may be added back")
+    if service.get("privileged"):
+        errors.append(f"{where}: must not be privileged")
+    if not NO_NEW_PRIVILEGES & set(service.get("security_opt") or []):
+        errors.append(f"{where}: needs security_opt no-new-privileges:true")
+    if name in READ_ONLY_SERVICES:
+        if service.get("read_only") is not True:
+            errors.append(f"{where}: root filesystem must be read-only (read_only: true)")
+        for mount in service.get("tmpfs") or []:
+            if "size=" not in str(mount):
+                errors.append(f"{where}: tmpfs {mount!r} needs a size (e.g. /tmp:size=16m)")
+    return errors
+
+
 def check(
     edge: Config, prod: Config, dev: Config, caddy: Config, tag: str | None = None
 ) -> list[str]:
@@ -180,6 +212,9 @@ def check(
                 f"{env}/{name}: image {image!r} isn't pinned by tag and digest"
                 " (name:tag@sha256:<64 hex>)"
             )
+
+    for env, name, service in all_services(envs):
+        errors.extend(hardening_errors(f"{env}/{name}", name, service))
 
     migration = max(mib(services(c).get("app") or {}) for c in envs.values())
     if total + migration > MEMORY_BUDGET_MIB:

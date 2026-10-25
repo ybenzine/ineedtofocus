@@ -7,6 +7,10 @@
 #
 #   - migrations run as a one-shot step (`run --rm app alembic upgrade head`), then
 #     the app starts with MIGRATE_ON_START=0 and turns healthy;
+#   - host resources (#117): the app, Postgres and the collector run with a pids limit,
+#     no capability and no-new-privileges; the app and the collector on a read-only
+#     root filesystem, the app writing temporary files to a small /tmp tmpfs; Postgres
+#     as its own user;
 #   - Caddy serves https://ineedtofoc.us and https://dev.ineedtofoc.us (certificates
 #     from Caddy's internal CA here, Let's Encrypt on the server) and redirects http;
 #   - each host reaches its own environment: with the dev app stopped, dev answers 502
@@ -150,6 +154,33 @@ prod logs app > "$work/app.log" 2>&1
 grep -q 'MIGRATE_ON_START=0, skipping migrations' "$work/app.log" ||
   fail "prod app didn't start with MIGRATE_ON_START=0"
 ok "app starts without migrating (MIGRATE_ON_START=0)"
+
+# Host resources (#117): the running containers really have the limits, the app works
+# on its read-only root filesystem, and its /tmp is writable but bounded.
+for service in app db otel-collector; do
+  id=$(prod ps -q "$service")
+  [[ -n $id ]] || fail "prod $service isn't running"
+  read -r ro pids caps nnp <<< "$(docker inspect --format \
+    '{{.HostConfig.ReadonlyRootfs}} {{.HostConfig.PidsLimit}} {{join .HostConfig.CapDrop ","}} {{join .HostConfig.SecurityOpt ","}}' "$id")"
+  want_readonly=true
+  [[ $service != db ]] || want_readonly=false
+  [[ $ro == "$want_readonly" ]] || fail "prod $service: read-only root filesystem is $ro, expected $want_readonly"
+  [[ $pids =~ ^[1-9][0-9]*$ ]] || fail "prod $service: no pids limit ($pids)"
+  [[ $caps == ALL || $caps == all ]] || fail "prod $service: drops capabilities $caps, expected ALL"
+  [[ $nnp == no-new-privileges* ]] || fail "prod $service: security options $nnp, expected no-new-privileges"
+done
+ok "prod's app, db and collector run with a pids limit, no capability and no-new-privileges"
+if prod exec -T app sh -c 'echo x > /app/written-by-smoke-test' 2> /dev/null; then
+  fail "prod app could write to its root filesystem"
+fi
+prod exec -T app python -c 'import tempfile; tempfile.TemporaryFile().write(b"x")' ||
+  fail "prod app can't write a temporary file to /tmp"
+prod exec -T app sh -c 'df -k /tmp | tail -n 1' > "$work/tmp.df"
+read -r _ tmp_kib _ < "$work/tmp.df"
+((tmp_kib <= 32768)) || fail "prod app's /tmp is ${tmp_kib} KiB, expected a small tmpfs"
+ok "prod app: read-only root filesystem, temporary files in a ${tmp_kib} KiB /tmp tmpfs"
+[[ $(prod exec -T db id -un) == postgres ]] || fail "prod db doesn't run as postgres"
+ok "prod db runs as postgres from the start (no capability needed)"
 
 request() { # <host> <path> [curl args...] -> prints the HTTP status, body in $work/body
   local host=$1 path=$2
