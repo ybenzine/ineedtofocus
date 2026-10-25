@@ -15,6 +15,7 @@ import {
   SKIPPED_ITEM_MESSAGE,
   SKIP_NOTE_MS,
   loadYoutubeApi,
+  resetYoutubeApiForTests,
   type YtNamespace,
   type YtPlayer,
   type YtPlayerOptions,
@@ -105,7 +106,12 @@ async function paste(text: string) {
   })
 }
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  resetYoutubeApiForTests()
+  delete window.YT
+  delete window.onYouTubeIframeAPIReady
+})
 
 describe('YouTube background audio (AC8.4)', () => {
   it('plays a pasted link in a visible player that loops, built from the parsed id', async () => {
