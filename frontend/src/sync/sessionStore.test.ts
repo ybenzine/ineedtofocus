@@ -234,4 +234,18 @@ describe('archive state on the device', () => {
     expect(await store.get(bobs.id)).toBeDefined()
     expect(await store.get(unsynced.id)).toBeDefined()
   })
+
+  it('#133 forget keeps a session with a pending edit, and removes one whose edit was rejected', async () => {
+    const { store } = openStore()
+    const pending = await synced(store, ALICE)
+    const rejected = await synced(store, ALICE)
+    await store.edit(ALICE, pending.id, { goal: 'a' })
+    await store.edit(ALICE, rejected.id, { goal: 'b' })
+    await store.rejectEdit(rejected.id, 1, null)
+
+    await store.forget(ALICE, [pending.id, rejected.id])
+
+    expect(await store.get(pending.id)).toBeDefined()
+    expect(await store.get(rejected.id)).toBeUndefined()
+  })
 })

@@ -325,11 +325,15 @@ export function applyChanges(
   return { ...base, sessions, tags: sortedTags(tagTotals) }
 }
 
+const EDGE_MARGIN_MS = 3 * 60 * 60 * 1000
+
 /**
  * Ids of the device's synced sessions that the server's answer should list but doesn't: they
- * were archived or deleted on another device (#133). Left out, to be safe: sessions the server
+ * were archived or deleted on another device. Left out, to be safe: sessions the server
  * may not have, ones already archived here or in `skip`, and any view with a tag filter (the
  * device's tag could be stale, and then a session would look gone when it is only filtered out).
+ * Sessions within 3 hours of a period's edge are left out too: tz data can differ between the
+ * browser and the server, so they might be inside the period for one and not the other.
  */
 export function missingFromServer(
   base: HistoryData,
@@ -343,9 +347,16 @@ export function missingFromServer(
     .filter((d) => {
       if (!d.synced || d.archived || known.has(d.id) || skip.has(d.id)) return false
       if (base.view === 'all') return true
-      if (base.start === null || base.end === null) return false
-      const day = localDate(d.startedAt, base.timeZone)
-      return day >= base.start && day <= base.end
+      const { start, end } = base
+      if (start === null || end === null) return false
+      // The browser's and the server's tz data can differ by an hour or so for some zones, so a
+      // session near a period edge might be in the period for one and not the other: only
+      // trust it if it is inside the period with a margin either way.
+      const t = Date.parse(d.startedAt)
+      return [t - EDGE_MARGIN_MS, t + EDGE_MARGIN_MS].every((ms) => {
+        const day = localDate(new Date(ms).toISOString(), base.timeZone)
+        return day >= start && day <= end
+      })
     })
     .map((d) => d.id)
 }

@@ -1,5 +1,5 @@
 // Keeps the device's copy of a session in step with the server when it was archived or deleted
-// on another device (#133). Only runs from an online History or Archive load, which is what
+// on another device. Only runs from an online History or Archive load, which is what
 // shows the server's side. Archive and restore stay online-only, so this is the only way the
 // device learns about them.
 
@@ -11,8 +11,13 @@ export async function markArchivedOnDevice(
   store: SessionStore,
   owner: string,
   archived: readonly Pick<ArchivedSession, 'id' | 'archivedAt'>[],
+  /** Ids to leave alone, asked per id (e.g. restored on this screen since the list loaded). */
+  isSkipped: (id: string) => boolean = () => false,
 ): Promise<void> {
-  for (const session of archived) await store.setArchived(owner, session.id, session.archivedAt)
+  for (const session of archived) {
+    if (isSkipped(session.id)) continue
+    await store.setArchived(owner, session.id, session.archivedAt)
+  }
 }
 
 /**

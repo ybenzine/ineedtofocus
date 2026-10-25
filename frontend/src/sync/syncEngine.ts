@@ -10,7 +10,7 @@
 // - Tag/goal edits to a synced session go as `PATCH`; a 409 (archived elsewhere) drops the edit,
 //   and the device copy is marked archived; a 404 or 422 keeps it marked "Couldn't sync"
 //   (AC11.4). A 404 means the session was deleted elsewhere: the next online History load sees
-//   it is gone and removes the device copy with its stuck edit (#133).
+//   it is gone and removes the device copy with its stuck edit.
 // - Only the signed-in user's items are sent; other accounts' stay quarantined on the device.
 
 import { SYNC_BATCH_LIMIT, type SessionsApi } from './api.ts'
@@ -311,7 +311,7 @@ export class SyncEngine {
           // Archived on the server (AC11.4): the edit can never apply; the session is untouched.
           await this.#io(this.#store.dropEdit(entry.id, version))
           // The device copy follows, so offline History stops showing it. The real time comes
-          // with the next online History or Archive load.
+          // with the next online Archive load (History skips sessions archived here).
           await this.#io(this.#store.setArchived(owner, entry.id, new Date().toISOString()))
           if (!report.dropped.includes(entry.id)) report.dropped.push(entry.id)
           break

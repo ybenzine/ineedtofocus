@@ -40,6 +40,8 @@ export default function ArchiveScreen({
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const heading = useRef<HTMLHeadingElement>(null)
+  // Restored on this screen: the load's marking loop must not set them archived again.
+  const restored = useRef(new Set<string>())
   const cancel = useRef<HTMLButtonElement>(null)
   const deleteButton = useRef<HTMLButtonElement>(null)
 
@@ -56,9 +58,11 @@ export default function ArchiveScreen({
       if (cancelled) return
       if (result.kind === 'ok') {
         setLoad({ kind: 'ready', sessions: result.value })
-        // Archived on another device: the device copy follows (#133).
+        // Archived on another device: the device copy follows.
         if (owner !== null && store) {
-          void markArchivedOnDevice(store, owner, result.value).catch(() => undefined)
+          void markArchivedOnDevice(store, owner, result.value, (id) =>
+            restored.current.has(id),
+          ).catch(() => undefined)
         }
       } else {
         if (result.kind === 'unauthorized') notifySessionExpired()
@@ -88,6 +92,7 @@ export default function ArchiveScreen({
     try {
       const result = await api.restore(session.id)
       if (result.kind !== 'ok') return fail(result.kind, 'restore the session')
+      restored.current.add(session.id)
       if (owner !== null) await store?.setArchived(owner, session.id, null).catch(() => undefined)
       setLoad((current) =>
         current.kind === 'ready'

@@ -107,7 +107,9 @@ export interface SessionStore {
   removeArchived(ownerId: string, alsoIds?: readonly string[]): Promise<void>
   /**
    * Forgets the owner's synced sessions in `ids`: the server no longer has them (deleted on
-   * another device). Never touches a session the server hasn't accepted, or another account's.
+   * another device). Never touches a session the server hasn't accepted, or another account's,
+   * nor one with a pending edit (an edit is never silently discarded: if the session really is
+   * gone, the edit's 404 makes it `rejected` and the next call removes it).
    */
   forget(ownerId: string, ids: readonly string[]): Promise<void>
   /** Deletes every session (and edit) of this owner from the device; others' stay. */
@@ -238,7 +240,10 @@ export class IndexedDbSessionStore implements SessionStore {
     const sessions = this.#db.sessions
     await this.#db.transaction('rw', sessions, async () => {
       const found = (await this.#owned(ownerId))
-        .filter((entry) => entry.syncState === 'synced' && wanted.has(entry.id))
+        .filter(
+          (entry) =>
+            entry.syncState === 'synced' && entry.editState !== 'pending' && wanted.has(entry.id),
+        )
         .map((entry) => entry.id)
       await sessions.bulkDelete(found)
     })

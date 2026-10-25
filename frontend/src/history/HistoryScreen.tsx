@@ -206,7 +206,7 @@ export default function HistoryScreen({
       const unsynced = alive.filter((d) => d.notUploaded).map((d) => d.session)
       if (result.kind === 'ok') {
         cache.current.set(queryKey, result.value)
-        // Sessions archived or deleted on another device: the device copy follows (#133).
+        // Sessions archived or deleted on another device: the device copy follows.
         if (owner !== null && sessions) {
           const missing = missingFromServer(
             result.value,
