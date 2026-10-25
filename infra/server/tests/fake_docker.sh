@@ -19,7 +19,11 @@
 #   running-<env>        the digest <env>'s app container was created from: what
 #                        tags/<APP_TAG> pointed at when `compose up` ran
 #   fail/<what>          make a call fail: pull, migrate, up, exec, verify (wrong image),
-#                        rm (`image rm`), refs (`image inspect` of an image's references)
+#                        rm (`image rm`), refs (`image inspect` of an image's references),
+#                        schema (the `run … python -` that reads a release's schema)
+#   schema/<digest>      what that release's migration_info.py prints (#165): its schema=
+#                        and contracts= lines. Without it: schema=0002, contracts=-
+#   run-stdin            what the last `run … python -` got on stdin
 #   broken/<digest>      a deliberately broken build (#30): the image itself fails, so
 #                        only containers created from it do. The file holds what fails,
 #                        and optionally the one environment it fails in:
@@ -260,6 +264,16 @@ case ${1:-} in
       run)
         dependencies_present "$file" "$policy" || exit 1
         [[ " $* " != *" alembic "* || ! -e $state/fail/migrate ]] || exit 1
+        if [[ " $* " == *" python - "* ]]; then # focus-ci's schema step (#165)
+          cat >"$state/run-stdin"
+          [[ ! -e $state/fail/schema ]] || exit 1
+          digest=$(cat "$state/tags/$APP_TAG")
+          if [[ -f $state/schema/$digest ]]; then
+            cat "$state/schema/$digest"
+          else
+            printf 'schema=0002\ncontracts=-\n'
+          fi
+        fi
         ;;
       up)
         dependencies_present "$file" "$policy" || exit 1

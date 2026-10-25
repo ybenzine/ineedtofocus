@@ -18,9 +18,10 @@
 #             (forced command `focus-ci rollback-prod`: rollback and status only)
 # The key decides what the server does, whatever this file says. The server picks the
 # release (infra/server/focus-ci.sh, "Known-good"): the newest one that passed the
-# checks on that environment and wasn't rolled back from, or with `tag`, the newest
-# such release of that commit. It restores that release by its recorded digest,
-# re-tagged under the host's deploy lock, with no migration, and checks it like a deploy.
+# checks on that environment, wasn't rolled back from and ran after its rollback floor
+# (#165), or with `tag`, the newest such release of that commit. It restores that
+# release by its recorded digest, re-tagged under the host's deploy lock, with no
+# migration, and checks it like a deploy.
 # A dev rollback also makes the release it left unpromotable to prod. The request carries
 # `expect <digest>`, the digest read just before: if a deploy or another rollback ran in
 # between, the server refuses under its lock and nothing changes. The summary's From and

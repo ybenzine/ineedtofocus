@@ -4,7 +4,7 @@ The procedure behind every alert runbook's "roll back" decision, and for anyone 
 
 ## Impact
 
-Rolling back swaps the app container only: a few seconds of `502` from Caddy while the older release starts. The database isn't touched: no migration runs and none is undone. Data written since the deploy stays. The older release runs on today's schema because migrations are expand-first ([AGENTS.md](../../AGENTS.md#conventions)): a migration only adds, until a deliberate contract migration removes something. Rolling back past a contract migration isn't safe, and until #165 adds a rollback floor nothing stops it, so check `backend/migrations/versions/` for a `# contract-migration:` step between the two releases first.
+Rolling back swaps the app container only: a few seconds of `502` from Caddy while the older release starts. The database isn't touched: no migration runs and none is undone. Data written since the deploy stays. The older release runs on today's schema because migrations are expand-first ([AGENTS.md](../../AGENTS.md#conventions)): a migration only adds, until a deliberate contract migration removes something. Rolling back past a contract migration isn't safe, so the server doesn't: a deploy that runs one sets that environment's **rollback floor**, and no rollback (or automatic revert) starts a release from before it ([deployment.md → Rollback floor](../deployment.md#rollback-floor-165)).
 
 ## Check
 
@@ -31,7 +31,7 @@ gh workflow run rollback.yml -f env=dev                  # dev, the last known-g
 gh workflow run rollback.yml -f env=prod -f tag=<sha>    # a specific known-good release (40-hex commit sha)
 ```
 
-"Last known-good" is the newest release that passed the checks on that environment, isn't the one running now, and wasn't rolled back from. Pass `tag` only to skip further back, for example past a release whose smoke tests failed. The server refuses a sha that isn't a known-good release there.
+"Last known-good" is the newest release that passed the checks on that environment, isn't the one running now, wasn't rolled back from, and ran after the environment's rollback floor (its latest contract migration), if it has one. Pass `tag` only to skip further back, for example past a release whose smoke tests failed. The server refuses a sha that isn't a known-good release there.
 
 Then follow the run (it appears a few seconds after the dispatch; take the one created after you started it):
 
@@ -56,6 +56,8 @@ gh run watch <databaseId> --exit-status
 | `… runs <tag> (<digest>) now, not the expected …` | A deploy or another rollback ran between the run's read and its request; nothing changed | Check what runs now (the latest deploy summary), then decide again |
 | `Wrong key: the rollback environment's key isn't the prod rollback key` | The `rollback` environment holds a key that can do more than roll back | `⛔ Needs Yacine:` replace it with the `focus-ci-rollback` key |
 | `releases.log line <n> is malformed` | A line focus-ci wouldn't write: a write cut short (for example a full disk) or a hand edit. Nothing that reads that log runs | `⛔ Needs Yacine:` look at it read-only first, `sudo sed -n '<n>p' /opt/focus/<env>/releases.log`, then move that line out of the file. Check the disk too (`df -h /`) |
+| `nothing to roll back to above <env>'s rollback floor` or `<sha> is below <env>'s rollback floor` | A contract migration ran with the deploy the message names: the releases before it may need what it removed, so they are no longer rollback targets. Nothing changed | Fix forward. Don't try to get around it: starting such a release could fail, or run half-broken on today's schema |
+| `… the release that ran before, is below <env>'s rollback floor …, so it isn't started again` | A deploy that set the floor (its contract migration ran) failed its checks after starting, and the release before it is below the floor, so there was no automatic revert. The environment may run the new release unhealthy | Fix forward, urgently; `⛔ Needs Yacine:` if the environment is down |
 | `no known-good release of <sha> is recorded` | That sha never passed the checks there, is current, or was rolled back from | Leave `tag` out, or pick another sha from the deploy summaries |
 | `rollback of <sha> failed at 'pull'` after `could not pull <image>, which focus-<env> needs` | The target's image, or a [dependency image](../deployment.md#dependency-images-170) (Postgres, the collector), isn't on the host and can't be pulled: usually Docker Hub or ghcr.io unreachable or rate-limiting. Nothing changed: the release that ran still runs | Retry in a few minutes. If it keeps failing, `⛔ Needs Yacine:` check the host can reach the registry (`sudo docker pull <image>` with the exact reference from the log) |
 | `… is not pinned by tag and digest` | The installed `compose.prod.yml` has an image without its digest. `make test-infra` should have stopped that, so someone changed the files on the server. Nothing changed | `⛔ Needs Yacine:` reinstall `infra/` with `install.sh` at the current `main` |

@@ -14,7 +14,7 @@ Deployment and runtime configuration. The local development stack is `compose.ya
 | `compose.edge.yml`, `caddy/Caddyfile` | The shared edge (`focus-edge`): one Caddy with automatic HTTPS, routing `ineedtofoc.us` to prod and `dev.ineedtofoc.us` to dev. It owns one edge network per environment | #27 |
 | `otel-collector/` | Collector config: OTLP in, Grafana Cloud out (`export.grafana-cloud.yaml`) once the server `.env` has the `GRAFANA_CLOUD_*` values (#32), accept-and-drop (`export.yaml`) until then | #27, #32 |
 | `tests/` | `check_config.sh` (`make test-infra`: config validation and deploy rules) and `prod_stack.sh` (`make test-prod-stack`: the whole stack, smoke-tested) | #27 |
-| `app/` | The app image's entrypoint (migrate, then serve) | #4 |
+| `app/` | The app image's entrypoint (migrate, then serve); `migration_info.py`, which focus-ci feeds to a release's container to read its alembic head and contract migrations (rollback floor) | #4, #165 |
 | `grafana/` (planned) | Exported dashboards and alert rules | #32, #33 |
 | `github/` | GitHub repository settings kept as code: branch protection on `main` ([README](github/README.md)) | #5 |
 

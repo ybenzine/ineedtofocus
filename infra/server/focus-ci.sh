@@ -16,17 +16,19 @@
 #       digest in compose.prod.yml, #170), then pull
 #       ghcr.io/ybenzine/ineedtofocus@sha256:<digest> and check that it was built from
 #       <commit sha> (its org.opencontainers.image.revision label). Then tag it
-#       :<commit sha> locally, run the migrations as a one-shot container, start the app
-#       (`up -d --wait`, which waits for the /healthz healthcheck), check that the app runs
-#       exactly that image and that /healthz and /readyz answer inside it, and record the
-#       release. If the start or a check fails, it starts the release that ran before
-#       again (the automatic revert: by its recorded digest, the same pulls, no
-#       migration) and still fails, so the workflow goes red. After a success, prune
-#       old app images (see Pruning).
+#       :<commit sha> locally, read its schema (see Rollback floor), run the migrations
+#       as a one-shot container, start the app (`up -d --wait`, which waits for the
+#       /healthz healthcheck), check that the app runs exactly that image and that
+#       /healthz and /readyz answer inside it, and record the release. If the start or a
+#       check fails, it starts the release that ran before again (the automatic revert:
+#       by its recorded digest, the same pulls, no migration; never a release below the
+#       rollback floor) and still fails, so the workflow goes red. After a success,
+#       prune old app images (see Pruning).
 #   rollback [<commit sha>] [expect sha256:<digest>]
 #       Start a known-good release again, by its recorded digest, without migrating
-#       (migrations are expand-only). With no sha: the newest known-good release other
-#       than the current one. With a sha: the newest known-good release of that commit.
+#       (migrations are expand-only), never one below the rollback floor (see Rollback
+#       floor). With no sha: the newest known-good release other than the current one.
+#       With a sha: the newest known-good release of that commit.
 #       With `expect`: only if the current release is that digest, checked under the
 #       lock (a guard against a deploy that ran in between; never a target). Then pull
 #       what it needs like a deploy, start it, check it like a deploy and record it, and print a `result` line with what it left and
@@ -46,7 +48,23 @@
 # which is then revoked until a later ok line for that digest. A known-good release is a
 # release with an ok line that isn't revoked. Each one migrated this environment's
 # database, or ran on it, and migrations are never undone and only ever add (AGENTS.md),
-# so it runs on today's schema without migrating.
+# so it runs on today's schema without migrating. Only known-good releases at or above
+# the rollback floor are rollback targets; promotion to prod (`candidate`, `promote`)
+# reads dev's known-good releases whatever dev's floor, since prod's schema is prod's.
+#
+# Rollback floor (#165). A contract migration (a migration file with a
+# `# contract-migration: <reason>` comment, which test_migration_safety.py lets remove
+# things) breaks the expand-only promise for the releases from before it. So before
+# migrating, a deploy reads the release's schema from its own image: infra/app/
+# migration_info.py, fed to a one-shot app container (`run --no-deps`, no database),
+# prints its alembic head and its contract revisions. Every deploy line then records
+# schema=<head>. When the release brings a contract revision this environment's log
+# hasn't recorded, focus-ci first writes a floor line (action=floor outcome=set ...
+# contracts=<all of the release's contract revisions>), before the migration runs, so
+# it holds even if the migration fails half-way. Known-good counts only the ok lines
+# after the environment's newest floor line: `rollback`, `rollback <sha>`, the record's
+# previous_tag, the automatic revert and pruning never reach below it. Each environment
+# has its own floor, set when its own deploy runs the contract migration.
 #
 # Pruning (#117). After a successful deploy or rollback, still under the lock, focus-ci
 # removes the ghcr.io/ybenzine/ineedtofocus images that neither environment may start
@@ -57,6 +75,7 @@
 # Caddy) stay, so a rollback never depends on Docker Hub. Pruning never fails the
 # request, and whatever it can't read with certainty (a malformed log, an image whose
 # references it can't read) keeps images rather than removing them.
+# Known-good there stops at each environment's rollback floor, like rollback (#165).
 #
 # Profiles:
 #   dev            deploy, rollback, status       on focus-dev
@@ -113,7 +132,8 @@
 #
 # Records, in /opt/focus/<env>/ (owned by the deploy user, written only by this script):
 #   release        the current release: key=value lines (what `status` prints)
-#   releases.log   one line per deploy, rollback or revert attempt, with its outcome
+#   releases.log   one line per deploy, rollback or revert attempt, with its outcome,
+#                  and a floor line before each contract migration (see Rollback floor)
 set -euo pipefail
 set -f # no globbing anywhere: nothing here expands a pattern
 trap '' HUP PIPE # outlive the SSH session (see Safety)
@@ -132,6 +152,8 @@ readonly MAX_REQUEST_LENGTH=160
 # Image pruning (#117): per environment, the newest known-good releases whose app image
 # stays on the host, on top of the record's current and previous release.
 readonly KEEP_KNOWN_GOOD=5
+# Rollback floor (#165): reads a release's schema from its own image (see the header).
+readonly MIGRATION_INFO=$INFRA_DIR/app/migration_info.py
 export PATH=$CLEAN_PATH
 
 readonly SHA_RE='^[0-9a-f]{40}$'
@@ -142,6 +164,10 @@ readonly CANDIDATE_RE='^candidate( ([0-9a-f]{40}))?$'
 # name:tag@sha256:<digest>, the form compose.prod.yml pins every image but the app's in
 # (#170). The same pattern is in install.sh and scripts/check_prod_compose.py.
 readonly PINNED_RE='^[a-z0-9]+([._/-][a-z0-9]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}$'
+# An alembic revision id, and a release's contract revisions (#165): one word each, so
+# they fit a releases.log line. The same rule is REVISION in infra/app/migration_info.py.
+readonly REVISION_RE='^[A-Za-z0-9_]{1,64}$'
+readonly CONTRACTS_RE='^(-|[A-Za-z0-9_]{1,64}(,[A-Za-z0-9_]{1,64}){0,99})$'
 
 profile=${1:-}
 request=${SSH_ORIGINAL_COMMAND-}
@@ -283,12 +309,20 @@ parse_line() {
 # last ok line (revoked). See "Known-good" at the top. Returns 1, with the reason in
 # $history_error, for a malformed line: callers fail on it (read_history), except the
 # image pruning, which then keeps every image instead.
-declare -A revoked=()
+#
+# Its newest floor line (#165) sets floor_start, the index in ok_* of the first ok line
+# after it (0 without one), and floor_note, which names it for messages. Every floor
+# line's contract revisions go into `floored`. A floor line counts whatever else it
+# holds: it only ever retires releases, so reading it loosely can't widen anything.
+declare -A revoked=() floored=()
 ok_tags=() ok_digests=() ok_lines=()
 history_error=""
+floor_start=0 floor_note=""
 load_history() {
-  local line number=0
-  ok_tags=() ok_digests=() ok_lines=() revoked=() history_error=""
+  local line number=0 contract
+  local -a contracts
+  ok_tags=() ok_digests=() ok_lines=() revoked=() floored=() history_error=""
+  floor_start=0 floor_note=""
   [[ -f $1 ]] || return 0
   while IFS= read -r line || [[ -n $line ]]; do
     number=$((number + 1))
@@ -296,6 +330,15 @@ load_history() {
     if ! parse_line "$line"; then
       history_error="$1 line $number is malformed ($bad): nothing that reads that log runs until it's fixed (see _docs/deployment.md, The release record)"
       return 1
+    fi
+    if [[ ${f[action]-} == floor ]]; then
+      floor_start=${#ok_digests[@]}
+      floor_note="contract migration ${f[contracts]-?} ran with the deploy of ${f[tag]-?} at ${f[time]-?}"
+      IFS=, read -ra contracts <<<"${f[contracts]-}"
+      for contract in "${contracts[@]}"; do
+        [[ ! $contract =~ $REVISION_RE ]] || floored[$contract]=1
+      done
+      continue
     fi
     [[ ${f[outcome]-} == ok && ${f[tag]-} =~ $SHA_RE && ${f[digest]-} =~ $DIGEST_RE ]] || continue
     if [[ ${f[action]-} == rollback && ${f[from_digest]-} =~ $DIGEST_RE ]]; then
@@ -311,13 +354,18 @@ load_history() {
 read_history() { load_history "$1" || fail "${history_error:-cannot read $1}"; }
 
 # known_good <tag or ""> [digests to skip...]: from the loaded history, the newest
-# known-good release (of <tag>, when given) whose digest isn't one of those skipped, as
-# "<tag> <digest>"; or nothing. keep_release_images (pruning) walks the same list: a
-# change to what counts as known-good (a rollback floor, #165) applies to both.
-known_good() {
-  local want=$1 i d skip
-  shift
-  for ((i = ${#ok_digests[@]} - 1; i >= 0; i--)); do
+# known-good release at or above the rollback floor (of <tag>, when given) whose digest
+# isn't one of those skipped, as "<tag> <digest>"; or nothing. A rollback target.
+# keep_release_images (pruning) walks the same list, from the same floor.
+known_good() { known_good_since "$floor_start" "$@"; }
+# promotable <tag or ""> [digests to skip...]: the same, below the floor too. What prod
+# may take from dev: dev's floor is about dev's schema, and prod moves its own floor
+# when it runs the contract migration itself.
+promotable() { known_good_since 0 "$@"; }
+known_good_since() {
+  local start=$1 want=$2 i d skip
+  shift 2
+  for ((i = ${#ok_digests[@]} - 1; i >= start; i--)); do
     d=${ok_digests[i]}
     [[ -z ${revoked[$d]-} ]] || continue
     [[ -z $want || ${ok_tags[i]} == "$want" ]] || continue
@@ -329,7 +377,19 @@ known_good() {
   done
 }
 
-# is_known_good <tag> <digest>: that exact release is known-good in the loaded history.
+# above_floor <tag> <digest>: the loaded history has no floor line, or an ok line for that
+# release after its newest one: it ran on the schema the last contract migration left.
+above_floor() {
+  local i
+  [[ -n $floor_note ]] || return 0
+  for ((i = floor_start; i < ${#ok_digests[@]}; i++)); do
+    [[ ${ok_tags[i]} == "$1" && ${ok_digests[i]} == "$2" ]] && return 0
+  done
+  return 1
+}
+
+# is_known_good <tag> <digest>: that exact release is known-good in the loaded history,
+# whatever its floor (promotion only, like `promotable`).
 is_known_good() {
   local i
   [[ -z ${revoked[$2]-} ]] || return 1
@@ -446,6 +506,48 @@ pull_dependencies() {
 # checked, before anything is migrated or started: the other images, then the app's.
 pull_release() { pull_dependencies "$1" && pull_image "$1" "$2"; }
 
+# read_schema <tag>: the release's alembic head and contract revisions (#165), into
+# schema_head and schema_contracts: MIGRATION_INFO, fed on stdin to a one-shot app
+# container of that release (the app service's limits; --no-deps: no database), reads
+# the image's own migrations. Its output is checked strictly: exactly one line of each.
+schema_head="" schema_contracts=""
+read_schema() {
+  local out line head="" list="" heads=0 lists=0
+  if [[ ! -r $MIGRATION_INFO ]]; then
+    echo "focus-ci: $MIGRATION_INFO is missing: run infra/server/install.sh (see _docs/deployment.md)" >&2
+    return 1
+  fi
+  # Like `compose`, but with the helper on stdin instead of /dev/null.
+  out=$(env -i PATH="$CLEAN_PATH" HOME="$home" APP_TAG="$1" "$INFRA_DIR/compose.sh" "$env_name" \
+    run --rm -T --pull never --no-deps app python - <"$MIGRATION_INFO" 9<&-) || return 1
+  while IFS= read -r line; do
+    case $line in
+      schema=*) head=${line#schema=} heads=$((heads + 1)) ;;
+      contracts=*) list=${line#contracts=} lists=$((lists + 1)) ;;
+    esac
+  done <<<"$out"
+  if ((heads != 1 || lists != 1)) || [[ ! $head =~ $REVISION_RE || ! $list =~ $CONTRACTS_RE ]]; then
+    printf "focus-ci: can't read %s's schema: expected one schema=<revision> and one contracts=<revisions> line, got %q\n" \
+      "$1" "${out:0:200}" >&2
+    return 1
+  fi
+  schema_head=$head schema_contracts=$list
+  log "$1 migrates to alembic head $head; contract migrations: $list"
+}
+
+# new_contracts: schema_contracts this environment's loaded history has no floor line
+# for, comma-separated; empty when there's none.
+new_contracts() {
+  local contract new=""
+  local -a contracts
+  [[ $schema_contracts != - ]] || return 0
+  IFS=, read -ra contracts <<<"$schema_contracts"
+  for contract in "${contracts[@]}"; do
+    [[ -n ${floored[$contract]-} ]] || new+=${new:+,}$contract
+  done
+  printf '%s' "$new"
+}
+
 migrate() { compose "$1" run --rm --pull never app alembic upgrade head; }
 
 # check_endpoint <tag> <path>: GET http://127.0.0.1:8000<path> inside the app container
@@ -484,10 +586,14 @@ start_app() {
   log "the app runs $IMAGE_REPO@$2 and /healthz and /readyz answer"
 }
 
-# history_line <action> <outcome> [extra fields...], using $tag $digest $previous_*.
+# history_line <action> <outcome> [extra fields...], using $tag $digest $previous_*. A
+# deploy's lines also carry schema=<alembic head> once it's read (#165).
 history_line() {
   local action=$1 outcome=$2
   shift 2
+  if [[ $action == deploy && -n $schema_head ]]; then
+    set -- "$@" "schema=$schema_head"
+  fi
   end_history_line
   printf 'time=%s env=%s action=%s outcome=%s tag=%s digest=%s previous_tag=%s previous_digest=%s infra=%s%s\n' \
     "$(now)" "$env_name" "$action" "$outcome" "$tag" "$digest" "${previous_tag:--}" \
@@ -515,7 +621,9 @@ step() {
 # start_or_revert <action> <tag to go back to> <its digest>: the start step of a deploy or
 # rollback. If it fails, the app may run the new release unhealthy, so start the release
 # that ran before again: by its digest, re-tagged under the lock, no migration, the same
-# checks. Then fail either way: the action didn't happen, and the record is unchanged.
+# checks; unless it's below the rollback floor (#165), which needs the schema a contract
+# migration removed. Then fail either way: the action didn't happen, and the record is
+# unchanged.
 start_or_revert() {
   local action=$1 back_tag=$2 back_digest=$3
   local new_tag=$tag new_digest=$digest
@@ -527,6 +635,9 @@ start_or_revert() {
   fi
   if [[ $back_digest == "$new_digest" ]]; then
     fail "$action of $new_tag failed at 'start'. It was already the current release, so there is nothing else to go back to: roll back to a known-good release (_docs/runbooks/rollback.md)"
+  fi
+  if ! above_floor "$back_tag" "$back_digest"; then
+    fail "$action of $new_tag failed at 'start', and $back_tag, the release that ran before, is below $env_name's rollback floor ($floor_note), so it isn't started again: $env_name may be running $new_tag unhealthy. Fix forward (_docs/runbooks/rollback.md)"
   fi
   tag=$back_tag digest=$back_digest
   previous_tag=$(record_get previous_tag) previous_digest=$(record_get previous_digest)
@@ -567,7 +678,8 @@ write_record() { # <action> [extra fields for the history line...]
 
 # keep_release_images <env>: add to keep_digests the app images <env> may start again:
 # its record's digest and previous_digest (the next rollback target), and its newest
-# KEEP_KNOWN_GOOD known-good releases (the rollbacks after that). Returns 1, with the
+# KEEP_KNOWN_GOOD known-good releases at or above its rollback floor (the rollbacks after
+# that; like known_good). Returns 1, with the
 # reason in $prune_error, when that can't be read with certainty.
 declare -A keep_digests=()
 prune_error=""
@@ -600,7 +712,7 @@ keep_release_images() {
     prune_error=${history_error:-cannot read $dir/releases.log}
     return 1
   fi
-  for ((i = ${#ok_digests[@]} - 1; i >= 0 && n < KEEP_KNOWN_GOOD; i--)); do
+  for ((i = ${#ok_digests[@]} - 1; i >= floor_start && n < KEEP_KNOWN_GOOD; i--)); do
     d=${ok_digests[i]}
     [[ -z ${revoked[$d]-} && -z ${counted[$d]-} ]] || continue
     counted[$d]=1
@@ -706,7 +818,7 @@ do_candidate() {
     is_known_good "$tag" "$digest" ||
       fail "$promote_from's current release $tag $digest has no promotable ok line in its releases.log"
   else
-    found=$(known_good "$tag")
+    found=$(promotable "$tag")
     if [[ -z $found ]]; then
       ran_tag "$tag" &&
         fail "$promote_from rolled back from every release of $tag it ran, so none is promotable"
@@ -723,6 +835,24 @@ do_candidate() {
   echo "source_action=${f[action]-}"
 }
 
+# set_floor: before a deploy migrates (#165). If the release brings a contract revision
+# this environment hasn't run, write the floor line first: the releases before it are no
+# longer rollback targets, whatever the migration does next (it can't be undone, and one
+# cut short may have run part of it). So this release's rollback target is none, and a
+# failed start doesn't revert below the floor either. It (re)loads this environment's
+# history, which start_or_revert reads next: a prod deploy's `promote` loaded dev's.
+set_floor() {
+  local new
+  read_history "$history"
+  new=$(new_contracts)
+  [[ -n $new ]] || return 0
+  previous_tag="" previous_digest=""
+  history_line floor set "schema=$schema_head" "contracts=$schema_contracts"
+  read_history "$history"
+  audit "floor tag=$tag digest=$digest contracts=$new"
+  log "contract migration $new: $env_name's rollback floor is now $tag. The releases before it are no longer rollback targets"
+}
+
 do_deploy() {
   detach_output
   take_lock
@@ -733,10 +863,11 @@ do_deploy() {
   [[ -z $current_tag || ($current_tag =~ $SHA_RE && $current_digest =~ $DIGEST_RE) ]] ||
     fail "the release record $record is malformed"
   # The rollback target once this release is current: the newest known-good release
-  # other than this one (normally the current release).
+  # other than this one (normally the current release), never below the rollback floor.
   read_history "$history"
   read -r previous_tag previous_digest <<<"$(known_good "" "$digest")"
-  if [[ -z $previous_tag && -n $current_tag && $current_digest != "$digest" ]]; then
+  if [[ -z $previous_tag && -n $current_tag && $current_digest != "$digest" ]] &&
+    above_floor "$current_tag" "$current_digest"; then
     previous_tag=$current_tag previous_digest=$current_digest
   fi
   audit "deploy tag=$tag digest=$digest"
@@ -745,6 +876,8 @@ do_deploy() {
     step deploy promote promoted "$tag" "$digest"
   fi
   step deploy pull pull_release "$tag" "$digest"
+  step deploy schema read_schema "$tag"
+  set_floor
   step deploy migrate migrate "$tag"
   start_or_revert deploy "$current_tag" "$current_digest"
   write_record deploy
@@ -765,6 +898,13 @@ do_rollback() {
   fi
   read_history "$history"
   found=$(known_good "$want" "$from_digest")
+  # Known-good, but below the rollback floor (#165): say so, rather than "not recorded".
+  if [[ -z $found && -n $(promotable "$want" "$from_digest") ]]; then
+    local why="$floor_note. The releases from before it may need what that migration removed, so they are no longer rollback targets. Nothing changed: fix forward (_docs/runbooks/rollback.md)"
+    [[ -z $want ]] ||
+      fail "$want is below $env_name's rollback floor: $why"
+    fail "nothing to roll back to above $env_name's rollback floor: every known-good release other than the current one ($from_tag) is below it: $why"
+  fi
   if [[ -z $found && -n $want ]]; then
     fail "no known-good release of $want is recorded on $env_name: it must have passed the checks here, not be the current release and not have been rolled back from (see status and _docs/deployment.md)"
   fi
