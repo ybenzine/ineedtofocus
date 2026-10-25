@@ -53,17 +53,26 @@ frontend/node_modules: frontend/package.json frontend/package-lock.json
 
 # --- Local stack --------------------------------------------------------------
 
+# Every target that starts, stops or checks this checkout's stack first runs
+# scripts/require-worktree-env.sh: in a subagent worktree (.claude/worktrees/) with no .env,
+# Compose would drive the main checkout's stack instead, so it stops there (#188).
+WORKTREE_ENV_GUARD := scripts/require-worktree-env.sh
+
 up: ## Build and start the local stack, wait until it is healthy, print its URLs (compose.yaml)
+	@$(WORKTREE_ENV_GUARD) "make up"
 	$(COMPOSE) up -d --build --wait
 	@scripts/stack-urls.sh
 
 down: ## Stop the local stack (keeps the database volume)
+	@$(WORKTREE_ENV_GUARD) "make down"
 	$(COMPOSE) down
 
 logs: ## Follow the local stack's logs
+	@$(WORKTREE_ENV_GUARD) "make logs"
 	$(COMPOSE) logs -f
 
 check-stack: ## Check the running stack: health, frontend, telemetry in Grafana
+	@$(WORKTREE_ENV_GUARD) "make check-stack"
 	python3 scripts/check_local_stack.py
 
 migrate: backend/.venv ## Apply database migrations (alembic upgrade head) to DATABASE_URL
@@ -103,9 +112,16 @@ test-prod-stack: ## Smoke-test the production stack: Caddy + prod + dev (#27; ne
 # Inside `make test`: run e2e when a stack answers on the base URL, otherwise skip loudly
 # (fail when CI is set). `make test-e2e` itself is always strict. The base URL defaults to
 # this checkout's own app (scripts/stack-urls.sh app), so a second worktree (#83) never
-# tests another checkout's stack.
+# tests another checkout's stack. A subagent worktree with no .env has no stack of its own
+# (#188): without an explicit PLAYWRIGHT_BASE_URL, both targets stop there, this one by
+# skipping loudly like when no stack answers.
 test-e2e-if-up:
-	@url="$${PLAYWRIGHT_BASE_URL:-$$(scripts/stack-urls.sh app)}"; \
+	@if [ -z "$${PLAYWRIGHT_BASE_URL:-}" ] && ! $(WORKTREE_ENV_GUARD) "make test's e2e step"; then \
+		if [ -n "$${CI:-}" ]; then echo "FAILED e2e: no stack of this worktree's own (CI is set)." >&2; exit 1; fi; \
+		echo "SKIPPED e2e: no stack of this worktree's own. Copy the session's .env, then make up and make test-e2e." >&2; \
+		exit 0; \
+	fi; \
+	url="$${PLAYWRIGHT_BASE_URL:-$$(scripts/stack-urls.sh app)}"; \
 	if curl -fsS --max-time 3 "$$url/healthz" > /dev/null 2>&1; then \
 		PLAYWRIGHT_BASE_URL="$$url" $(MAKE) test-e2e; \
 	elif [ -n "$${CI:-}" ]; then \
@@ -115,6 +131,7 @@ test-e2e-if-up:
 	fi
 
 test-e2e: frontend/node_modules ## Playwright end-to-end tests against this checkout's running stack (`make up` first)
+	@if [ -z "$${PLAYWRIGHT_BASE_URL:-}" ]; then $(WORKTREE_ENV_GUARD) "make test-e2e"; fi
 	@if ! compgen -G 'frontend/playwright.config.*' > /dev/null; then \
 		echo 'frontend/playwright.config.* is missing.' >&2; \
 		exit 1; \

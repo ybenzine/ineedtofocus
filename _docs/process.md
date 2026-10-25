@@ -72,7 +72,7 @@ claude-focus                                  # then accept the workspace trust 
 | `DATABASE_URL` (backend run on the host) | `…@localhost:5432/focus` | `…@localhost:5442/focus` |
 | Vite dev server (no `.env` variable) | 5173 | 5183: `APP_PORT=8010 npm --prefix frontend run dev -- --port 5183` |
 
-- `make up` prints the Compose project and the URLs Compose actually published (`scripts/stack-urls.sh`). `make check-stack` reads `APP_PORT` and `GRAFANA_PORT` from `.env`.
+- `make up` prints the Compose project and the URLs Compose actually published (`scripts/stack-urls.sh`). `make check-stack` reads `APP_PORT` and `GRAFANA_PORT` from `.env`. It and `scripts/stack-urls.sh app` take `export NAME=value` lines there as well as `NAME=value`, as Compose does.
 - `make test` and `make test-e2e` test this checkout's app: the port its stack publishes, or its `APP_PORT` while it's down. `PLAYWRIGHT_BASE_URL` still overrides that. The log-privacy e2e test reads `docker compose logs`, which picks up `COMPOSE_PROJECT_NAME` from `.env`.
 - The backend integration tests take `DATABASE_URL` from the shell, never from `.env`. Without it they use the Postgres on port 5432, whichever checkout runs it, but each test creates and drops its own database, so that's harmless. To use the worktree's own: `DATABASE_URL=postgresql+asyncpg://focus:focus@localhost:5442/focus make test`.
 - `.claude/settings.json` pre-approves `curl` on the second worktree's ports (8010, 5183, 3010, 4328, on `localhost` and `127.0.0.1`) as well as the defaults, so its unattended runs don't stall. A third parallel worktree adds 20 to each port and allows its own in its git-ignored `.claude/settings.local.json`, in the same explicit-port form:
@@ -95,6 +95,8 @@ claude-focus                                  # then accept the workspace trust 
   ```
 
 **Subagent worktrees.** A subagent the lead starts with worktree isolation gets a throwaway worktree under `<main checkout>/.claude/worktrees/`, even when the session runs in `../ineedtofocus-<name>`. `.gitignore` ignores that folder (#81), so it can't be committed. Such a worktree has no `.env`, so `make up` there would run as `focus-local` on the default ports and replace the main checkout's stack. A subagent that needs a stack first copies its session's `.env` (`cp <session folder>/.env .env`; the lead names its folder when it delegates). The session's one stack then runs that subagent's code.
+
+A guard catches the subagent that forgets (#188). In a checkout whose path contains `/.claude/worktrees/` and that has no `.env`, `scripts/require-worktree-env.sh` stops `make up`, `make down`, `make logs`, `make check-stack` and `make test-e2e` before Compose runs, with a non-zero exit and the `cp` line above. `make test` skips its e2e step there, saying so, instead of testing the main checkout's stack as if it were the worktree's (it fails when `CI` is set). An explicit `PLAYWRIGHT_BASE_URL` gets past the guard on the e2e targets. With a `.env`, or outside `.claude/worktrees/` (the main checkout, a session worktree, CI's `/home/runner/work/…` checkout), every target behaves as before.
 
 **Remove it** once the session's PRs are merged:
 

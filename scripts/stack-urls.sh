@@ -20,11 +20,12 @@ published_port() {
   fi
 }
 
-# APP_PORT as Compose resolves it: the environment wins over .env, then the default.
+# APP_PORT as Compose resolves it: the environment wins over .env, then the default. Like
+# Compose's .env parser, takes `APP_PORT=…` and `export APP_PORT=…` alike (#188).
 configured_app_port() {
   local port=${APP_PORT-}
   if [[ -z $port && -f .env ]]; then
-    port=$(sed -n 's/^[[:space:]]*APP_PORT[[:space:]]*=[[:space:]]*//p' .env | tail -n 1)
+    port=$(sed -En 's/^[[:space:]]*(export[[:space:]]+)?APP_PORT[[:space:]]*=[[:space:]]*//p' .env | tail -n 1)
     port=${port%%[[:space:]#]*}
     port=${port//\"/}
     port=${port//\'/}
