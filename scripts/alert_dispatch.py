@@ -38,6 +38,7 @@ environment variables and files, never `${{ }}` in a script. Stdlib only.
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import http.server
 import json
@@ -256,7 +257,7 @@ class _Receiver(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def do_POST(self) -> None:  # noqa: N802 (http.server's name)
+    def do_POST(self) -> None:
         if self.path != DISPATCH_PATH:
             self._answer(404, {"message": "Not Found"})
             return
@@ -274,9 +275,7 @@ class _Receiver(http.server.BaseHTTPRequestHandler):
         found = request_problems(body, grafana=self.grafana, environments=("local",))
         payload = body.get("client_payload") if isinstance(body, dict) else None
         record = {
-            "headers": {
-                h: self.headers.get(h) for h in ("Accept", "Content-Type", "User-Agent")
-            },
+            "headers": {h: self.headers.get(h) for h in ("Accept", "Content-Type", "User-Agent")},
             "body": body,
             "problems": found,
         }
@@ -295,22 +294,26 @@ class _Receiver(http.server.BaseHTTPRequestHandler):
         )
         self._answer(204)
 
-    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+    def log_message(self, format: str, *args: Any) -> None:
         pass  # one line per dispatch above instead
 
 
+def receiver(
+    port: int, token: str, out: Path | None = None, grafana: str = LOCAL_GRAFANA
+) -> http.server.ThreadingHTTPServer:
+    """The stand-in, bound to 127.0.0.1 (Docker Desktop's host.docker.internal reaches it)."""
+    handler = type("Receiver", (_Receiver,), {"token": token, "grafana": grafana, "out": out})
+    return http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
+
+
 def receive(port: int, out: Path | None, grafana: str) -> None:
-    _Receiver.token = secrets.token_urlsafe(24)
-    _Receiver.grafana = grafana
-    _Receiver.out = out
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), _Receiver)
     # A throwaway value for this local stand-in only, never a GitHub token.
-    print(f"stand-in token (local drill only): {_Receiver.token}")
-    print(f"listening on http://127.0.0.1:{port}{DISPATCH_PATH}", flush=True)
-    try:
+    token = secrets.token_urlsafe(24)
+    server = receiver(port, token, out, grafana)
+    print(f"stand-in token (local drill only): {token}")
+    print(f"listening on http://127.0.0.1:{server.server_port}{DISPATCH_PATH}", flush=True)
+    with contextlib.suppress(KeyboardInterrupt):
         server.serve_forever()
-    except KeyboardInterrupt:
-        pass
 
 
 def _option(argv: list[str], name: str) -> str | None:
@@ -329,18 +332,16 @@ def main(argv: list[str]) -> int:
     command = argv.pop(0) if argv else ""
     if command == "check-event" and len(argv) == 1:
         return check_event(argv[0])
-    if command == "check" and argv:
-        local = "--local" in argv
-        if local:
-            at = argv.index("--local")
-            grafana = argv[at + 1] if at + 1 < len(argv) else LOCAL_GRAFANA
-            del argv[at:]
+    if command == "check" and argv and argv[0] != "--local":
         body = json.loads(Path(argv[0]).read_text())
-        found = (
-            request_problems(body, grafana=grafana, environments=("local",))
-            if local
-            else request_problems(body)
-        )
+        if argv[1:2] == ["--local"]:
+            grafana = argv[2] if len(argv) > 2 else LOCAL_GRAFANA
+            found = request_problems(body, grafana=grafana, environments=("local",))
+        elif len(argv) == 1:
+            found = request_problems(body)
+        else:
+            print(__doc__, file=sys.stderr)
+            return 2
         for problem in found:
             print(f"FAIL  {problem}", file=sys.stderr)
         if not found:

@@ -15,7 +15,7 @@
         # the local drill: the same contact point in the local Grafana, posting to
         # `alert_dispatch.py receive` with its stand-in token, for environment=local
     python3 scripts/alert_routing.py test cloud|local --env <env> --alert <alert>
-        [--status firing|resolved] [--grafana <url>]
+        [--grafana <url>]
         # send one synthetic notification through the stored contact point; in Grafana
         # Cloud that's a real dispatch, which runs the on-call workflow
 
@@ -41,7 +41,6 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import alert_dispatch as d
@@ -54,17 +53,18 @@ DISPATCH_URL = f"https://api.github.com{d.DISPATCH_PATH}"
 LOCAL_URL = f"http://host.docker.internal:8765{d.DISPATCH_PATH}"  # alert_dispatch.py receive
 # GitHub's recommended headers; Grafana adds Content-Type and its User-Agent.
 HEADERS = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
-TARGETS = {
-    # Which environments' alerts a Grafana routes, and the traces data source its links use.
-    "cloud": {"environments": d.DEPLOYED, "traces": g.DATASOURCES["cloud"]["traces"]},
-    "local": {"environments": ("local",), "traces": g.DATASOURCES["local"]["traces"]},
-}
+# Which environments' alerts each Grafana routes, and the traces data source its links use.
+ROUTED: dict[str, tuple[str, ...]] = {"cloud": d.DEPLOYED, "local": ("local",)}
+TRACES_UID = {target: g.DATASOURCES[target]["traces"] for target in ROUTED}
+TARGETS = tuple(ROUTED)
 GROUP_BY = ["alertname", "alert", "environment"]
 GROUP_WAIT = "10s"  # wake on-call quickly: the rule's pending period already debounces
 GROUP_INTERVAL = "1m"  # a resolved notification follows within a minute
 REPEAT_INTERVAL = "4h"  # re-sent while still firing; #35 updates the open incident
 TRACES_BEFORE = timedelta(minutes=30)  # the trace links start this long before the alert
 TRACES_AFTER = timedelta(minutes=10)  # and end this long after it resolved
+# Grafana's receivers API (the older .../config/api/v1/receivers/test is gone in Grafana 13).
+RECEIVERS_API = "/apis/notifications.alerting.grafana.app/v1beta1/namespaces/default"
 TIME = "2006-01-02T15:04:05Z"  # Go's layout for d.TIMESTAMP (Grafana passes UTC)
 # The traces worth opening first, per alert.
 TRACES = {
@@ -108,10 +108,23 @@ def payload_template(traces_uid: str) -> str:
 {{{{- $traceql := printf {traceql(saves)} $env -}}}}
 {{{{- if eq $alert "{history}" }}}}{{{{ $traceql = printf {traceql(history)} $env }}}}{{{{ end -}}}}
 {{{{- $tempo := coll.Dict "type" "tempo" "uid" "{traces_uid}" -}}}}
-{{{{- $query := coll.Dict "refId" "A" "datasource" $tempo "queryType" "traceql" "query" $traceql "limit" 20 "tableType" "traces" -}}}}
-{{{{- $panes := coll.Dict "alert" (coll.Dict "datasource" "{traces_uid}" "queries" (coll.Slice $query) "range" (coll.Dict "from" $from "to" $to)) -}}}}
+{{{{- $query := coll.Dict "refId" "A" "datasource" $tempo "queryType" "traceql"
+  "query" $traceql "limit" 20 "tableType" "traces" -}}}}
+{{{{- $range := coll.Dict "from" $from "to" $to -}}}}
+{{{{- $panes := coll.Dict "alert" (coll.Dict
+  "datasource" "{traces_uid}" "queries" (coll.Slice $query) "range" $range) -}}}}
 {{{{- $runbook := $a.Annotations.runbook_url -}}}}
 {{{{- if not $runbook }}}}{{{{ $runbook = printf "{d.RUNBOOKS}%s.md" $alert }}}}{{{{ end -}}}}
+{{{{- /* A contact point test has no rule behind it: link the alert list instead. */ -}}}}
+{{{{- $rule := $a.GeneratorURL -}}}}
+{{{{- if not (match "^https?://" $rule) -}}}}
+  {{{{- $search := printf "label:alert=%s label:environment=%s" $alert $env -}}}}
+  {{{{- $rule = printf "%salerting/list?search=%s" $grafana (urlquery $search) -}}}}
+{{{{- end -}}}}
+{{{{- $dashboard := printf "%sd/focus-key-journey-%s?orgId=1&from=%s&to=%s"
+  $grafana $env $from $to -}}}}
+{{{{- $traces := printf "%sexplore?schemaVersion=1&orgId=1&panes=%s"
+  $grafana (urlquery ($panes | data.ToJSON)) -}}}}
 {{{{- coll.Dict
   "event_type" "{d.EVENT_TYPE}"
   "client_payload" (coll.Dict
@@ -124,10 +137,10 @@ def payload_template(traces_uid: str) -> str:
     "started_at" ($a.StartsAt.UTC.Format "{TIME}")
     "resolved_at" $resolvedAt
     "links" (coll.Dict
-      "dashboard" (printf "%sd/focus-key-journey-%s?orgId=1&from=%s&to=%s" $grafana $env $from $to)
-      "traces" (printf "%sexplore?schemaVersion=1&orgId=1&panes=%s" $grafana (urlquery ($panes | data.ToJSON)))
+      "dashboard" $dashboard
+      "traces" $traces
       "runbook" $runbook
-      "alert" $a.GeneratorURL))
+      "alert" $rule))
   | data.ToJSON -}}}}
 """
 
@@ -144,7 +157,7 @@ def contact_point(target: str, url: str, traces_uid: str | None = None) -> dict[
             "authorization_scheme": "Bearer",
             "headers": dict(HEADERS),
             "maxAlerts": 0,
-            "payload": {"template": payload_template(traces_uid or TARGETS[target]["traces"])},
+            "payload": {"template": payload_template(traces_uid or TRACES_UID[target])},
         },
         # Resolved notifications too: #35 confirms the alert resolves.
         "disableResolveMessage": False,
@@ -153,7 +166,7 @@ def contact_point(target: str, url: str, traces_uid: str | None = None) -> dict[
 
 def route(target: str) -> dict[str, Any]:
     """The notification policy, a child of the root policy, for the routed environments."""
-    envs = TARGETS[target]["environments"]
+    envs = ROUTED[target]
     return {
         "receiver": CONTACT_POINT,
         "object_matchers": [
@@ -270,7 +283,8 @@ def external_url(grafana: str) -> str:
 
 def verify(grafana: str) -> list[str]:
     """Problems with the payload template, rendered by the running local Grafana (empty:
-    none). Covers every alert, both deployed environments and both statuses."""
+    none). Covers every alert, both deployed environments and both statuses, plus a
+    contact point test (firing, with no rule behind it, so no generator URL)."""
     try:
         base = external_url(grafana)
     except (RuntimeError, OSError) as e:
@@ -279,13 +293,17 @@ def verify(grafana: str) -> list[str]:
     found: list[str] = []
     for env in d.DEPLOYED:
         for alert in d.ALERTS:
-            for status in d.STATUSES:
-                case = f"{alert} {status} in {env}"
+            for case_name, status in (
+                ("firing", "firing"),
+                ("resolved", "resolved"),
+                ("test", "firing"),
+            ):
+                case = f"{alert} {case_name} in {env}"
+                sample = synthetic_alert(base, env, alert, status)
+                if case_name == "test":
+                    del sample["generatorURL"]
                 try:
-                    text = render_template(
-                        grafana, template, [synthetic_alert(base, env, alert, status)]
-                    )
-                    body = json.loads(text)
+                    body = json.loads(render_template(grafana, template, [sample]))
                 except (RuntimeError, OSError, json.JSONDecodeError) as e:
                     found.append(f"{case}: {e}")
                     continue
@@ -314,7 +332,9 @@ def traces_uid(grafana: str, token: str, wanted: str) -> str:
     ]
     if len(candidates) != 1:
         names = ", ".join(f"{s.get('name')} ({s.get('uid')})" for s in candidates) or "none"
-        raise RuntimeError(f"no data source {wanted!r}, and not exactly one grafanacloud-*-traces ({names})")
+        raise RuntimeError(
+            f"no data source {wanted!r}, and not exactly one grafanacloud-*-traces ({names})"
+        )
     print(f"using data source {candidates[0]['name']} ({candidates[0]['uid']})")
     return str(candidates[0]["uid"])
 
@@ -333,7 +353,7 @@ def apply(
     dispatch_token: str,
     url: str,
 ) -> None:
-    traces = TARGETS[target]["traces"]
+    traces = TRACES_UID[target]
     if target == "cloud":
         assert grafana_token
         traces = traces_uid(grafana, grafana_token, traces)
@@ -360,56 +380,53 @@ def apply(
         call(grafana, grafana_token, "POST", "/api/v1/provisioning/contact-points", point)
         print(f"ok    created contact point {CONTACT_POINT} -> {url}")
     tree = call(grafana, grafana_token, "GET", "/api/v1/provisioning/policies")
-    call(grafana, grafana_token, "PUT", "/api/v1/provisioning/policies", merged_policy(tree, route(target)))
-    envs = "|".join(TARGETS[target]["environments"])
+    call(
+        grafana,
+        grafana_token,
+        "PUT",
+        "/api/v1/provisioning/policies",
+        merged_policy(tree, route(target)),
+    )
+    envs = "|".join(ROUTED[target])
     print(f"ok    notification policy: service={g.SERVICE}, environment=~{envs} -> {CONTACT_POINT}")
 
 
-def send_test(
-    grafana: str, token: str | None, target: str, env: str, alert: str, status: str
-) -> None:
-    """One synthetic notification through the stored contact point (its stored token)."""
+def send_test(grafana: str, token: str | None, target: str, env: str, alert: str) -> None:
+    """One synthetic notification through the stored contact point, with its stored token:
+    what the contact point's **Test** button does with custom labels. Grafana sends a
+    test as a firing alert with no rule behind it."""
+    receivers = call(grafana, token, "GET", f"{RECEIVERS_API}/receivers") or {}
     found = [
-        p
-        for p in call(grafana, token, "GET", "/api/v1/provisioning/contact-points") or []
-        if p.get("uid") == CONTACT_POINT
+        (item["metadata"]["name"], integration)
+        for item in receivers.get("items", [])
+        for integration in item["spec"].get("integrations", [])
+        if integration.get("uid") == CONTACT_POINT
     ]
     if not found:
         raise RuntimeError(f"no contact point {CONTACT_POINT}: run apply {target} first")
-    point = found[0]
-    sample = synthetic_alert(external_url_or(grafana), env, alert, status)
+    name, integration = found[0]
+    sample = synthetic_alert(grafana + "/", env, alert, "firing")
     result = call(
         grafana,
         token,
         "POST",
-        "/api/alertmanager/grafana/config/api/v1/receivers/test",
+        f"{RECEIVERS_API}/receivers/{urllib.parse.quote(name)}/test",
         {
+            "integration": {
+                "uid": integration["uid"],
+                "type": integration["type"],
+                "version": integration.get("version", "v1"),
+                "settings": integration["settings"],
+                # Use the stored token: it's never read back.
+                "secureFields": integration.get("secureFields", {}),
+                "disableResolveMessage": False,
+            },
             "alert": {"labels": sample["labels"], "annotations": sample["annotations"]},
-            "receivers": [
-                {
-                    "name": CONTACT_POINT,
-                    "grafana_managed_receiver_configs": [
-                        {
-                            "uid": point["uid"],
-                            "name": CONTACT_POINT,
-                            "type": "webhook",
-                            "settings": point["settings"],
-                            "disableResolveMessage": False,
-                        }
-                    ],
-                }
-            ],
         },
     )
-    for receiver in (result or {}).get("receivers", []):
-        for config in receiver.get("grafana_managed_receiver_configs", []):
-            if config.get("status") != "ok":
-                raise RuntimeError(f"the test notification failed: {config.get('error')}")
-    print(f"ok    sent a synthetic {alert} {status} in {env} through {CONTACT_POINT}")
-
-
-def external_url_or(grafana: str) -> str:
-    return grafana.rstrip("/") + "/"
+    if (result or {}).get("status") != "success":
+        raise RuntimeError(f"the test notification failed: {(result or {}).get('error')}")
+    print(f"ok    sent a synthetic {alert} firing in {env} through {CONTACT_POINT}")
 
 
 def _option(argv: list[str], name: str) -> str | None:
@@ -453,7 +470,6 @@ def main(argv: list[str]) -> int:
         url = _option(argv, "--url") or LOCAL_URL
         env = _option(argv, "--env")
         alert = _option(argv, "--alert")
-        status = _option(argv, "--status") or "firing"
         if len(argv) != 1 or argv[0] not in TARGETS:
             print(__doc__, file=sys.stderr)
             return 2
@@ -476,16 +492,22 @@ def main(argv: list[str]) -> int:
                     else "Stand-in token printed by alert_dispatch.py receive: "
                 )
                 dispatch_token = getpass.getpass(prompt).strip()
-                apply(grafana, target, token, dispatch_token, DISPATCH_URL if target == "cloud" else url)
+                apply(
+                    grafana,
+                    target,
+                    token,
+                    dispatch_token,
+                    DISPATCH_URL if target == "cloud" else url,
+                )
             else:
-                envs = TARGETS[target]["environments"]
-                if env not in envs or alert not in d.ALERTS or status not in d.STATUSES:
+                envs = ROUTED[target]
+                if env is None or env not in envs or alert is None or alert not in d.ALERTS:
                     print(
                         f"test needs --env {'|'.join(envs)} --alert {'|'.join(d.ALERTS)}",
                         file=sys.stderr,
                     )
                     return 2
-                send_test(grafana, token, target, env, alert, status)
+                send_test(grafana, token, target, env, alert)
         except (RuntimeError, OSError) as e:
             print(f"FAIL  {e}", file=sys.stderr)
             return 1
