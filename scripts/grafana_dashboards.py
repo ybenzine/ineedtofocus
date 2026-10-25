@@ -110,7 +110,10 @@ def _prom(expr: str, legend: str, ref: str = "A", *, instant: bool = False) -> d
     if instant:
         target.update(instant=True, range=False)
     else:
-        target.update(range=True, legendFormat=legend, exemplar=True)
+        # Exemplars (a dot per sampled request, linking to its trace) only make sense on a
+        # latency axis; on a rate or ratio panel they'd plot a raw count.
+        latency = "histogram_quantile" in expr and "_duration_seconds_bucket" in expr
+        target.update(range=True, legendFormat=legend, exemplar=latency)
     return target
 
 

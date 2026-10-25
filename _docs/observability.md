@@ -134,12 +134,12 @@ Do this once, and again after a PR changes a dashboard. Grafana Cloud doesn't re
 
 ### Screenshots
 
-Local stack, with the #31 instrumentation, a few minutes of traffic and a 20-second database outage (stopped Postgres), last 15 minutes:
-
-![Key-journey dashboard, local stack: session saves and history rows](images/observability/key-journey-saves-history.png)
+Taken on the local stack (the same model as prod and dev), running the #31 instrumentation (PR #193's image), after 15 minutes of saves, sync batches and history loads with a few seconds of database outage (Postgres stopped). `node scripts/grafana_screenshots.mjs` takes them again.
 
 ![Key-journey dashboard, local stack: errors, logs, traces and HTTP rows](images/observability/key-journey-errors-http.png)
 
 Clicking a `trace_id` in **Error logs with their traces** opens the failed request's trace in Explore:
 
 ![The trace of a failed history load, opened from an error log line](images/observability/error-log-to-trace.png)
+
+The session-saves and history rows get their screenshot (`key-journey-saves-history.png`) once #31's duration histograms have bucket boundaries in seconds. Until then, both latency panels read about 4.75 s whatever the real latency is.

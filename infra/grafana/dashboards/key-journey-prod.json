@@ -170,7 +170,7 @@
           "expr": "1 - (((sum(increase(focus_session_saves_total{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\", outcome=\"error\"}[5m]))) or vector(0)) / sum(increase(focus_session_saves_total{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\"}[5m])))",
           "range": true,
           "legendFormat": "success rate",
-          "exemplar": true
+          "exemplar": false
         }
       ],
       "fieldConfig": {
@@ -238,7 +238,7 @@
           "expr": "sum by (outcome) (rate(focus_session_saves_total{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\"}[$__rate_interval])) * 60",
           "range": true,
           "legendFormat": "{{outcome}}",
-          "exemplar": true
+          "exemplar": false
         }
       ],
       "fieldConfig": {
@@ -368,7 +368,7 @@
           "expr": "histogram_quantile(0.5, sum by (le) (rate(focus_sync_batch_size_bucket{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\"}[$__rate_interval])))",
           "range": true,
           "legendFormat": "p50",
-          "exemplar": true
+          "exemplar": false
         },
         {
           "refId": "B",
@@ -379,7 +379,7 @@
           "expr": "histogram_quantile(0.95, sum by (le) (rate(focus_sync_batch_size_bucket{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\"}[$__rate_interval])))",
           "range": true,
           "legendFormat": "p95",
-          "exemplar": true
+          "exemplar": false
         }
       ],
       "fieldConfig": {
@@ -431,7 +431,7 @@
           "expr": "sum by (kind, outcome) (rate(focus_session_save_duration_seconds_count{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\"}[$__rate_interval])) * 60",
           "range": true,
           "legendFormat": "{{kind}} {{outcome}}",
-          "exemplar": true
+          "exemplar": false
         }
       ],
       "fieldConfig": {
@@ -654,7 +654,7 @@
           "expr": "sum by (outcome) (rate(focus_history_loads_total{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\"}[$__rate_interval])) * 60",
           "range": true,
           "legendFormat": "{{outcome}}",
-          "exemplar": true
+          "exemplar": false
         }
       ],
       "fieldConfig": {
@@ -710,7 +710,7 @@
           "expr": "((sum(increase(focus_history_loads_total{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\", outcome=\"error\"}[5m]))) or vector(0)) / sum(increase(focus_history_loads_total{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\"}[5m]))",
           "range": true,
           "legendFormat": "error rate",
-          "exemplar": true
+          "exemplar": false
         }
       ],
       "fieldConfig": {
@@ -1083,7 +1083,7 @@
           "expr": "sum by (http_route) (rate(http_server_request_duration_seconds_count{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\", http_route=~\"/api/.*\"}[$__rate_interval])) * 60",
           "range": true,
           "legendFormat": "{{http_route}}",
-          "exemplar": true
+          "exemplar": false
         }
       ],
       "fieldConfig": {
@@ -1139,7 +1139,7 @@
           "expr": "(sum by (http_route) (rate(http_server_request_duration_seconds_count{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\", http_route=~\"/api/sessions|/api/sessions/sync|/api/history\", http_response_status_code=~\"5..\"}[5m])) or sum by (http_route) (rate(http_server_request_duration_seconds_count{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\", http_route=~\"/api/sessions|/api/sessions/sync|/api/history\"}[5m])) * 0) / sum by (http_route) (rate(http_server_request_duration_seconds_count{service_name=\"ineedtofocus\", deployment_environment_name=\"prod\", http_route=~\"/api/sessions|/api/sessions/sync|/api/history\"}[5m]))",
           "range": true,
           "legendFormat": "{{http_route}}",
-          "exemplar": true
+          "exemplar": false
         }
       ],
       "fieldConfig": {
