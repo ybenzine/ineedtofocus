@@ -180,6 +180,8 @@ export default function HistoryScreen({
     let cancelled = false
     void (async () => {
       setLoad({ kind: 'loading' })
+      // A session marked gone is deleted only by a pair that started after its mark (#227).
+      const loadStartedAt = Date.now()
       const [result, local] = await Promise.all([
         api.get(query),
         (owner !== null && sessions ? sessions.list(owner) : Promise.resolve([])).catch(() => []),
@@ -203,7 +205,11 @@ export default function HistoryScreen({
         // shows a badge, but the server already has it.
         notUploaded: d.syncState !== 'synced',
       }))
-      const alive = device.filter((d) => !d.archived && !archiving.current.has(d.session.id))
+      // Marked gone on the server (#227): hidden, but kept until a later load confirms it.
+      const goneIds = new Set(local.filter((d) => d.goneOnServer).map((d) => d.record.id))
+      const alive = device.filter(
+        (d) => !d.archived && !archiving.current.has(d.session.id) && !goneIds.has(d.session.id),
+      )
       const archivedIds = new Set(device.filter((d) => d.archived).map((d) => d.session.id))
       const leaveOut = (data: HistoryData) =>
         archiving.current.size > 0 ? removeSessions(data, archiving.current) : data
@@ -234,9 +240,22 @@ export default function HistoryScreen({
             query.tags,
             archiving.current,
           )
-          void reconcileMissing(sessions, archiveApiRef.current, owner, missing, isSkipped).catch(
-            () => undefined,
-          )
+          void reconcileMissing(
+            sessions,
+            archiveApiRef.current,
+            owner,
+            missing,
+            isSkipped,
+            loadStartedAt,
+          ).catch(() => undefined)
+          // Listed again (restored elsewhere, or a backup restored): it isn't gone after all.
+          const listed = new Set(result.value.sessions.map((s) => s.id))
+          void sessions
+            .clearGone(
+              owner,
+              [...goneIds].filter((id) => listed.has(id)),
+            )
+            .catch(() => undefined)
           // Restored on another device: the server lists it as live again.
           void clearArchivedOnDevice(
             sessions,
@@ -267,7 +286,7 @@ export default function HistoryScreen({
       // Sessions archived here since that answer are left out of it (AC11.2).
       const base = removeSessions(
         cached ?? emptyData(query.view, tz, weekStart, period),
-        archivedIds,
+        new Set([...archivedIds, ...goneIds]),
       )
       // Everything on the device that isn't archived (merging de-duplicates by id), so a session
       // that synced after the cached answer was fetched isn't lost.

@@ -248,4 +248,55 @@ describe('archive state on the device', () => {
     expect(await store.get(pending.id)).toBeDefined()
     expect(await store.get(rejected.id)).toBeUndefined()
   })
+
+  it('#227 markGone marks first, deletes only for a load that started after the mark', async () => {
+    let clock = 1000
+    const store = new IndexedDbSessionStore({ name: freshDbName(), now: () => clock })
+    opened.push(store)
+    const gone = await synced(store, ALICE)
+    await store.markGone(ALICE, [gone.id], 1000)
+    expect((await store.get(gone.id))?.goneOnServer).toBe(1000)
+    expect((await store.list(ALICE))[0].goneOnServer).toBe(true)
+
+    clock = 2000
+    await store.markGone(ALICE, [gone.id], 900) // started before the mark
+    await store.markGone(ALICE, [gone.id], 1000) // not after it
+    expect((await store.get(gone.id))?.goneOnServer).toBe(1000)
+    await store.markGone(ALICE, [gone.id], 1001)
+    expect(await store.get(gone.id)).toBeUndefined()
+  })
+
+  it('#227 markGone never touches device-only, unsynced, pending-edit or other owners’ sessions', async () => {
+    const { store } = openStore()
+    const deviceOnly = makeRecord()
+    await store.save(deviceOnly, ALICE)
+    await store.markRejected(deviceOnly.id, null)
+    await store.archiveOnDevice(ALICE, deviceOnly.id)
+    const pending = makeRecord()
+    await store.save(pending, ALICE)
+    const withEdit = await synced(store, ALICE)
+    await store.edit(ALICE, withEdit.id, { goal: 'x' })
+    const bobs = await synced(store, BOB)
+    const ids = [deviceOnly.id, pending.id, withEdit.id, bobs.id]
+
+    await store.markGone(ALICE, ids, 1)
+    await store.markGone(ALICE, ids, Date.now() + 10_000)
+
+    for (const id of ids) {
+      const stored = await store.get(id)
+      expect(stored).toBeDefined()
+      expect(stored?.goneOnServer ?? null).toBeNull()
+    }
+  })
+
+  it('#227 clearGone and setArchived clear the mark', async () => {
+    const { store } = openStore()
+    const a = await synced(store, ALICE)
+    const b = await synced(store, ALICE)
+    await store.markGone(ALICE, [a.id, b.id], 1)
+    await store.clearGone(ALICE, [a.id])
+    await store.setArchived(ALICE, b.id, '2026-10-21T10:00:00Z')
+    expect((await store.get(a.id))?.goneOnServer ?? null).toBeNull()
+    expect((await store.get(b.id))?.goneOnServer ?? null).toBeNull()
+  })
 })
