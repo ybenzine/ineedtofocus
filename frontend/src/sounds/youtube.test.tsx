@@ -11,6 +11,9 @@ import {
   PLAYER_ERROR_MESSAGE,
   PLAYER_LOAD_MESSAGE,
   YT_ENDED,
+  YT_PLAYING,
+  SKIPPED_ITEM_MESSAGE,
+  SKIP_NOTE_MS,
   loadYoutubeApi,
   type YtNamespace,
   type YtPlayer,
@@ -35,6 +38,9 @@ function fakeYoutube() {
       seekTo: vi.fn(),
       setVolume: vi.fn(),
       setLoop: vi.fn(),
+      nextVideo: vi.fn(),
+      getPlaylistIndex: vi.fn(() => undefined as number | undefined),
+      getPlaylist: vi.fn(() => [ID, ID2, 'ccccccccccc'] as string[] | null),
       destroy: vi.fn(),
     }
     players.push(player)
@@ -244,6 +250,144 @@ describe('problems leave the session alone (AC8.5)', () => {
     t.setPaused(true)
     t.setPaused(false)
     expect(t.players[0].playVideo).toHaveBeenCalledTimes(1)
+  })
+
+  describe('a playlist skips unplayable items (#203)', () => {
+    async function playlist() {
+      const t = setup()
+      await paste(`https://www.youtube.com/playlist?list=${LIST}`)
+      await waitFor(() => expect(t.players).toHaveLength(1))
+      await t.ready()
+      const { events } = t.players[0].options
+      return { t, events, p: t.players[0] }
+    }
+
+    it.each([100, 101, 150])('skips an item with error %i and says so', async (code) => {
+      const { events, p } = await playlist()
+      await act(async () => events.onStateChange({ data: YT_PLAYING }))
+      await act(async () => events.onError({ data: code }))
+      expect(p.nextVideo).toHaveBeenCalledTimes(1)
+      expect(p.destroy).not.toHaveBeenCalled()
+      expect(screen.getByRole('status')).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    })
+
+    it('shows the note for about 5 s, then clears it, and not past a new link', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        const { events } = await playlist()
+        await act(async () => events.onStateChange({ data: YT_PLAYING }))
+        await act(async () => events.onError({ data: 150 }))
+        expect(screen.getByRole('status')).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
+        await act(async () => vi.advanceTimersByTime(SKIP_NOTE_MS - 100))
+        expect(screen.getByRole('status')).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
+        await act(async () => vi.advanceTimersByTime(200))
+        expect(screen.getByRole('status')).toBeEmptyDOMElement()
+        // The same container carries every later note.
+        await act(async () => events.onError({ data: 150 }))
+        expect(screen.getByRole('status')).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('clears the note timer when the screen goes away', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        const { t, events } = await playlist()
+        await act(async () => events.onStateChange({ data: YT_PLAYING }))
+        await act(async () => events.onError({ data: 150 }))
+        expect(vi.getTimerCount()).toBeGreaterThan(0)
+        const before = vi.getTimerCount()
+        t.unmount()
+        expect(vi.getTimerCount()).toBeLessThan(before)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('keeps going past the last item: the wrap is left to the looping player', async () => {
+      const { events, p } = await playlist()
+      await act(async () => events.onStateChange({ data: YT_PLAYING }))
+      vi.mocked(p.getPlaylistIndex).mockReturnValue(2) // the last of 3
+      await act(async () => events.onError({ data: 150 }))
+      expect(p.nextVideo).toHaveBeenCalledTimes(1)
+      expect(p.destroy).not.toHaveBeenCalled()
+      expect(p.setLoop).toHaveBeenCalledWith(true)
+    })
+
+    it('does not skip twice for the same item', async () => {
+      const { events, p } = await playlist()
+      await act(async () => events.onStateChange({ data: YT_PLAYING }))
+      vi.mocked(p.getPlaylistIndex).mockReturnValue(1)
+      await act(async () => events.onError({ data: 150 }))
+      await act(async () => events.onError({ data: 150 }))
+      expect(p.nextVideo).toHaveBeenCalledTimes(1)
+      expect(p.destroy).not.toHaveBeenCalled()
+    })
+
+    it('removes the player after as many errors in a row as items, playing nothing between', async () => {
+      const { events, p } = await playlist()
+      await act(async () => events.onStateChange({ data: YT_PLAYING }))
+      await act(async () => events.onError({ data: 150 }))
+      await act(async () => events.onError({ data: 101 }))
+      expect(p.destroy).not.toHaveBeenCalled()
+      await act(async () => events.onError({ data: 100 }))
+      expect(p.nextVideo).toHaveBeenCalledTimes(2)
+      expect(p.stopVideo).toHaveBeenCalled()
+      expect(p.destroy).toHaveBeenCalled()
+      expect(screen.getByRole('alert')).toHaveTextContent(PLAYER_ERROR_MESSAGE)
+    })
+
+    it('counts a played item as a break in the run of errors', async () => {
+      const { events, p } = await playlist()
+      await act(async () => events.onStateChange({ data: YT_PLAYING }))
+      for (let i = 0; i < 4; i++) {
+        await act(async () => events.onError({ data: 150 }))
+        await act(async () => events.onStateChange({ data: YT_PLAYING }))
+      }
+      expect(p.nextVideo).toHaveBeenCalledTimes(4)
+      expect(p.destroy).not.toHaveBeenCalled()
+    })
+
+    it('assumes 3 items when the length is unknown', async () => {
+      const { events, p } = await playlist()
+      vi.mocked(p.getPlaylist).mockReturnValue(null)
+      await act(async () => events.onStateChange({ data: YT_PLAYING }))
+      await act(async () => events.onError({ data: 150 }))
+      await act(async () => events.onError({ data: 150 }))
+      expect(p.destroy).not.toHaveBeenCalled()
+      await act(async () => events.onError({ data: 150 }))
+      expect(p.destroy).toHaveBeenCalled()
+    })
+
+    it('removes the player on an error before anything played', async () => {
+      const a = await playlist()
+      await act(async () => a.events.onError({ data: 150 }))
+      expect(a.p.nextVideo).not.toHaveBeenCalled()
+      expect(a.p.destroy).toHaveBeenCalled()
+      expect(screen.getByRole('alert')).toHaveTextContent(PLAYER_ERROR_MESSAGE)
+    })
+
+    it('removes the player on error 2 even after playing', async () => {
+      const { events, p } = await playlist()
+      await act(async () => events.onStateChange({ data: YT_PLAYING }))
+      await act(async () => events.onError({ data: 2 }))
+      expect(p.nextVideo).not.toHaveBeenCalled()
+      expect(p.destroy).toHaveBeenCalled()
+      expect(screen.getByRole('alert')).toHaveTextContent(PLAYER_ERROR_MESSAGE)
+    })
+
+    it('leaves a single video as it was: any error removes the player', async () => {
+      const t = setup()
+      await paste(`https://youtu.be/${ID}`)
+      await waitFor(() => expect(t.players).toHaveLength(1))
+      await t.ready()
+      await act(async () => t.players[0].options.events.onStateChange({ data: YT_PLAYING }))
+      await act(async () => t.players[0].options.events.onError({ data: 150 }))
+      expect(t.players[0].nextVideo).not.toHaveBeenCalled()
+      expect(t.players[0].destroy).toHaveBeenCalled()
+    })
   })
 
   it('says so when a YouTube link has no video or playlist', async () => {

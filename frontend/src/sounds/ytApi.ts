@@ -8,6 +8,9 @@ export interface YtPlayer {
   seekTo(seconds: number, allowSeekAhead: boolean): void
   setVolume(volume: number): void
   setLoop(loop: boolean): void
+  nextVideo(): void
+  getPlaylist(): string[] | null | undefined
+  getPlaylistIndex(): number | undefined
   destroy(): void
 }
 
@@ -31,6 +34,11 @@ export interface YtNamespace {
 export type LoadYoutubeApi = () => Promise<YtNamespace>
 
 export const YT_ENDED = 0
+export const YT_PLAYING = 1
+/** Video not found (100), embedding not allowed (101, 150): only that item is lost. */
+export const SKIPPABLE_ERRORS = [100, 101, 150]
+/** Used when the player can't say how many items the playlist has. */
+export const UNKNOWN_PLAYLIST_LENGTH = 3
 export const API_TIMEOUT_MS = 15_000
 export const YOUTUBE_API_SCRIPT = 'https://www.youtube.com/iframe_api'
 
@@ -79,5 +87,8 @@ export const loadYoutubeApi: LoadYoutubeApi = () => {
 
 export const PLAYER_ERROR_MESSAGE =
   "This video can't be played. It may be unavailable, private or not allowed to be embedded. Your session carries on."
+/** How long the skip note stays. */
+export const SKIP_NOTE_MS = 5000
+export const SKIPPED_ITEM_MESSAGE = "Skipped a video that can't be played here."
 export const PLAYER_LOAD_MESSAGE =
   "The YouTube player couldn't load. Check your connection or try Rain. Your session carries on."

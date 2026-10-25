@@ -8,7 +8,12 @@ import type { YoutubeTarget } from './youtubeLink.ts'
 import {
   PLAYER_ERROR_MESSAGE,
   PLAYER_LOAD_MESSAGE,
+  SKIPPABLE_ERRORS,
+  SKIPPED_ITEM_MESSAGE,
+  SKIP_NOTE_MS,
+  UNKNOWN_PLAYLIST_LENGTH,
   YT_ENDED,
+  YT_PLAYING,
   loadYoutubeApi,
   type LoadYoutubeApi,
   type YtPlayer,
@@ -39,6 +44,7 @@ export default function YoutubePlayer({
   const wantVolume = useRef(volume)
   const problemHandler = useRef(onProblem)
   const [message, setMessage] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
 
   useEffect(() => {
     wantPlaying.current = playing
@@ -51,6 +57,10 @@ export default function YoutubePlayer({
     const host = wrapper.current
     let cancelled = false
     let created: YtPlayer | null = null
+    let hasPlayed = false
+    let failuresInARow = 0
+    let lastSkippedIndex: number | undefined
+    let noteTimer: number | undefined
     const fail = (text: string) => {
       if (cancelled) return
       setMessage(text)
@@ -84,6 +94,11 @@ export default function YoutubePlayer({
               if (wantPlaying.current) created.playVideo()
             },
             onStateChange: (event) => {
+              if (event.data === YT_PLAYING) {
+                hasPlayed = true
+                failuresInARow = 0
+                lastSkippedIndex = undefined
+              }
               // Backs up `loop` for a single video: start over while the timer runs.
               // A playlist moves on by itself (`setLoop`); restarting here would repeat an item.
               if (
@@ -96,7 +111,40 @@ export default function YoutubePlayer({
                 created?.playVideo()
               }
             },
-            onError: () => {
+            onError: (event) => {
+              // In a playlist one unplayable item is skipped; the player goes only when every item
+              // has failed in a row. Errors before anything played and other errors remove it.
+              if (
+                kind === 'playlist' &&
+                hasPlayed &&
+                created &&
+                !cancelled &&
+                SKIPPABLE_ERRORS.includes(event.data)
+              ) {
+                // The same item reported twice, or already left behind: don't skip a good one.
+                let index: number | undefined
+                try {
+                  index = created.getPlaylistIndex()
+                } catch {
+                  // Index unknown.
+                }
+                if (index !== undefined && index === lastSkippedIndex) return
+                lastSkippedIndex = index
+                failuresInARow += 1
+                let total = UNKNOWN_PLAYLIST_LENGTH
+                try {
+                  total = created.getPlaylist()?.length || UNKNOWN_PLAYLIST_LENGTH
+                } catch {
+                  // Length unknown.
+                }
+                if (failuresInARow < total) {
+                  setNote(SKIPPED_ITEM_MESSAGE)
+                  window.clearTimeout(noteTimer)
+                  noteTimer = window.setTimeout(() => setNote(null), SKIP_NOTE_MS)
+                  created.nextVideo()
+                  return
+                }
+              }
               // Nothing may play from a player the user can't see: stop and remove it.
               ready.current = false
               player.current = null
@@ -118,6 +166,8 @@ export default function YoutubePlayer({
     )
     return () => {
       cancelled = true
+      window.clearTimeout(noteTimer)
+      setNote(null)
       ready.current = false
       player.current = null
       try {
@@ -142,6 +192,9 @@ export default function YoutubePlayer({
   return (
     <>
       <div className="youtube-player" ref={wrapper} hidden={message !== null} />
+      <p className="field-hint" role="status">
+        {message === null ? note : null}
+      </p>
       {message !== null && (
         <p className="field-error" role="alert">
           {message}
