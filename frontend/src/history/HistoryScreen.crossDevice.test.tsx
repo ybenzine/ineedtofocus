@@ -1,7 +1,7 @@
 // A session archived or deleted on another device: an online History load updates the device
 // copy, so offline History stops showing it (#133).
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HttpArchiveApi } from '../archive/api.ts'
 import { HttpSessionsApi, type ApiResult } from '../sync/api.ts'
@@ -20,13 +20,21 @@ class ServerHistory implements HistoryApi {
   offline = false
   /** Also lists archived sessions: an answer that predates an archive made on this screen. */
   stale = false
+  /** Every answer given, so a test can wait for a request to finish. */
+  readonly answers: Promise<unknown>[] = []
   readonly server: FakeSessionsServer
 
   constructor(server: FakeSessionsServer) {
     this.server = server
   }
 
-  async get(query: HistoryQuery): Promise<ApiResult<HistoryData>> {
+  get(query: HistoryQuery): Promise<ApiResult<HistoryData>> {
+    const answer = this.answer(query)
+    this.answers.push(answer)
+    return answer
+  }
+
+  async answer(query: HistoryQuery): Promise<ApiResult<HistoryData>> {
     if (this.offline) return { kind: 'unavailable' }
     const base = emptyData(query.view, 'UTC', 1, periodFor('day', query.date ?? '', 1))
     const sessions: HistorySession[] = []
@@ -185,8 +193,61 @@ describe('a session restored on another device (#228)', () => {
     history.stale = true
     fireEvent.click(archive)
     await screen.findByText(/Session archived/)
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    // Wait for the request that follows the archive (and the reconcile it starts) to finish.
+    await waitFor(() => expect(history.answers.length).toBeGreaterThanOrEqual(2))
+    await act(async () => {
+      await Promise.all(history.answers)
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
     const [mine] = await store.list('me')
     expect(mine.archivedAt).not.toBeNull()
+  })
+
+  it('keeps a session live when Undo ran while a reconcile was loading the Archive list', async () => {
+    const record = await syncedSession({ goal: 'Undone' })
+    const real = new HttpArchiveApi({ fetch: server.fetch })
+    let release: () => void = () => undefined
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let hold = false
+    const archiveApi = {
+      archive: (id: string) => real.archive(id),
+      restore: (id: string) => real.restore(id),
+      // An older answer: it still lists the session as archived.
+      list: async () => {
+        if (!hold) return real.list()
+        await held
+        return {
+          kind: 'ok' as const,
+          value: [{ id: record.id, archivedAt: '2026-10-21T10:00:00Z' }],
+        }
+      },
+    } as unknown as HttpArchiveApi
+    // The archive's own device write fails, so the next load sees the session as missing.
+    vi.spyOn(store, 'setArchived').mockRejectedValueOnce(new Error('write failed'))
+    render(
+      <HistoryScreen
+        api={history}
+        timeZone="UTC"
+        now={() => NOW}
+        ownerId="me"
+        sessions={store}
+        sync={engine}
+        sessionsApi={new HttpSessionsApi({ fetch: server.fetch })}
+        archiveApi={archiveApi}
+      />,
+    )
+    const archive = await screen.findByRole('button', { name: /^Archive/ })
+    hold = true
+    fireEvent.click(archive)
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(screen.queryByText(/Session archived/)).not.toBeInTheDocument())
+    await waitFor(async () => expect((await store.get(record.id))?.archivedAt).toBeNull())
+    release()
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect((await store.get(record.id))?.archivedAt).toBeNull()
   })
 })
