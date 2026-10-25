@@ -1,7 +1,7 @@
 // A session archived or deleted on another device: an online History load updates the device
 // copy, so offline History stops showing it (#133).
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HttpArchiveApi } from '../archive/api.ts'
 import { HttpSessionsApi, type ApiResult } from '../sync/api.ts'
@@ -18,6 +18,8 @@ const NOW = Date.UTC(2026, 9, 21, 12, 0, 0)
 /** The History API answered from the fake server's non-archived sessions (day view, UTC). */
 class ServerHistory implements HistoryApi {
   offline = false
+  /** Also lists archived sessions: an answer that predates an archive made on this screen. */
+  stale = false
   readonly server: FakeSessionsServer
 
   constructor(server: FakeSessionsServer) {
@@ -29,7 +31,7 @@ class ServerHistory implements HistoryApi {
     const base = emptyData(query.view, 'UTC', 1, periodFor('day', query.date ?? '', 1))
     const sessions: HistorySession[] = []
     for (const stored of this.server.sessions.values()) {
-      if (stored.archivedAt !== null) continue
+      if (stored.archivedAt !== null && !this.stale) continue
       const item = stored.item
       sessions.push({
         id: String(item.id),
@@ -158,5 +160,33 @@ describe('a session archived or deleted on another device (#133)', () => {
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(await store.get(other.id)).toBeDefined()
     expect(await store.get(unsynced.id)).toBeDefined()
+  })
+})
+
+describe('a session restored on another device (#228)', () => {
+  it('ac1 ac2 an online load clears the archived mark, so offline History shows it again', async () => {
+    const record = await syncedSession({ goal: 'Back again' })
+    await store.setArchived('me', record.id, '2026-10-21T10:00:00Z')
+    const first = renderScreen()
+    await waitFor(async () => expect((await store.get(record.id))?.archivedAt).toBeNull())
+    first.unmount()
+
+    history.offline = true
+    renderScreen()
+    await screen.findByText(/Showing what’s saved on this device/)
+    expect(await screen.findByText('Back again')).toBeInTheDocument()
+  })
+
+  it('keeps the mark of a session archived here when an older answer still lists it', async () => {
+    await syncedSession({ goal: 'Mine to archive' })
+    renderScreen()
+    const archive = await screen.findByRole('button', { name: /^Archive/ })
+    // The answer that follows the archive still lists the session as live (it predates it).
+    history.stale = true
+    fireEvent.click(archive)
+    await screen.findByText(/Session archived/)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const [mine] = await store.list('me')
+    expect(mine.archivedAt).not.toBeNull()
   })
 })
