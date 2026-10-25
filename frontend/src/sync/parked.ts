@@ -1,7 +1,7 @@
 // A last-resort shelf for a previous owner's finished session when it couldn't be written to
 // IndexedDB during a different user's sign-in (failed or stalled). It is never deleted there:
 // it is parked in localStorage under its owner, outside the per-user keys, and moved into the
-// session store at the next start-up (F13; owner ruling on #9). Parked sessions belong to their
+// session store at the next start-up and while the app is open (F13; owner ruling on #9). Parked sessions belong to their
 // owner: not shown to or synced into anyone else, counted and cleared with that owner's data.
 
 import { advance, finishSession, type SessionRecord } from '../timer/engine.ts'
@@ -43,23 +43,38 @@ function writeParked(list: ParkedSession[], storage: Storage): void {
   else storage.setItem(PARKED_KEY, JSON.stringify(list))
 }
 
-/** Parks a session for its owner (once per id). Throws if localStorage refuses the write. */
+export const PARKED_LOCK = 'ineedtofocus-parked'
+
+/**
+ * Runs a read-modify-write of the parked list alone across tabs (Web Locks), so two tabs can't
+ * overwrite each other's entries. Without Web Locks (older browsers, jsdom) it just runs: the
+ * read and the write then happen in one synchronous step, which is as close as localStorage gets.
+ */
+export function withParkedLock<T>(run: () => T): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
+  if (!locks) return Promise.resolve().then(run)
+  return locks.request(PARKED_LOCK, async () => run())
+}
+
+/** Parks a session for its owner (once per id). Rejects if localStorage refuses the write. */
 export function parkSession(
   ownerId: string,
   record: SessionRecord,
   storage: Storage = window.localStorage,
-): void {
-  const list = loadParked(storage)
-  if (list.some((parked) => parked.record.id === record.id)) return
-  writeParked([...list, { ownerId, record }], storage)
+): Promise<void> {
+  return withParkedLock(() => {
+    const list = loadParked(storage)
+    if (list.some((parked) => parked.record.id === record.id)) return
+    writeParked([...list, { ownerId, record }], storage)
+  })
 }
 
-function removeParked(
+async function removeParked(
   keep: (parked: ParkedSession) => boolean,
   storage: Storage = window.localStorage,
-): void {
+): Promise<void> {
   try {
-    writeParked(loadParked(storage).filter(keep), storage)
+    await withParkedLock(() => writeParked(loadParked(storage).filter(keep), storage))
   } catch {
     // Nothing removed: it will be tried again.
   }
@@ -71,8 +86,8 @@ export function parkedFor(ownerId: string | null, storage?: Storage): ParkedSess
 }
 
 /** Explicit sign-out of `ownerId`: forget their parked sessions; other owners' stay. */
-export function clearParked(ownerId: string, storage?: Storage): void {
-  removeParked((parked) => parked.ownerId !== ownerId, storage)
+export function clearParked(ownerId: string, storage?: Storage): Promise<void> {
+  return removeParked((parked) => parked.ownerId !== ownerId, storage)
 }
 
 /**
@@ -91,7 +106,7 @@ export async function drainParked(
     } catch {
       continue
     }
-    removeParked((other) => other.record.id !== parked.record.id, storage)
+    await removeParked((other) => other.record.id !== parked.record.id, storage)
     moved += 1
   }
   return moved

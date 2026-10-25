@@ -202,7 +202,7 @@ export async function claimLocalData(user: User): Promise<void> {
     const finished = finishedRecordOf(parseStoredTimer(read(ACTIVE_SESSION_KEY)), Date.now())
     if (finished !== null) {
       try {
-        parkSession(owner, finished)
+        await parkSession(owner, finished)
       } catch {
         keepActive = true
       }

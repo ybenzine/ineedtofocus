@@ -24,6 +24,11 @@ interface Props {
 export const OFFLINE_SIGN_OUT_NOTICE =
   "You're signed out on this device. Your account will be fully signed out the next time this device is online."
 
+export const OFFLINE_SIGN_OUT_MESSAGE =
+  "Can't finish signing out yet. Connect to the internet, then try again."
+export const SERVER_SIGN_OUT_MESSAGE =
+  "Can't finish signing out yet. The server couldn't be reached. Try again shortly."
+
 /**
  * Shows the sign-in screen until the user is signed in, then the app (AC1.2).
  * If the server can't be reached (offline, timeout, 5xx) but this device remembers a signed-in
@@ -49,19 +54,23 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
     userRef.current = user
   }, [expired, user])
 
-  /** Ends the server session left over from an offline sign-out. True once none is left. */
-  const flushLogout = useCallback(async (): Promise<boolean> => {
-    if (!hasPendingLogout()) return true
+  /**
+   * Ends the server session left over from an offline sign-out. Resolves `'done'` once none is
+   * left, `'offline'` when the server couldn't be reached, `'server'` when it answered with an
+   * error.
+   */
+  const flushLogout = useCallback(async (): Promise<'done' | 'offline' | 'server'> => {
+    if (!hasPendingLogout()) return 'done'
     try {
       // Resolves on 2xx or 401 (the server session is already gone); anything else throws.
       await api.signOut()
-    } catch {
+    } catch (error) {
       // Network, timeout, 5xx or anything unexpected: keep the marker and try again later.
-      return false
+      return error instanceof AuthError && error.kind === 'network' ? 'offline' : 'server'
     }
     clearPendingLogout()
     setLogoutPending(false)
-    return true
+    return 'done'
   }, [api])
 
   useEffect(() => {
@@ -193,11 +202,11 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
       <AuthScreen
         api={api}
         notice={logoutPending ? OFFLINE_SIGN_OUT_NOTICE : ''}
-        beforeSubmit={async () =>
-          (await flushLogout())
-            ? null
-            : "Can't finish signing out yet. Connect to the internet, then try again."
-        }
+        beforeSubmit={async () => {
+          const result = await flushLogout()
+          if (result === 'done') return null
+          return result === 'server' ? SERVER_SIGN_OUT_MESSAGE : OFFLINE_SIGN_OUT_MESSAGE
+        }}
         onSignedIn={async (next) => {
           await claimLocalData(next)
           cacheUser(next)

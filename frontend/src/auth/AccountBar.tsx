@@ -89,7 +89,7 @@ export default function AccountBar({ controller }: { controller: TimerController
           <button type="button" ref={cancelRef} onClick={cancelConfirm}>
             Cancel
           </button>
-          <button type="button" onClick={() => void finish()}>
+          <button type="button" className="danger" onClick={() => void finish()}>
             Sign out anyway
           </button>
         </div>
