@@ -92,6 +92,8 @@ It fired 2 min 50 s after fault injection went on, and resolved 5 min 16 s after
 
 **The history minimum**, the same day, with synthetic history metrics pushed over OTLP to the local stack (the app's resource labels, a separate instance). A single 3-second history load in an otherwise quiet window made A, the p95, 4.875 s, over the threshold. B, the loads, stayed "no data" (1 is below 5), and **History slow** stayed Normal for 4 minutes. With 7 slow loads in the window, B was 7, and the rule went pending and then fired a minute later.
 
+**Rejected loads don't count (#208)**, the same day. At 17:39:31Z the local app received 4 history requests that FastAPI rejects with a 422 before the handler: a missing `tz`, a missing `view`, an unknown `view` and a malformed `date`. At 17:39:56Z a synthetic 3-second load was pushed as above. From 17:39:57Z to 17:44:27Z, A was 4.875 s. B, the loads that recorded a latency, was 1, so "no data". The old query over `focus_history_loads_total` read 5.06 and would have met the minimum. **History slow** stayed Normal throughout, and everything went back to no data once the loads left the 5-minute window.
+
 ### Apply the alert rules to Grafana Cloud
 
 Grafana Cloud doesn't read the repo, and no agent has an editor login, so Yacine applies the rules once, and again after a PR changes them. `apply` creates or updates the environment's rule group through Grafana's alerting provisioning API, in the `I Need To Focus` folder (it creates the folder if it's missing). It keeps the rules editable in the UI, and it's idempotent, so a re-run overwrites with the repo's version.
