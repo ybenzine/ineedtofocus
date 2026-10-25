@@ -19,6 +19,8 @@
    line or log attribute from the last hour, or if any log carries an unredacted Postgres
    `DETAIL: Key (...)` line: query strings, cookies, paths and row values must never reach
    telemetry (_docs/observability.md). An unmatched path is exported as `UNMATCHED`.
+6. The key-journey dashboard (#32) is provisioned in Grafana and every one of its queries
+   runs against Prometheus, Loki and Tempo (scripts/grafana_dashboards.py verify).
 
 Ports: APP_PORT (8000) and GRAFANA_PORT (3000), from the environment or .env. Stdlib only.
 """
@@ -35,6 +37,8 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+import grafana_dashboards
 
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
@@ -299,6 +303,11 @@ def main() -> None:
         "ok    no query string, path, goal or cookie in traces or logs "
         "(url.query is REDACTED, an unmatched url.path is UNMATCHED)"
     )
+
+    problems = grafana_dashboards.verify(GRAFANA)
+    if problems:
+        sys.exit("FAIL  key-journey dashboard: " + "; ".join(problems))
+    print(f"ok    dashboard {grafana_dashboards.uid('local')} is provisioned and its queries run")
 
 
 if __name__ == "__main__":
