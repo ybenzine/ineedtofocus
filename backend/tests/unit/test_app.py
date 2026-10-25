@@ -300,3 +300,48 @@ def test_log_scrub_redacts_sqlalchemy_bound_parameters() -> None:
     out = scrub(msg)
     assert "secret" not in out
     assert "Background on this error" in out
+
+
+def test_cache_control_per_class(tmp_path: Path) -> None:
+    app = make_app(tmp_path, dist=True)
+    dist = tmp_path / "dist"
+    (dist / "assets" / "index-Bq3x9_Zk.js").write_text("1")
+    (dist / "assets" / "index-Cd4-8aLm.css").write_text("1")
+    for name in ("sw.js", "registerSW.js", "workbox-3f1a2b4c.js", "theme-init.js"):
+        (dist / name).write_text("1")
+    (dist / "manifest.webmanifest").write_text("{}")
+    (dist / "icons").mkdir()
+    (dist / "icons" / "icon-192.png").write_bytes(b"png")
+    (dist / "audio").mkdir()
+    (dist / "audio" / "rain.mp3").write_bytes(b"mp3")
+    with TestClient(app) as c:
+        immutable = "public, max-age=31536000, immutable"
+        for path in ("/assets/index-Bq3x9_Zk.js", "/assets/index-Cd4-8aLm.css"):
+            assert c.get(path).headers["cache-control"] == immutable, path
+        no_cache = (
+            "/",
+            "/index.html",
+            "/history/week",
+            "/settings",
+            "/sw.js",
+            "/registerSW.js",
+            "/workbox-3f1a2b4c.js",
+            "/theme-init.js",
+            "/manifest.webmanifest",
+            "/assets/app.js",  # under assets/ but not content-hashed
+            "/icons/icon-192.png",
+            "/audio/rain.mp3",
+        )
+        for path in no_cache:
+            r = c.get(path)
+            assert r.status_code == 200, path
+            assert r.headers["cache-control"] == "no-cache", path
+        # revalidation works: the ETag gets a 304
+        etag = c.get("/sw.js").headers["etag"]
+        assert c.get("/sw.js", headers={"If-None-Match": etag}).status_code == 304
+
+
+def test_cache_control_not_added_to_api_or_json_404(tmp_path: Path) -> None:
+    with TestClient(make_app(tmp_path, dist=True)) as c:
+        for path in ("/healthz", "/api/unknown", "/assets/missing-abcdefgh.js", "/sw.js"):
+            assert "cache-control" not in c.get(path).headers, path
