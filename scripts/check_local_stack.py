@@ -26,6 +26,9 @@
 7. The user-impact alert rules (#33) are provisioned, Grafana evaluates them without
    errors, their queries run and every metric they query has series
    (scripts/grafana_alerts.py verify).
+8. Grafana renders the alert routing's payload template (#34) into a GitHub dispatch that
+   the on-call workflow's check accepts, for every alert, environment and status
+   (scripts/alert_routing.py verify).
 
 Ports: APP_PORT (8000) and GRAFANA_PORT (3000), from the environment or .env. Stdlib only.
 """
@@ -43,6 +46,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import alert_routing
 import grafana_alerts
 import grafana_dashboards
 
@@ -329,6 +333,11 @@ def main() -> None:
         f"ok    alert rules {grafana_alerts.group_name('local')} are provisioned, evaluate "
         "without errors and the metrics they query have series"
     )
+
+    problems = alert_routing.verify(GRAFANA)
+    if problems:
+        sys.exit("FAIL  alert routing: " + "; ".join(problems))
+    print("ok    the alert dispatch template renders a valid GitHub dispatch for every alert")
 
 
 if __name__ == "__main__":

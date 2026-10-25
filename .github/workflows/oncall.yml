@@ -1,0 +1,40 @@
+# On-call (#34 stub; #35 makes it the on-call agent). Woken by Grafana: an alert's contact
+# point posts to GitHub's dispatch API for this repo, which starts this workflow with a
+# `repository_dispatch` event of type `grafana-alert` (_docs/observability.md, Alert routing).
+#
+# For now it only proves the route: it checks the payload against the contract in
+# scripts/alert_dispatch.py (alert, environment, status, title, summary, description,
+# started_at, resolved_at, links), logs it and writes a job summary. An invalid payload
+# fails the run red. #35 keeps this check as its first step and adds the agent after it.
+#
+# The payload is untrusted input: anyone with a token that can write to the repo can send
+# a dispatch. It's read from $GITHUB_EVENT_PATH by the script, never through `${{ }}` in a
+# script (no injection). No secrets, no environment: #35's agent job runs in `oncall`
+# (main only; a repository_dispatch run is always on the default branch, main).
+
+name: oncall
+run-name: "Alert: ${{ github.event.client_payload.alert }} ${{ github.event.client_payload.status }} in ${{ github.event.client_payload.environment }}"
+
+on:
+  repository_dispatch:
+    types: [grafana-alert]
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  alert:
+    name: Check the alert
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check and log the payload
+        run: python3 scripts/alert_dispatch.py check-event "$GITHUB_EVENT_PATH"
