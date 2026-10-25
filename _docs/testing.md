@@ -26,6 +26,12 @@
 
 Add `JUNIT_DIR=reports` to any `test-*` target except `test-e2e`, `test-server`, `test-infra` and `test-prod-stack` to also write a JUnit XML report to `reports/<suite>.xml` (git-ignored). `make test` also runs the e2e suite, but only if a stack answers at `${PLAYWRIGHT_BASE_URL:-http://localhost:8000}/healthz`; otherwise it prints `SKIPPED e2e: no stack at …` and continues. With `CI` set it fails instead of skipping. `make test-e2e` is always strict.
 
+### Which bash the shell harnesses need
+
+The harnesses that run on your machine (`infra/tests/check_config.sh` for `make test-infra`, `infra/tests/prod_stack.sh` for `make test-prod-stack`, `infra/server/tests/run.sh` for `make test-server`) run under the first `bash` on your `PATH`. On macOS that's `/bin/bash` 3.2 unless you installed a newer one, and they work on it: no Homebrew bash needed. Keep them bash-3.2 compatible: no `declare -A`, `mapfile`, `${x,,}`, `${x^^}` or `[[ -v x ]]`. CI runs them under bash 5. To match CI on a Mac, `brew install bash` and make sure Homebrew's `bin` comes before `/bin` on your `PATH`. The scripts `run.sh` starts inside the Ubuntu test container (`in_container.sh`, `focus_ci.sh`, `fake_docker.sh`, `lib.sh`) always run under that container's bash 5, so they can use bash 4+ features.
+
+Bash 3.2 has a trap (#183). When a syntax error or a bad substitution stops a script, for example bash-4-only syntax, bash 3.2 runs the EXIT trap with `$?` still 0. The script then exits 0 and the harness passes halfway through. So every host harness with an EXIT trap sources `infra/tests/exit_guard.sh`: its cleanup calls `exit_guard "$status"`, and the harness's last line is `harness_done`. A run that stops before that line fails with `stopped before its last line, yet with status 0: look for a shell error above`. `scripts/tests/test_harness_exit_status.py` (`make test-scripts`) runs each host harness with a deliberate shell error under every bash it finds (`bash` on `PATH` and `/bin/bash`, so 3.2 on a Mac), with a stub `docker`, and expects a non-zero exit.
+
 ## CI
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every pull request and every push to `main`. A newer push to the same PR cancels the older run. Each job is a required status check on `main` ([infra/github/README.md](../infra/github/README.md)):

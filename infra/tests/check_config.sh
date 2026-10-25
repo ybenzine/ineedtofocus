@@ -16,8 +16,16 @@ set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 infra=$(dirname "$here")
 repo=$(dirname "$infra")
+# shellcheck source=/dev/null # exit_guard.sh: exit_guard, harness_done (#183)
+. "$here/exit_guard.sh"
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+cleanup() {
+  local status=$?
+  exit_guard "$status" || status=$?
+  rm -rf "$work"
+  exit "$status"
+}
+trap cleanup EXIT
 
 tag=0123456789abcdef0123456789abcdef01234567
 # Render with this tag only: an APP_TAG from the caller (CI sets one for the job) would
@@ -106,3 +114,4 @@ ok "caddy adapt"
 python3 "$repo/scripts/check_prod_compose.py" \
   --edge "$work/edge.json" --prod "$work/prod.json" --dev "$work/dev.json" \
   --caddy "$work/caddy.json" --tag "$tag"
+harness_done
