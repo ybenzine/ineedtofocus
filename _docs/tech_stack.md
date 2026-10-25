@@ -39,8 +39,8 @@ Prerequisite: the domain's nameservers at Gandi must be the four Route 53 namese
 ## 3. CI/CD and rollback
 
 - **CI (every pull request and push):** lint, type-check, backend unit + integration tests, frontend tests, Playwright end-to-end tests against the Compose stack.
-- **CD to dev (automatic):** on merge to `main`, build one image tagged with the commit SHA, push to GHCR, deploy to `focus-dev`, run smoke tests against `https://dev.ineedtofoc.us`.
-- **Deploy to prod (manual):** a `workflow_dispatch` workflow takes an image tag (default: the tag currently on dev) and requires approval through the GitHub `production` environment.
+- **CD to dev (automatic):** on merge to `main`, build one image tagged with the commit SHA, push to GHCR with a build provenance attestation (GitHub artifact attestations, Sigstore), deploy to `focus-dev`, run smoke tests against `https://dev.ineedtofoc.us`.
+- **Deploy to prod (manual):** a `workflow_dispatch` workflow takes an image tag (default: the tag currently on dev) and requires approval through the GitHub `production` environment. It verifies the image's attestation (`gh attestation verify`) before deploying, so the approved commit binds the deployed bytes.
 - **Deploy script (both environments):** records the current tag, pulls the new image, runs migrations, restarts the app, checks `/healthz` (app) and `/readyz` (database). If the checks fail it automatically redeploys the previous tag.
 - **Rollback:** a manual `rollback` workflow redeploys the last known-good tag for an environment. The on-call agent uses the same workflow.
 - **Migrations:** backward-compatible only (add columns/tables first, remove later), so rolling back the app never requires a database downgrade.

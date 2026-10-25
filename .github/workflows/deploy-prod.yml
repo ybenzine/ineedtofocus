@@ -19,7 +19,10 @@
 #             deploy <sha> <digest>
 #             status
 #           It resolves the commit to the digest dev ran (the one `publish` pushed and
-#           deploy-dev deployed), deploys that digest, reads the record back, then runs
+#           deploy-dev deployed), verifies that digest's build provenance attestation
+#           (#128: ci.yml's publish built exactly those bytes on refs/heads/main from the
+#           approved commit; no attestation, no deploy request), deploys that digest,
+#           reads the record back, then runs
 #           scripts/smoke_deploy.py against https://ineedtofoc.us. The server refuses a
 #           sha and digest dev hasn't run successfully, re-tags :<sha> from the digest
 #           under the host's deploy lock and checks the running image afterwards. The key
@@ -168,6 +171,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      attestations: read # gh attestation verify (#128)
     env:
       DEPLOY_HOST: 159.223.188.176
       PROD_URL: https://ineedtofoc.us
@@ -247,6 +251,37 @@ jobs:
             { echo "::error::unexpected candidate answer"; exit 1; }
           echo "DIGEST=$digest" >> "$GITHUB_ENV"
           echo "dev_time=$(get source_time)" >> "$GITHUB_OUTPUT"
+      # What binds the approved commit to the bytes (#128): dev's log only says which
+      # digest the dev key asked for; this proves ci.yml's publish built that digest from
+      # the approved commit. Runs gh from the runner image, no repository code. The same
+      # `run` block as deploy-dev's (test_ci_workflow.py keeps them identical).
+      - name: Verify the image's build provenance (publish on main, this commit)
+        id: provenance
+        if: steps.config.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ $TAG =~ ^[0-9a-f]{40}$ && $DIGEST =~ ^sha256:[0-9a-f]{64}$ ]] ||
+            { echo "::error::bad tag or digest: '$TAG' '$DIGEST'"; exit 1; }
+          # Only an attestation of exactly these bytes, from this repository's attestation
+          # store, signed by ci.yml (its publish job) on a GitHub-hosted runner, for a push
+          # to main, at the commit being deployed. gh prints why it refused.
+          if ! built_by=$(gh attestation verify "oci://ghcr.io/ybenzine/ineedtofocus@$DIGEST" \
+            --repo ybenzine/ineedtofocus \
+            --signer-workflow ybenzine/ineedtofocus/.github/workflows/ci.yml \
+            --signer-digest "$TAG" \
+            --source-ref refs/heads/main \
+            --source-digest "$TAG" \
+            --predicate-type https://slsa.dev/provenance/v1 \
+            --deny-self-hosted-runners \
+            --format json \
+            --jq '.[0].verificationResult.signature.certificate.runInvocationURI'); then
+            echo "::error title=Build provenance not verified::ghcr.io/ybenzine/ineedtofocus@$DIGEST has no valid attestation that .github/workflows/ci.yml built it on refs/heads/main from $TAG (gh's reason is above). Nothing was deployed."
+            exit 1
+          fi
+          [[ $built_by =~ ^https://github\.com/ybenzine/ineedtofocus/actions/runs/[0-9]+(/attempts/[0-9]+)?$ ]] || built_by=""
+          echo "Verified: ghcr.io/ybenzine/ineedtofocus@$DIGEST was built from $TAG by ${built_by:-a ci.yml run on main}"
+          echo "built_by=$built_by" >> "$GITHUB_OUTPUT"
       - name: Deploy over SSH (promotion check, pull by digest, migrate, start, check, record)
         id: deploy
         if: steps.config.outputs.configured == 'true'
@@ -280,6 +315,8 @@ jobs:
           DEPLOYED_AT: ${{ steps.record.outputs.deployed_at }}
           INFRA_REVISION: ${{ steps.record.outputs.infra_revision }}
           PREVIOUS_TAG: ${{ steps.record.outputs.previous_tag }}
+          PROVENANCE_OUTCOME: ${{ steps.provenance.outcome }}
+          BUILT_BY: ${{ steps.provenance.outputs.built_by }}
           DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
         run: |
@@ -291,11 +328,16 @@ jobs:
             echo "| URL | $PROD_URL |"
             echo "| Tag (commit) | \`$TAG\` |"
             echo "| Image | \`ghcr.io/ybenzine/ineedtofocus@${DIGEST:-not resolved}\` |"
+            echo "| Build provenance | ${PROVENANCE_OUTCOME/success/verified}${BUILT_BY:+, built by $BUILT_BY} |"
             echo "| Dev ran it since (server, UTC) | ${DEV_TIME:-unknown} |"
             echo "| Deployed at (server, UTC) | ${DEPLOYED_AT:-not recorded} |"
             echo "| Previous tag (rollback target) | \`${PREVIOUS_TAG:-none}\` |"
             echo "| Infra revision on the server | \`${INFRA_REVISION:-unknown}\` |"
             echo ""
+            if [[ $PROVENANCE_OUTCOME == failure ]]; then
+              echo "Not deployed: the image has no valid build provenance attestation from publish on main for this commit (#128), so nothing was sent to the server. See the verify step's log."
+              echo ""
+            fi
             if [[ $DEPLOY_OUTCOME == failure ]]; then
               echo "The deploy failed and the record is unchanged. If the new release failed its checks after starting, the server started the previous release again (automatic revert, #30): see the deploy step's log."
               echo ""
