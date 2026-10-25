@@ -47,6 +47,8 @@ export SMOKE_HTTPS_PORT=${SMOKE_HTTPS_PORT:-18443}
 export SMOKE_DIR=$here
 image_repo=ghcr.io/ybenzine/ineedtofocus
 spoofed=203.0.113.7
+# shellcheck source=/dev/null # exit_guard.sh: exit_guard, harness_done (#183)
+. "$here/exit_guard.sh"
 
 if [[ $prefix == focus ]]; then
   echo "refusing: FOCUS_TEST_PREFIX=focus would use the real projects focus-prod/focus-dev" >&2
@@ -90,6 +92,7 @@ dev() { # compose.sh's invocation plus the fake Grafana Cloud override
 
 cleanup() {
   local status=$?
+  exit_guard "$status" || status=$?
   set +e
   if [[ -n ${SMOKE_LOG_DIR:-} ]]; then
     mkdir -p "$SMOKE_LOG_DIR"
@@ -321,3 +324,4 @@ grep -q 'Everything is ready' "$work/otelcol.log" ||
 ok "prod collector is up without Grafana Cloud settings (accepts and drops)"
 
 echo "OK    production stack smoke test passed"
+harness_done
