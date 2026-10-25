@@ -18,6 +18,8 @@ Ownership is visible on the board: every issue carries the `agent:*` label of th
 
 **Yacine (product owner):** involved only at the [human gates](process.md#human-gates): approves production deploys, does `owner:human` tasks (DigitalOcean, Route 53, Grafana Cloud, secrets), decides questions beyond agreed scope, cost or irreversible actions, and steps in when a PR fails review three times or CI can't be made green.
 
+**GitHub identities (#127):** the agents in Claude Code sessions all act as one machine account, `merciful-poseidon` (write access, not an administrator, not a `production` reviewer), started through the `claude-focus` alias. The reviewer's reviews are posted as the reviewer App's bot (#70). Only Yacine's own account, `ybenzine`, can approve a prod deploy or change repo settings. See [infra/github/README.md](../infra/github/README.md#agent-account-127).
+
 ## How a piece of work flows through the team
 
 ```mermaid
@@ -140,4 +142,4 @@ Every step leaves a trace on the issue and the board, so the board is the record
 | Done | Issue checkboxes ticked; `✅ <agent> agent — done` comment; card → Done | `gh issue edit`; board workflow on close |
 | Blocked | `⛔ Blocked by #<n>` comment, or `⛔ Needs Yacine:` comment + `needs-yacine` label | `gh issue comment`; `gh issue edit --add-label needs-yacine` |
 
-Board workflows (project settings) also move cards automatically: added → Todo, closed or merged → Done. The script needs a `gh` token with the `project` scope: `gh auth refresh -s project`.
+Board workflows (project settings) also move cards automatically: added → Todo, closed or merged → Done. The script needs a `gh` token with the `project` scope, which the agent account's login has ([infra/github/README.md](../infra/github/README.md#agent-account-127)); to add it to another login, `gh auth refresh -s project`.

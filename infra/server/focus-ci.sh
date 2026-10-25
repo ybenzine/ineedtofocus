@@ -11,22 +11,24 @@
 # $SSH_ORIGINAL_COMMAND, and must be exactly one of:
 #
 #   deploy <commit sha> sha256:<digest>
-#       Note the current release (the one to go back to), pull
+#       Note the current release (the one to go back to). Pull every other image of the
+#       environment's project the host lacks (Postgres, the collector: pinned by tag and
+#       digest in compose.prod.yml, #170), then pull
 #       ghcr.io/ybenzine/ineedtofocus@sha256:<digest> and check that it was built from
 #       <commit sha> (its org.opencontainers.image.revision label). Then tag it
 #       :<commit sha> locally, run the migrations as a one-shot container, start the app
 #       (`up -d --wait`, which waits for the /healthz healthcheck), check that the app runs
 #       exactly that image and that /healthz and /readyz answer inside it, and record the
 #       release. If the start or a check fails, it starts the release that ran before
-#       again (the automatic revert: by its recorded digest, no migration) and still
-#       fails, so the workflow goes red.
+#       again (the automatic revert: by its recorded digest, the same pulls, no
+#       migration) and still fails, so the workflow goes red.
 #   rollback [<commit sha>] [expect sha256:<digest>]
 #       Start a known-good release again, by its recorded digest, without migrating
 #       (migrations are expand-only). With no sha: the newest known-good release other
 #       than the current one. With a sha: the newest known-good release of that commit.
 #       With `expect`: only if the current release is that digest, checked under the
-#       lock (a guard against a deploy that ran in between; never a target). Then check
-#       it like a deploy and record it, and print a `result` line with what it left and
+#       lock (a guard against a deploy that ran in between; never a target). Then pull
+#       what it needs like a deploy, start it, check it like a deploy and record it, and print a `result` line with what it left and
 #       what runs now. The release it leaves is marked as rolled back from (revoked). On
 #       dev, that also makes it not promotable to prod.
 #   status
@@ -75,6 +77,10 @@
 #     a rollback or a revert restores (finding 5). The host-wide :<sha> tag is re-pointed
 #     at that digest right before `up`, and the running image is checked afterwards
 #     (#110 review).
+#   - Every other image (Postgres, the collector) is pinned by tag and digest in
+#     compose.prod.yml, and pulled by that digest when the host lacks it, before any
+#     `run` or `up` (#170). An image that isn't pinned is refused, never pulled by tag.
+#     Compose itself never pulls (--pull never), so what starts is what was pulled.
 #   - The compose files it runs are the root-owned copy in /opt/focus/infra (install.sh).
 #     The deploy user can't change them, or this script.
 #   - A deploy or rollback finishes even if the SSH client goes away (a cancelled job, a
@@ -110,6 +116,9 @@ readonly DIGEST_RE='^sha256:[0-9a-f]{64}$'
 readonly DEPLOY_RE='^deploy ([0-9a-f]{40}) (sha256:[0-9a-f]{64})$'
 readonly ROLLBACK_RE='^rollback( ([0-9a-f]{40}))?( expect (sha256:[0-9a-f]{64}))?$'
 readonly CANDIDATE_RE='^candidate( ([0-9a-f]{40}))?$'
+# name:tag@sha256:<digest>, the form compose.prod.yml pins every image but the app's in
+# (#170). The same pattern is in install.sh and scripts/check_prod_compose.py.
+readonly PINNED_RE='^[a-z0-9]+([._/-][a-z0-9]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}$'
 
 profile=${1:-}
 request=${SSH_ORIGINAL_COMMAND-}
@@ -371,6 +380,37 @@ pull_image() {
   clean docker tag "$ref" "$IMAGE_REPO:$1"
 }
 
+# pull_dependencies <tag>: every image of this environment's project but the app's
+# (Postgres, the collector), as compose.prod.yml pins it (name:tag@sha256:<digest>), on
+# this host: pulled by that digest when it's missing (#170). Compose runs with --pull
+# never, so without this a missing image (a first deploy, a version bump, a pruned
+# image) would fail `migrate` or `up`. An image that isn't pinned is refused: pulling it
+# by tag could change what runs under a deploy.
+pull_dependencies() {
+  local images ref
+  images=$(compose "$1" config --images) || return 1
+  while IFS= read -r ref; do
+    [[ -n $ref && $ref != "$IMAGE_REPO:$1" ]] || continue
+    if [[ ! $ref =~ $PINNED_RE ]]; then
+      printf 'focus-ci: the image %q in %s/compose.prod.yml is not pinned by tag and digest (name:tag@sha256:<digest>), so it is not pulled\n' \
+        "${ref:0:120}" "$INFRA_DIR" >&2
+      return 1
+    fi
+    if clean docker image inspect "$ref" >/dev/null 2>&1; then
+      log "$ref is already on this host"
+    elif clean docker pull --quiet "$ref"; then
+      log "pulled $ref"
+    else
+      printf 'focus-ci: could not pull %s, which focus-%s needs\n' "$ref" "$env_name" >&2
+      return 1
+    fi
+  done <<<"$images"
+}
+
+# pull_release <tag> <digest>: everything a start of that release needs, on this host and
+# checked, before anything is migrated or started: the other images, then the app's.
+pull_release() { pull_dependencies "$1" && pull_image "$1" "$2"; }
+
 migrate() { compose "$1" run --rm --pull never app alembic upgrade head; }
 
 # check_endpoint <tag> <path>: GET http://127.0.0.1:8000<path> inside the app container
@@ -457,7 +497,7 @@ start_or_revert() {
   previous_tag=$(record_get previous_tag) previous_digest=$(record_get previous_digest)
   audit "revert to tag=$tag digest=$digest after failed $action of tag=$new_tag digest=$new_digest"
   log "revert: $new_tag failed its checks; starting $tag ($IMAGE_REPO@$digest) again, no migration"
-  if pull_image "$tag" "$digest" && start_app "$tag" "$digest"; then
+  if pull_release "$tag" "$digest" && start_app "$tag" "$digest"; then
     history_line revert ok "failed_action=$action" "failed_tag=$new_tag" "failed_digest=$new_digest"
     fail "$action of $new_tag failed at 'start' (its checks failed): reverted to $tag, which runs again and passes the checks. The release record is unchanged"
   fi
@@ -548,7 +588,7 @@ do_deploy() {
   if [[ -n $promote_from ]]; then
     step deploy promote promoted "$tag" "$digest"
   fi
-  step deploy pull pull_image "$tag" "$digest"
+  step deploy pull pull_release "$tag" "$digest"
   step deploy migrate migrate "$tag"
   start_or_revert deploy "$current_tag" "$current_digest"
   write_record deploy
@@ -578,7 +618,7 @@ do_rollback() {
   read -r previous_tag previous_digest <<<"$(known_good "" "$digest" "$from_digest")"
   audit "rollback from tag=$from_tag digest=$from_digest to tag=$tag digest=$digest"
   log "rolling $env_name back from $from_tag to $tag ($IMAGE_REPO@$digest), no migration"
-  step rollback pull pull_image "$tag" "$digest"
+  step rollback pull pull_release "$tag" "$digest"
   start_or_revert rollback "$from_tag" "$from_digest"
   write_record rollback "from_tag=$from_tag" "from_digest=$from_digest"
   echo "result from_tag=$from_tag from_digest=$from_digest tag=$tag digest=$digest"

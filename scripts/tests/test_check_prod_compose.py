@@ -17,6 +17,9 @@ from check_prod_compose import MEMORY_BUDGET_MIB, caddy_routes, check
 
 SCRIPT = Path(__file__).resolve().parents[1] / "check_prod_compose.py"
 TAG = "0123456789abcdef0123456789abcdef01234567"
+PG = "postgres:17-alpine@sha256:" + "a" * 64
+OTEL = "otel/opentelemetry-collector-contrib:0.162.0@sha256:" + "b" * 64
+CADDY = "caddy:2.11.4-alpine@sha256:" + "c" * 64
 MiB = 1024 * 1024
 Config = dict[str, Any]
 
@@ -48,12 +51,13 @@ def env_config(env: str, app: int, db: int, otel: int, oom: int, cpu: int) -> Co
             },
             "db": {
                 **limits(db),
+                "image": PG,
                 "networks": {"default": None},
                 "volumes": [
                     {"type": "volume", "source": "db-data", "target": "/var/lib/postgresql/data"}
                 ],
             },
-            "otel-collector": {**limits(otel), "networks": {"default": None}},
+            "otel-collector": {**limits(otel), "image": OTEL, "networks": {"default": None}},
         },
         "networks": {
             "default": {"name": f"focus-{env}_default"},
@@ -71,6 +75,7 @@ def edge_config() -> Config:
         "name": "focus-edge",
         "services": {
             "caddy": {
+                "image": CADDY,
                 "mem_limit": str(96 * MiB),
                 "restart": "unless-stopped",
                 "ports": [{"target": 80, "published": "80"}, {"target": 443, "published": "443"}],
@@ -233,6 +238,17 @@ def wrong_project(c: dict[str, Config]) -> None:
     c["dev"]["name"] = "focus-prod"
 
 
+def set_image(env: str, name: str, image: str | None) -> Callable[[dict[str, Config]], None]:
+    def mutate(c: dict[str, Config]) -> None:
+        service = c[env]["services"][name]
+        if image is None:
+            del service["image"]
+        else:
+            service["image"] = image
+
+    return mutate
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
@@ -257,6 +273,24 @@ def wrong_project(c: dict[str, Config]) -> None:
         (no_ip_range, "edge/caddy: fixed address 172.16.10.2 on network prod: the subnet needs"),
         (caddy_in_ip_range, "edge/caddy: fixed address 172.16.20.2 on network dev is inside"),
         (caddy_outside_subnet, "is outside every subnet"),
+        (
+            set_image("prod", "db", "postgres:17-alpine"),
+            "prod/db: image 'postgres:17-alpine' isn't pinned",
+        ),
+        (
+            set_image(
+                "dev", "otel-collector", "otel/opentelemetry-collector-contrib@sha256:" + "b" * 64
+            ),
+            "dev/otel-collector: image",
+        ),
+        (
+            set_image("edge", "caddy", "caddy:2.11.4-alpine"),
+            "edge/caddy: image 'caddy:2.11.4-alpine' isn't pinned",
+        ),
+        (set_image("prod", "db", PG.upper()), "prod/db: image"),
+        (set_image("prod", "db", PG[:-1]), "prod/db: image"),
+        (set_image("prod", "db", PG + " "), "prod/db: image"),
+        (set_image("dev", "db", None), "dev/db: image None isn't pinned"),
     ],
 )
 def test_each_rule_catches_its_mistake(

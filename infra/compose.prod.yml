@@ -80,7 +80,10 @@ services:
     restart: unless-stopped
 
   db:
-    image: postgres:17-alpine # same as compose.yaml and CI
+    # Every image but the app's is pinned by tag and digest (#170): deploys pull exactly
+    # these bytes (infra/server/focus-ci.sh) and a re-pushed tag can't change them.
+    # Same tag as compose.yaml and CI. Bumping it: _docs/deployment.md, Dependency images.
+    image: postgres:17-alpine@sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb
     command:
       - postgres
       - -c
@@ -108,7 +111,7 @@ services:
     restart: unless-stopped
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.162.0
+    image: otel/opentelemetry-collector-contrib:0.162.0@sha256:39923a8e431bd1f57be82411999d389fcfe40857492e4365456d97a4c1f74be6
     command:
       - --config=/etc/otelcol/config.yaml
       # export.grafana-cloud.yaml once GRAFANA_CLOUD_OTLP_ENDPOINT is set (#32),

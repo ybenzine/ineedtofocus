@@ -1,10 +1,11 @@
 """The prod-deploy deny rules in .claude/settings.json (#126), read as data.
 
-Agents run `gh` as Yacine, the `production` environment's required reviewer, so these
-rules keep them from starting or approving a prod deploy by mistake. The rollback workflow
+Agents run `gh` as merciful-poseidon (#127), which can't approve a prod deploy: it isn't a
+`production` reviewer or an administrator. These rules are the second line, keeping agents
+from starting or trying to approve a prod deploy by mistake. The rollback workflow
 (#30) must stay runnable without a prompt, so no deny or ask rule may match it: in Claude
 Code deny beats ask, and ask beats allow. Nothing here runs a command; each sample is only
-matched against the rule patterns. The real fix is the agent credential in #127.
+matched against the rule patterns.
 """
 
 from __future__ import annotations

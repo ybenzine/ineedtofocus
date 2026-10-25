@@ -22,6 +22,8 @@ them. Exits non-zero, listing every broken rule:
   - each environment has its own edge network, Postgres keeps its data in a named volume,
     and only the app joins the edge network;
   - Caddy routes ineedtofoc.us to the prod app and dev.ineedtofoc.us to the dev app;
+  - every image but the app's (Postgres, the collector, Caddy) is pinned by tag and
+    digest, `name:tag@sha256:<64 hex>`, so the deploys pull exactly those bytes (#170);
   - with --tag, the app image is ghcr.io/ybenzine/ineedtofocus:<tag>.
 
 Stdlib only.
@@ -32,6 +34,7 @@ from __future__ import annotations
 import argparse
 import ipaddress
 import json
+import re
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -44,6 +47,11 @@ MEMORY_BUDGET_MIB = 1600
 EXPECTED_PROJECTS = {"edge": "focus-edge", "prod": "focus-prod", "dev": "focus-dev"}
 HOSTS = {"prod": "ineedtofoc.us", "dev": "dev.ineedtofoc.us"}
 PG_DATA = "/var/lib/postgresql/data"
+# name:tag@sha256:<digest>. The same pattern is in infra/server/focus-ci.sh and
+# infra/server/install.sh, which refuse to pull an image that doesn't match it.
+PINNED_IMAGE = re.compile(
+    r"^[a-z0-9]+([._/-][a-z0-9]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256:[0-9a-f]{64}$"
+)
 
 Config = dict[str, Any]
 
@@ -165,6 +173,13 @@ def check(
         ports = service.get("ports") or []
         if env != "edge" and ports:
             errors.append(f"{env}/{name}: publishes ports {ports}; only Caddy may")
+        image = service.get("image")
+        is_app = env != "edge" and name == "app"
+        if not is_app and not (isinstance(image, str) and PINNED_IMAGE.fullmatch(image)):
+            errors.append(
+                f"{env}/{name}: image {image!r} isn't pinned by tag and digest"
+                " (name:tag@sha256:<64 hex>)"
+            )
 
     migration = max(mib(services(c).get("app") or {}) for c in envs.values())
     if total + migration > MEMORY_BUDGET_MIB:
