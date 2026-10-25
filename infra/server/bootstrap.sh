@@ -34,29 +34,66 @@ DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin dock
 
 log() { printf '==> %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
+# Status 2, not 1: write_file's "unchanged" is 1, so a die that only ends a subshell
+# (a future `$(write_file …)` or pipe) still can't be mistaken for it (#80).
 die() {
   printf 'ERROR: %s\n' "$*" >&2
-  exit 1
+  exit 2
 }
 
 have_systemd() { [[ -d /run/systemd/system ]]; }
 
 # write_file <path> <mode> <owner:group>, content on stdin. Writes only if the content
 # differs, and always enforces mode and owner. Returns 0 if it wrote, 1 if unchanged.
+#
+# Callers use it as a condition (`if write_file …`), which turns errexit off inside it,
+# so every step is checked by hand: any failure stops the whole script with an ERROR:
+# (die: exit 2, not return), so a caller never mistakes it for "unchanged". Run it in
+# the main shell (not in `$(…)` or a pipe), where that exit ends the script; in a
+# subshell it would only end the subshell, though its status 2 still isn't "unchanged".
+# Callers that don't care whether the file changed use ensure_file.
 write_file() {
-  local path=$1 mode=$2 owner=$3 tmp
-  tmp=$(mktemp)
-  cat >"$tmp"
-  if [[ -f $path ]] && cmp -s "$tmp" "$path"; then
+  local path=$1 mode=$2 owner=$3 tmp cmp_rc=1
+  tmp=$(mktemp) || die "writing $path: can't create a temporary file"
+  if ! cat >"$tmp"; then
     rm -f "$tmp"
-    chmod "$mode" "$path"
-    chown "$owner" "$path"
+    die "writing $path: can't buffer the new content in $tmp"
+  fi
+  if [[ -e $path && ! -f $path ]]; then
+    rm -f "$tmp"
+    die "writing $path: it exists but isn't a regular file"
+  fi
+  if [[ -f $path ]]; then
+    # cmp: 0 same, 1 different, 2 error (e.g. unreadable).
+    cmp_rc=0
+    cmp -s "$tmp" "$path" || cmp_rc=$?
+    if ((cmp_rc > 1)); then
+      rm -f "$tmp"
+      die "writing $path: can't compare it with the new content"
+    fi
+  fi
+  if ((cmp_rc == 0)); then
+    rm -f "$tmp"
+    chmod "$mode" "$path" || die "writing $path: chmod $mode failed"
+    chown "$owner" "$path" || die "writing $path: chown $owner failed"
     return 1
   fi
-  install -m "$mode" -o "${owner%%:*}" -g "${owner##*:}" "$tmp" "$path"
+  if ! install -m "$mode" -o "${owner%%:*}" -g "${owner##*:}" "$tmp" "$path"; then
+    rm -f "$tmp"
+    die "writing $path: install failed (mode $mode, owner $owner)"
+  fi
   rm -f "$tmp"
   log "wrote $path"
   return 0
+}
+
+# ensure_file <path> <mode> <owner:group>, content on stdin: write_file when the caller
+# doesn't need to know whether the file changed. Only "unchanged" (1) is accepted; any
+# other non-zero status stops the script.
+ensure_file() {
+  local rc=0
+  write_file "$@" || rc=$?
+  ((rc <= 1)) || die "writing $1 failed (status $rc)"
 }
 
 in_group() {
@@ -112,7 +149,7 @@ install_docker() {
   install -d -m 0755 /etc/apt/keyrings
   if [[ ! -f $DOCKER_KEYRING || $(key_fingerprint "$DOCKER_KEYRING") != "$DOCKER_GPG_FINGERPRINT" ]]; then
     tmp=$(mktemp)
-    curl -fsSL "$DOCKER_GPG_URL" -o "$tmp"
+    curl -fsSL --retry 3 "$DOCKER_GPG_URL" -o "$tmp"
     if [[ $(key_fingerprint "$tmp") != "$DOCKER_GPG_FINGERPRINT" ]]; then
       rm -f "$tmp"
       die "Docker's signing key at $DOCKER_GPG_URL doesn't have the expected fingerprint $DOCKER_GPG_FINGERPRINT"
@@ -165,13 +202,13 @@ EOF
 configure_unattended_upgrades() {
   # Ubuntu's 50unattended-upgrades already limits automatic upgrades to the -security
   # pocket (plus ESM); Docker's repo isn't in it, so docker-ce is upgraded by hand.
-  write_file /etc/apt/apt.conf.d/20auto-upgrades 0644 root:root <<'EOF' || true
+  ensure_file /etc/apt/apt.conf.d/20auto-upgrades 0644 root:root <<'EOF'
 // Managed by infra/server/bootstrap.sh (#25).
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 APT::Periodic::AutocleanInterval "7";
 EOF
-  write_file /etc/apt/apt.conf.d/52focus-unattended-upgrades 0644 root:root <<'EOF' || true
+  ensure_file /etc/apt/apt.conf.d/52focus-unattended-upgrades 0644 root:root <<'EOF'
 // Managed by infra/server/bootstrap.sh (#25).
 // No automatic reboot: prod and dev share this server, so a reboot is a planned step
 // (see _docs/deployment.md → Server setup). /var/run/reboot-required says when one is due.
@@ -234,13 +271,75 @@ EOF
   fi
   chown root:"$DEPLOY_USER" "$keys"
   chmod 0640 "$keys"
-  local line
-  while IFS= read -r line; do
-    [[ -z ${line//[[:space:]]/} || $line == \#* ]] && continue
-    if [[ $line != restrict,*command=* ]]; then
-      warn "$keys has a key without restrict,command=...; every deploy key needs a forced command: ${line:0:60}..."
+  local line n=0 missing
+  while IFS= read -r line || [[ -n $line ]]; do
+    n=$((n + 1))
+    line=${line#"${line%%[![:space:]]*}"}
+    [[ -z $line || $line == \#* ]] && continue
+    missing=$(key_missing_restrictions "$line")
+    if [[ -n $missing ]]; then
+      warn "$keys line $n: deploy key without $missing; every deploy key needs both restrict and command=\"…\" (a forced command): ${line:0:60}..."
     fi
   done <"$keys"
+}
+
+# key_options <authorized_keys line>: prints the line's options, one per line, as sshd
+# reads them: a comma-separated field before the key type, where a double-quoted value
+# (command="…") may contain commas, spaces and \". Prints nothing if the line starts with
+# the key type (no options).
+key_options() {
+  local line=$1 opt="" c i quoted=0
+  case ${line%%[[:space:]]*} in
+    ssh-* | ecdsa-sha2-* | sk-*) return 0 ;;
+  esac
+  for ((i = 0; i < ${#line}; i++)); do
+    c=${line:i:1}
+    if ((quoted)); then
+      if [[ $c == "\\" && ${line:i+1:1} == '"' ]]; then
+        opt+='\"'
+        i=$((i + 1))
+        continue
+      fi
+      [[ $c == '"' ]] && quoted=0
+      opt+=$c
+    else
+      case $c in
+        '"')
+          quoted=1
+          opt+=$c
+          ;;
+        ,)
+          printf '%s\n' "$opt"
+          opt=""
+          ;;
+        [[:space:]]) break ;;
+        *) opt+=$c ;;
+      esac
+    fi
+  done
+  printf '%s\n' "$opt"
+}
+
+# key_missing_restrictions <authorized_keys line>: prints what the line lacks of
+# `restrict` and `command="…"` (in any order, option names case-insensitive as in sshd),
+# or nothing when it has both.
+key_missing_restrictions() {
+  local opt has_restrict=0 has_command=0
+  local -a opts
+  mapfile -t opts < <(key_options "$1")
+  for opt in "${opts[@]}"; do
+    case ${opt,,} in
+      restrict) has_restrict=1 ;;
+      command=\"?*\") has_command=1 ;;
+    esac
+  done
+  if ((!has_restrict && !has_command)); then
+    printf 'restrict and without command="…"'
+  elif ((!has_restrict)); then
+    printf 'restrict'
+  elif ((!has_command)); then
+    printf 'command="…"'
+  fi
 }
 
 harden_ssh() {
