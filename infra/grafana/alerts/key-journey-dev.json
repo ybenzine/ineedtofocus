@@ -45,7 +45,7 @@
                   "type": "prometheus",
                   "uid": "grafanacloud-prom"
                 },
-                "expr": "sum(increase(focus_session_saves_total{service_name=\"ineedtofocus\", deployment_environment_name=\"dev\"}[5m]))",
+                "expr": "sum(increase(focus_session_saves_total{service_name=\"ineedtofocus\", deployment_environment_name=\"dev\"}[5m])) >= 10",
                 "instant": true,
                 "range": false,
                 "intervalMs": 1000,
@@ -113,6 +113,26 @@
               }
             },
             {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 600,
+                "to": 0
+              },
+              "datasourceUid": "grafanacloud-prom",
+              "model": {
+                "refId": "B",
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "grafanacloud-prom"
+                },
+                "expr": "sum(increase(focus_history_loads_total{service_name=\"ineedtofocus\", deployment_environment_name=\"dev\"}[5m])) >= 5",
+                "instant": true,
+                "range": false,
+                "intervalMs": 1000,
+                "maxDataPoints": 43200
+              }
+            },
+            {
               "refId": "C",
               "relativeTimeRange": {
                 "from": 0,
@@ -126,7 +146,7 @@
                   "uid": "__expr__"
                 },
                 "type": "math",
-                "expression": "$A > 2"
+                "expression": "$A > 2 && $B >= 5"
               }
             }
           ],
@@ -135,7 +155,7 @@
           "for": "1m",
           "annotations": {
             "summary": "History loads are slow in dev (p95 over 2 s)",
-            "description": "The 95th percentile of GET /api/history over the last 5 minutes is {{ humanizeDuration $values.A.Value }}; the alert fires above 2 s.",
+            "description": "The 95th percentile of the {{ printf \"%.0f\" $values.B.Value }} GET /api/history loads in the last 5 minutes is {{ humanizeDuration $values.A.Value }}; the alert fires above 2 s with at least 5 loads.",
             "runbook_url": "https://github.com/ybenzine/ineedtofocus/blob/main/_docs/runbooks/history-latency.md",
             "__dashboardUid__": "focus-key-journey-dev",
             "__panelId__": "10"

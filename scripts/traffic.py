@@ -67,6 +67,9 @@ def check_target(base_url: str) -> str:
     parts = urllib.parse.urlsplit(base_url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise Refused(f"not an http(s) URL: {base_url!r}")
+    # The host name is enough: Caddy routes by host (infra/caddy/Caddyfile), so the Droplet's
+    # IP address or any other name never reaches prod. If Caddy ever serves prod for another
+    # host (or a bare IP), refuse that here too.
     if parts.hostname.lower().rstrip(".") in PROD_HOSTS:
         raise Refused(
             "refusing to send test traffic to production: its alerts page the on-call agent "
@@ -204,13 +207,15 @@ class Traffic:
             batch = [make_session(self.rng, now) for _ in range(self.rng.randint(2, 5))]
             if self.saved and self.rng.random() < 0.25:
                 batch[0] = self.rng.choice(self.saved)  # a retry of one already saved
+            invalid = None
             if self.rng.random() < 0.1:
-                batch[-1] = make_session(self.rng, now, valid=False)
+                invalid = batch[-1] = make_session(self.rng, now, valid=False)
             status = self.client.request("POST", "/api/sessions/sync", {"sessions": batch})
             self.count(f"sync {result(status)}")
             self.count("sessions sent", len(batch))
             if status == 200:
-                self.saved.extend(batch)
+                # The server rejected the invalid one: it's not saved, so not a retry candidate.
+                self.saved.extend(s for s in batch if s is not invalid)
         else:
             query = urllib.parse.urlencode(history_query(self.rng, now.date()))
             status = self.client.request("GET", f"/api/history?{query}")

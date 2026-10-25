@@ -137,3 +137,21 @@ def test_result_buckets() -> None:
     assert [traffic.result(s) for s in (0, 200, 201, 409, 422, 500, 503)] == [
         "no response", "ok", "ok", "4xx", "4xx", "5xx", "5xx",
     ]  # fmt: skip
+
+
+def test_the_invalid_session_is_never_replayed_as_a_retry() -> None:
+    """The server rejects it, so it isn't saved; a later "retry" of it would be rejected
+    again, not `existing`."""
+    client = FakeClient({"/api/sessions": 201, "/api/sessions/sync": 200, "/api/history": 200})
+    t = traffic.Traffic(client, random.Random(6))  # type: ignore[arg-type]
+    for _ in range(2000):
+        t.step()
+    sent_invalid = [
+        s
+        for _, path, body in client.sent
+        if path == "/api/sessions/sync"
+        for s in body["sessions"]
+        if s["focus_seconds"] < 60
+    ]
+    assert sent_invalid, "the mix should include invalid sessions"
+    assert all(s["focus_seconds"] >= 60 for s in t.saved)

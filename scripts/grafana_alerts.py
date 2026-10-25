@@ -20,7 +20,11 @@ Two rules per environment, on the key journey only, never on CPU or memory (tech
 - **Session saves failing:** over the last 5 minutes, more than 5% of the sessions
   submitted failed (`outcome="error"` over all `focus_session_saves_total`, the complement
   of the dashboards' save success rate), with at least 10 sessions submitted.
-- **History slow:** the p95 latency of history loads over the last 5 minutes is above 2 s.
+- **History slow:** the p95 latency of history loads over the last 5 minutes is above 2 s,
+  with at least 5 history loads in those 5 minutes.
+
+Below either minimum the count query returns nothing, so the window is "no data" (Normal),
+not a false condition: one failed save or one slow load at 3 a.m. is not user impact.
 
 Grafana evaluates them every minute; a rule fires once its condition has held for one
 more minute (the pending period). No data (no traffic) is normal, never an alert, and a
@@ -60,6 +64,7 @@ RUNBOOKS = "https://github.com/ybenzine/ineedtofocus/blob/main/_docs/runbooks"
 WINDOW = "5m"
 SAVE_ERROR_RATE_LIMIT = 0.05  # 1 - g.SAVE_SUCCESS_TARGET, checked by the tests
 SAVE_MIN_SESSIONS = 10
+HISTORY_MIN_LOADS = 5  # AC2, the product manager's decision on #33
 HISTORY_P95_LIMIT_S = g.HISTORY_P95_LIMIT_S
 INTERVAL_S = 60  # how often Grafana evaluates the group
 PENDING = "1m"  # how long a condition must hold before the rule fires
@@ -88,6 +93,15 @@ def datasource_uid(env: str) -> str:
 
 def sessions_submitted(env: str) -> str:
     return f"sum(increase({g.SAVES}{g._sel(env)}[{WINDOW}]))"
+
+
+def at_least(expr: str, minimum: int) -> str:
+    """`expr` (one series) only when it is at least `minimum`; otherwise no data."""
+    return f"{expr} >= {minimum}"
+
+
+def history_loads(env: str) -> str:
+    return f"sum(increase({g.HISTORY_LOADS}{g._sel(env)}[{WINDOW}]))"
 
 
 def save_error_rate(env: str) -> str:
@@ -179,7 +193,7 @@ def rules(env: str) -> list[dict[str, Any]]:
             "Session saves failing",
             [
                 _prom(env, "A", save_error_rate(env)),
-                _prom(env, "B", sessions_submitted(env)),
+                _prom(env, "B", at_least(sessions_submitted(env), SAVE_MIN_SESSIONS)),
                 _math("C", f"$A > {SAVE_ERROR_RATE_LIMIT} && $B >= {SAVE_MIN_SESSIONS}"),
             ],
             "Save success rate (5 min windows, as the alert sees it)",
@@ -196,13 +210,15 @@ def rules(env: str) -> list[dict[str, Any]]:
             "History slow",
             [
                 _prom(env, "A", history_p95(env)),
-                _math("C", f"$A > {HISTORY_P95_LIMIT_S}"),
+                _prom(env, "B", at_least(history_loads(env), HISTORY_MIN_LOADS)),
+                _math("C", f"$A > {HISTORY_P95_LIMIT_S} && $B >= {HISTORY_MIN_LOADS}"),
             ],
             "History latency",
             f"History loads are slow in {env} (p95 over {HISTORY_P95_LIMIT_S} s)",
-            "The 95th percentile of GET /api/history over the last 5 minutes is "
-            f"{{{{ humanizeDuration $values.A.Value }}}}; the alert fires above "
-            f"{HISTORY_P95_LIMIT_S} s.",
+            "The 95th percentile of the "
+            f'{{{{ printf "%.0f" $values.B.Value }}}} GET /api/history loads in the last '
+            f"5 minutes is {{{{ humanizeDuration $values.A.Value }}}}; the alert fires above "
+            f"{HISTORY_P95_LIMIT_S} s with at least {HISTORY_MIN_LOADS} loads.",
         ),
     ]
 
@@ -374,6 +390,27 @@ def wait(grafana: str, name: str, state: str, minutes: float) -> bool:
 # --- Grafana Cloud: apply (Yacine) -----------------------------------------------------
 
 
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: urllib would resend the Authorization header to wherever
+    the response points. The 3xx surfaces as an HTTPError instead."""
+
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+# The opener every token-bearing request goes through.
+_OPENER = urllib.request.build_opener(_NoRedirects())
+
+
+def check_cloud_url(grafana: str) -> str:
+    """The Grafana URL without a trailing slash; refuses anything but https, so the token
+    never crosses the network in clear (a typo such as http:// included)."""
+    parts = urllib.parse.urlsplit(grafana)
+    if parts.scheme != "https" or not parts.hostname:
+        raise RuntimeError(f"--grafana must be an https:// URL, not {grafana!r}")
+    return grafana.rstrip("/")
+
+
 def _call(grafana: str, token: str, method: str, api: str, body: Any = None) -> Any:
     req = urllib.request.Request(
         f"{grafana}{api}",
@@ -388,9 +425,14 @@ def _call(grafana: str, token: str, method: str, api: str, body: Any = None) -> 
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with _OPENER.open(req, timeout=30) as r:
             raw = r.read()
     except urllib.error.HTTPError as e:
+        if 300 <= e.code < 400:
+            raise RuntimeError(
+                f"{method} {api} -> HTTP {e.code} redirect to {e.headers.get('Location')!r},"
+                " not followed (it would carry the token): use the stack's own URL"
+            ) from None
         # Grafana's error bodies are messages, never the token.
         raise RuntimeError(f"{method} {api} -> HTTP {e.code}: {e.read().decode()[:300]}") from None
     return json.loads(raw) if raw else None
@@ -430,6 +472,7 @@ def prometheus_uid(grafana: str, token: str, wanted: str) -> str:
 
 
 def apply(grafana: str, env: str, token: str, datasource: str | None = None) -> None:
+    grafana = check_cloud_url(grafana)
     uid = folder_uid(grafana, token)
     source = prometheus_uid(grafana, token, datasource or datasource_uid(env))
     group = api_group(env, uid, None if source == datasource_uid(env) else source)
@@ -487,12 +530,17 @@ def main(argv: list[str]) -> int:
         if len(argv) != 2 or argv[1] not in DEPLOYED or not cloud:
             print(__doc__, file=sys.stderr)
             return 2
+        try:  # before the token is typed
+            cloud = check_cloud_url(cloud)
+        except RuntimeError as e:
+            print(f"FAIL  {e}", file=sys.stderr)
+            return 2
         token = getpass.getpass("Grafana service account token (not echoed): ").strip()
         if not token:
             print("no token given", file=sys.stderr)
             return 2
         try:
-            apply(cloud.rstrip("/"), argv[1], token, datasource)
+            apply(cloud, argv[1], token, datasource)
         except (RuntimeError, OSError) as e:
             print(f"FAIL  {e}", file=sys.stderr)
             return 1

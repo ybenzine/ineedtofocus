@@ -195,7 +195,7 @@ def test_alert_thresholds_match_observability_md() -> None:
     assert g.SAVE_SUCCESS_TARGET == 0.95 and "More than 5% of the sessions" in OBSERVABILITY
     assert "`$A > 0.05 && $B >= 10`" in OBSERVABILITY
     assert g.HISTORY_P95_LIMIT_S == 2 and "is above 2 s" in OBSERVABILITY
-    assert "`$A > 2`" in OBSERVABILITY
+    assert "`$A > 2 && $B >= 5`" in OBSERVABILITY
 
 
 def test_local_stack_provisions_the_local_dashboard() -> None:

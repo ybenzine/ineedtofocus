@@ -21,7 +21,7 @@ REPO = Path(__file__).resolve().parents[2]
 OBSERVABILITY = (REPO / "_docs" / "observability.md").read_text()
 PROM_SELECTOR = re.compile(r"\b([a-z_][a-z0-9_]*)\{([^}]*)\}")
 # Only the journey's own metrics (#31): saves and history latency.
-JOURNEY_METRICS = {g.SAVES, f"{g.HISTORY_DURATION}_bucket"}
+JOURNEY_METRICS = {g.SAVES, f"{g.HISTORY_DURATION}_bucket", g.HISTORY_LOADS}
 RESOURCE_WORDS = re.compile(r"cpu|memory|mem_|heap|disk|filesystem|process_|container_|node_")
 
 
@@ -63,15 +63,20 @@ def test_every_query_filters_on_its_own_environment(env: str) -> None:
 
 
 def test_thresholds_are_the_agreed_ones() -> None:
-    """tech_stack.md §4: save error rate > 5% over 5 min with a minimum count; history
-    p95 > 2 s over 5 min. The dashboards draw the same lines."""
+    """tech_stack.md §4 and #33's ACs: save error rate > 5% over 5 min with at least 10
+    sessions; history p95 > 2 s over 5 min with at least 5 loads (the PM's decision on
+    #33). The dashboards draw the same lines."""
     assert a.SAVE_ERROR_RATE_LIMIT == pytest.approx(1 - g.SAVE_SUCCESS_TARGET) == 0.05
     # 2 s is a bucket edge of the latency histogram (backend tests), so p95 > 2 is exact.
     assert a.HISTORY_P95_LIMIT_S == g.HISTORY_P95_LIMIT_S == 2
     assert a.SAVE_MIN_SESSIONS == 10
+    assert a.HISTORY_MIN_LOADS == 5
     save, history = a.rules("prod")
     assert save["data"][2]["model"]["expression"] == "$A > 0.05 && $B >= 10"
-    assert history["data"][1]["model"]["expression"] == "$A > 2"
+    assert history["data"][2]["model"]["expression"] == "$A > 2 && $B >= 5"
+    assert history["data"][1]["model"]["expr"] == (
+        f"sum(increase({g.HISTORY_LOADS}{g._sel('prod')}[5m])) >= 5"
+    )
     for rule in (save, history):
         assert rule["condition"] == "C"
         for query in rule["data"]:
@@ -100,6 +105,17 @@ def test_quiet_periods_are_no_data_never_nan() -> None:
         assert rule["noDataState"] == "OK"
         assert rule["execErrState"] == "KeepLast"  # a broken query isn't user impact
         assert rule["for"] == "1m"
+
+
+def test_below_a_minimum_the_window_is_no_data() -> None:
+    """AC1's 10 sessions and AC2's 5 history loads: the count query (B) is filtered in
+    PromQL, so with fewer it returns nothing and the rule is no data (Normal), not a false
+    condition and never firing."""
+    save, history = a.rules("prod")
+    assert save["data"][1]["model"]["expr"] == f"{a.sessions_submitted('prod')} >= 10"
+    assert history["data"][1]["model"]["expr"] == f"{a.history_loads('prod')} >= 5"
+    # Every history load counts, whatever its outcome (the counter is zero-initialised).
+    assert "outcome" not in a.history_loads("prod")
 
 
 @pytest.mark.parametrize("env", a.ENVIRONMENTS)
@@ -191,9 +207,9 @@ def test_verify_needs_series_for_every_selector(monkeypatch: pytest.MonkeyPatch)
     """A renamed metric parses fine and returns nothing: the rule would never fire."""
     monkeypatch.setattr(g, "_get", _grafana(HEALTHY, empty=True))
     problems = a.verify("http://grafana.invalid")
-    # The error-outcome series, all sessions, the history latency buckets.
-    assert len(a.selectors("local")) == 3
-    assert len(problems) == 3
+    # The error-outcome series, all sessions, the history latency buckets, history loads.
+    assert len(a.selectors("local")) == 4
+    assert len(problems) == 4
     assert all(g.NO_DATA in p for p in problems)
     assert any('outcome="error"' in p for p in problems)
 
@@ -305,3 +321,58 @@ def test_apply_only_for_deployed_environments_and_never_echoes_the_token(
     assert a.main(["apply", "prod", "--grafana", "https://x.grafana.net"]) == 0
     out = capsys.readouterr()
     assert "secret-token-value" not in out.out + out.err
+
+
+@pytest.mark.parametrize(
+    "url", ["http://ineedtofocus.grafana.net", "ftp://x.grafana.net", "ineedtofocus.grafana.net"]
+)
+def test_apply_refuses_anything_but_https(
+    url: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The token must never cross the network in clear; the URL is checked before the
+    token is even asked for."""
+
+    def no_prompt(prompt: str) -> str:
+        raise AssertionError("asked for the token")
+
+    monkeypatch.setattr("getpass.getpass", no_prompt)
+    assert a.main(["apply", "prod", "--grafana", url]) == 2
+    assert "https://" in capsys.readouterr().err
+    with pytest.raises(RuntimeError, match="https://"):
+        a.apply(url, "prod", "tok")
+    assert a.check_cloud_url("https://x.grafana.net/") == "https://x.grafana.net"
+
+
+def test_a_redirect_is_never_followed_with_the_token() -> None:
+    """A real server answers 302 to a second address; the token must not reach it."""
+    import http.server
+    import threading
+
+    seen: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            seen.append(f"{self.path} {self.headers.get('Authorization')}")
+            if self.path.startswith("/api/folders"):
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{port}/elsewhere")
+                self.end_headers()
+            else:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"[]")
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(RuntimeError, match=r"302 redirect .* not followed"):
+            a._call(f"http://127.0.0.1:{port}", "tok", "GET", "/api/folders?limit=1000")
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert seen == ["/api/folders?limit=1000 Bearer tok"]  # never /elsewhere
