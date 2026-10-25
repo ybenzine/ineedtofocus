@@ -73,6 +73,17 @@ fi
 grep -q 'POSTGRES_PASSWORD' "$work/err" || fail "missing POSTGRES_PASSWORD: unexpected error: $(cat "$work/err")"
 ok "refuses to render without POSTGRES_PASSWORD"
 
+# Fault injection (#33): off from the committed files (check_prod_compose.py checks the
+# renders above), and the operator's server .env turns it on: infra/env/<env>.env must not
+# set it, or it would win over the server file.
+printf 'POSTGRES_PASSWORD=not-a-real-password\nFAULT_SAVE_ERROR_PERCENT=25\n' > "$work/fault.env"
+for env_name in prod dev; do
+  fault=$(render "$env_name" "$work/fault.env" --format json |
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["app"]["environment"]["FAULT_SAVE_ERROR_PERCENT"])')
+  [[ $fault == 25 ]] || fail "$env_name: FAULT_SAVE_ERROR_PERCENT from the server .env reached the app as '$fault', not 25"
+done
+ok "fault injection is off by default and only the server .env turns it on"
+
 # --- 2. Collector ------------------------------------------------------------
 otelcol_image=$(render prod "$work/plain.env" --images | grep opentelemetry-collector)
 collector_config() { # <secrets file> -> the second --config file the collector gets

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -190,8 +191,11 @@ def test_trace_link_opens_explore_on_the_trace() -> None:
 
 
 def test_alert_thresholds_match_observability_md() -> None:
-    assert g.SAVE_SUCCESS_TARGET == 0.95 and "Error rate > 5%" in OBSERVABILITY
-    assert g.HISTORY_P95_LIMIT_S == 2 and "p95 latency > 2 s" in OBSERVABILITY
+    """The lines the panels draw are the alert rules' conditions (#33, observability.md)."""
+    assert g.SAVE_SUCCESS_TARGET == 0.95 and "More than 5% of the sessions" in OBSERVABILITY
+    assert "`$A > 0.05 && $B >= 10`" in OBSERVABILITY
+    assert g.HISTORY_P95_LIMIT_S == 2 and "is above 2 s" in OBSERVABILITY
+    assert "`$A > 2 && $B >= 5`" in OBSERVABILITY
 
 
 def test_local_stack_provisions_the_local_dashboard() -> None:
@@ -258,7 +262,7 @@ def test_verify_runs_every_query_and_reports_failures(monkeypatch: pytest.Monkey
         seen.append(url)
         if "histogram_quantile" in url:
             raise RuntimeError("HTTP 400: bad_data")
-        return {"status": "success", "data": {}}
+        return {"status": "success", "data": {"result": [{"value": [0, "1"]}]}}
 
     monkeypatch.setattr(g, "_get", fake)
     problems = g.verify("http://grafana.invalid")
@@ -277,3 +281,46 @@ def test_verify_notices_a_stale_provisioned_dashboard(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(g, "_get", fake)
     assert any("differs" in p for p in g.verify("http://grafana.invalid"))
+
+
+def _answers(model: dict[str, Any], empty: Callable[[str], bool]) -> Callable[[str], Any]:
+    """A fake Grafana: the dashboard, then every query with one series unless `empty(url)`."""
+
+    def fake(url: str) -> Any:
+        if "/api/dashboards/uid/" in url:
+            return {"dashboard": model}
+        if "/tempo/" in url:
+            return {"traces": []}
+        return {"status": "success", "data": {"result": [] if empty(url) else [{"v": 1}]}}
+
+    return fake
+
+
+def test_verify_requires_data_from_every_metrics_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#33: a query of an unknown metric parses and returns nothing; that must fail."""
+    model = g.dashboard("local")
+    # Loki's error panels are rightly empty; the history counter's queries return nothing.
+    monkeypatch.setattr(
+        g, "_get", _answers(model, lambda url: "/loki/" in url or "focus_history_loads" in url)
+    )
+    problems = g.verify("http://grafana.invalid")
+    affected = [
+        t
+        for t in all_targets(model)
+        if t["datasource"]["type"] == "prometheus" and g.HISTORY_LOADS in t["expr"]
+    ]
+    assert affected
+    assert len(problems) == len(affected)
+    assert all(g.NO_DATA in p for p in problems)
+
+
+def test_verify_waits_for_the_next_metric_export(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = g.dashboard("local")
+    exported = {"yet": False}
+
+    def sleep(seconds: float) -> None:
+        exported["yet"] = True
+
+    monkeypatch.setattr(g, "_get", _answers(model, lambda url: not exported["yet"]))
+    monkeypatch.setattr("time.sleep", sleep)
+    assert g.verify("http://grafana.invalid", wait_s=60) == []

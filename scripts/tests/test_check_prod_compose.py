@@ -50,6 +50,7 @@ def env_config(env: str, app: int, db: int, otel: int, oom: int, cpu: int) -> Co
                 "environment": {
                     "COOKIE_SECURE": "1",
                     "MIGRATE_ON_START": "0",
+                    "FAULT_SAVE_ERROR_PERCENT": "0",
                     "FORWARDED_ALLOW_IPS": ip,
                 },
                 "networks": {"default": None, "edge": {"aliases": [f"focus-{env}-app"]}},
@@ -294,6 +295,7 @@ def set_key(env: str, name: str, key: str, value: Any) -> Callable[[dict[str, Co
         (caddy_extra_port, "edge/caddy: publishes"),
         (set_env("prod", "COOKIE_SECURE", "0"), "prod/app: COOKIE_SECURE"),
         (set_env("dev", "MIGRATE_ON_START", "1"), "dev/app: MIGRATE_ON_START"),
+        (set_env("prod", "FAULT_SAVE_ERROR_PERCENT", "25"), "prod/app: FAULT_SAVE_ERROR_PERCENT"),
         (set_env("prod", "FORWARDED_ALLOW_IPS", "*"), "must never be '*'"),
         (set_env("dev", "FORWARDED_ALLOW_IPS", "172.16.20.0/24"), "Caddy's address is 172.16.20.2"),
         (wrong_image, "expected ghcr.io/ybenzine/ineedtofocus:"),

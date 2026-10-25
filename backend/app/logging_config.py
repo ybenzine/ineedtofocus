@@ -22,7 +22,9 @@ from opentelemetry import trace
 # Fields a log call may add through `extra=`. Anything else is dropped from stdout and from
 # the OTLP copy, so a new `extra=` can't leak customer data by accident, and uvicorn's
 # `color_message` (the message again, with ANSI colour codes) never ships.
-ALLOWED_EXTRA = frozenset({"version", "error_type", "user_id", "outcome", "batch_size"})
+ALLOWED_EXTRA = frozenset(
+    {"version", "error_type", "user_id", "outcome", "batch_size", "fault_save_error_percent"}
+)
 
 _RESERVED = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
 

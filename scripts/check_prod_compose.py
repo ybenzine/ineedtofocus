@@ -19,6 +19,8 @@ them. Exits non-zero, listing every broken rule:
     network's ip_range, so Docker never hands it to another container first;
   - the app runs with COOKIE_SECURE=1 and MIGRATE_ON_START=0, and trusts proxy headers only
     from Caddy's fixed address on its own edge network (never `*`);
+  - fault injection (#33) renders off, FAULT_SAVE_ERROR_PERCENT=0, from the committed files
+    alone: only the operator's server .env may turn it on;
   - each environment has its own edge network, Postgres keeps its data in a named volume,
     and only the app joins the edge network;
   - Caddy routes ineedtofoc.us to the prod app and dev.ineedtofoc.us to the dev app;
@@ -266,6 +268,11 @@ def check(
             errors.append(f"{env}/app: COOKIE_SECURE must be 1")
         if environment.get("MIGRATE_ON_START") != "0":
             errors.append(f"{env}/app: MIGRATE_ON_START must be 0 (deploys migrate separately)")
+        if environment.get("FAULT_SAVE_ERROR_PERCENT") != "0":
+            errors.append(
+                f"{env}/app: FAULT_SAVE_ERROR_PERCENT must default to 0 (off); only the"
+                " operator's server .env may turn fault injection on (#33)"
+            )
         if tag is not None and app.get("image") != f"{IMAGE_REPO}:{tag}":
             errors.append(f"{env}/app: image is {app.get('image')!r}, expected {IMAGE_REPO}:{tag}")
 

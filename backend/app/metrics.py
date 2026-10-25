@@ -69,6 +69,29 @@ HISTORY_LOAD_DURATION = _meter.create_histogram(
 )
 
 
+# Every label value the journey counters can carry (the table in _docs/observability.md).
+SAVE_KINDS = ("single", "sync")
+SAVE_OUTCOMES = ("created", "existing", "rejected", "error")
+HISTORY_OUTCOMES = ("ok", "invalid", "error")
+
+
+def zero_journey_series() -> None:
+    """Add 0 to every `kind` x `outcome` of `focus.session.saves` and every `outcome` of
+    `focus.history.loads`, at startup (#33).
+
+    A counter series only exists from its first increment, and Prometheus' `increase()`
+    needs two samples of a series, so without this the first burst of errors after a
+    start would be invisible: the error series would appear already at its burst value,
+    the save error rate would read 0 and the alert would stay quiet through a fresh
+    outage. With a 0 exported first, the jump to N is an increase of N.
+    """
+    for kind in SAVE_KINDS:
+        for outcome in SAVE_OUTCOMES:
+            SESSION_SAVES.add(0, {"kind": kind, "outcome": outcome})
+    for outcome in HISTORY_OUTCOMES:
+        HISTORY_LOADS.add(0, {"outcome": outcome})
+
+
 # Set once `observe` has counted a failure, so the error handlers don't count it again.
 # Never reset, and that is safe: the server runs each request in its own task, which starts
 # from a fresh copy of the context, so a value set here dies with the request. It would break

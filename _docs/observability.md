@@ -1,6 +1,6 @@
 # Observability
 
-Instrumented in #31; Grafana Cloud wiring and the key-journey dashboards in #32. Alerts follow in #33.
+Instrumented in #31; Grafana Cloud wiring and the key-journey dashboards in #32; the user-impact alert rules, the fault-injection trigger and the traffic script in #33. Routing alerts to the on-call agent follows in #34.
 
 ## Key user journey
 
@@ -36,10 +36,75 @@ Never sent to logs, traces or metrics: email addresses, passwords, cookies or se
 
 ## Alerts (user impact, not resources)
 
-| Alert | Condition |
-|---|---|
-| Session saves failing | Error rate > 5% over 5 min, with a minimum request count |
-| History slow | p95 latency > 2 s over 5 min |
+Two Grafana-managed alert rules per environment (#33), on the key journey only. None on CPU, memory or any other resource ([tech_stack.md §4](tech_stack.md)); `scripts/tests/test_grafana_alerts.py` fails if a rule queries anything but the journey metrics. The one recorded exception, a disk-usage alert outside Grafana that emails Yacine and doesn't wake the on-call agent, is #202.
+
+| Alert | Fires when | Queries (Prometheus, last 5 minutes) |
+|---|---|---|
+| **Session saves failing** | More than 5% of the sessions submitted failed, with at least 10 sessions submitted | A: `outcome="error"` over all `focus_session_saves_total`, the complement of the dashboards' save success rate, so a `rejected` session doesn't count. B: the sessions submitted, only when at least 10 (`… >= 10`). Condition: `$A > 0.05 && $B >= 10` |
+| **History slow** | The p95 latency of `GET /api/history` is above 2 s, with at least 5 history loads | A: `histogram_quantile(0.95, …focus_history_load_duration_seconds_bucket…)`; 2 s is a bucket edge, so the estimate is exact at the threshold. B: the history loads (`focus_history_loads_total`, every outcome), only when at least 5 (`… >= 5`). Condition: `$A > 2 && $B >= 5` |
+
+- **Evaluation:** every minute; a rule fires once its condition has held for one more minute (pending period `1m`), and resolves on the first evaluation where it no longer holds. A sudden outage therefore fires about 2 minutes after it starts; the 5-minute window keeps a short blip from firing.
+- **The minimum counts** stop one failed save or one slow history load at 3 a.m. from paging anyone. Below the minimum, query B returns nothing, so the window is "no data" and the rule stays Normal: it isn't a false condition, and it never fires. The save minimum is per session, not per request: a sync batch of 5 counts 5, as in the error rate. The history minimum (5 loads, the product manager's decision on #33) counts every load, whatever its outcome.
+- **Quiet periods are "no data", and no data is OK.** The journey counters exist from startup at 0 (below), so a 5-minute window without traffic is 0/0 (or a quantile of nothing), which is NaN, and Grafana takes a NaN condition as true. Each query therefore filters with `> 0`, which turns that into no data. A query that fails keeps the rule's last state (`execErrState: KeepLast`): a broken Grafana Cloud query isn't user impact, and it would otherwise raise an alert of its own.
+- **Fresh outages count.** A counter series only exists from its first increment, and `increase()` needs two samples, so the first burst of errors after a start would be invisible: the error series would appear already at its burst value and the error rate would read 0. The app therefore adds 0 to every `kind` × `outcome` of `focus.session.saves` and every `outcome` of `focus.history.loads` at startup (`zero_journey_series` in `app/metrics.py`).
+- **Labels** `service=ineedtofocus`, `environment=<env>`, `alert=session-save-errors|history-latency`; the routing (#34) and the on-call agent (#35) go by them. **Annotations:** a summary, a description with the values (e.g. "19.67% of the 65 sessions submitted in the last 5 minutes failed"), the runbook (`_docs/runbooks/<alert>.md`) and the dashboard panel behind the alert.
+
+The rules are generated, like the dashboards, from one model, `scripts/grafana_alerts.py`, which builds the queries with `scripts/grafana_dashboards.py`'s selectors so the two can't drift: `infra/grafana/alerts/key-journey-prod.json`, `-dev.json` and `-local.json`, in Grafana's alert provisioning format (what Grafana's own export writes). Each environment's group filters on its own `deployment_environment_name`. **Changing a rule:** edit the script, run `python3 scripts/grafana_alerts.py`, commit the JSON with it (`make test-scripts` fails when they differ), and after the merge re-apply it to Grafana Cloud ([below](#apply-the-alert-rules-to-grafana-cloud)).
+
+**Locally**, `make up` provisions `key-journey-local.json` into grafana/otel-lgtm (**Alerting → Alert rules → I Need To Focus**). `make check-stack` (in CI too) checks that the rules are provisioned and evaluate without errors, that each of their queries runs, and that every metric selector in them returns series after its probe's save and history load (`python3 scripts/grafana_alerts.py verify`). So a renamed metric or label can't leave a rule quietly evaluating nothing. It checks the selectors, such as `focus_session_saves_total{…, outcome="error"}`, rather than the whole expressions, because those are "no data" by design when the window holds too little traffic: after one history load the latency series exists, but its p95 needs a second sample. The error-outcome series exists only thanks to the zero-initialisation, so this also checks that. Locally the rules have no contact point, so a firing alert shows in the UI only.
+
+### Alert trigger: fault injection
+
+`FAULT_SAVE_ERROR_PERCENT` (0 to 100, default **0, off**) makes that share of session save requests (`POST /api/sessions` and `POST /api/sessions/sync`) fail on purpose (`app/faults.py`). Only the operator can change it:
+
+- It's an environment variable the app reads once at startup. No endpoint reads, shows or changes it (`tests/unit/test_faults.py` checks the routes and the OpenAPI schema), so no user can turn it on.
+- Deployed, it comes only from the server's `/opt/focus/<env>/.env`. `infra/compose.prod.yml` defaults it to 0, `infra/env/<env>.env` never sets it (it would win over the server file), and `make test-infra` checks both.
+- When it's on, the app logs a warning at startup: `fault injection on: session saves fail on purpose`, with `fault_save_error_percent`.
+
+A request picked to fail raises `InjectedSaveFault` before anything is written, so it fails like a real server error: the client gets a 500 and keeps the session in its offline queue to retry later (nothing is lost), every session in the request counts as `outcome="error"`, and the log line (`unhandled exception`) and the trace carry the exception type `InjectedSaveFault`. That's how whoever is on call tells an injected fault from a real one. A rollback doesn't clear it, since the rolled-back app reads the same server file.
+
+**Fire the save alert on dev** (the operator, on the server):
+
+1. Add `FAULT_SAVE_ERROR_PERCENT=30` to `/opt/focus/dev/.env` and recreate the app: `APP_TAG=<current dev tag> infra/compose.sh dev up -d app`.
+2. From any machine: `python3 scripts/traffic.py --base-url https://dev.ineedtofoc.us --minutes 10`.
+3. **Session saves failing (dev)** goes pending, then fires, within about 3 minutes.
+4. Delete the line (or set it to 0) and recreate the app the same way. The alert resolves within about 6 minutes, once the failures have left its 5-minute window.
+
+### Traffic script
+
+`scripts/traffic.py` sends realistic key-journey traffic. It signs up its own throwaway account (`traffic-<random>@example.com`, with a random password it never prints), then sends single saves (about 45%), offline sync batches of 2 to 5 sessions (15%; some repeat a session already saved, and now and then one holds an invalid session) and history loads over every view and a few time zones (40%). The default is 20 requests a minute for 10 minutes (`--rate`, `--minutes`; at most 120 a minute), enough to clear the save alert's minimum many times over without loading dev's small Droplet. It prints a line a minute, by result. Without fault injection almost nothing fails, so no alert fires. Each run leaves its throwaway account and the sessions it saved on the target (dev or your local stack); nothing cleans them up, and they are harmless there. It refuses to run against production (`ineedtofoc.us`): prod's alerts page the on-call agent, and its data is real users'. The check is by host name, which is enough because Caddy routes by host, so no other name or bare IP reaches prod. The default target is this checkout's local stack (`APP_PORT`).
+
+### Proof on the local stack
+
+On 2026-10-25, on a freshly started local stack (so the error series were new, the case the zero-initialisation is for): the app recreated with `FAULT_SAVE_ERROR_PERCENT=30` at 08:35:01Z, then `python3 scripts/traffic.py --rate 30 --minutes 9`, and at 08:38:30Z the app recreated with it back at 0 while the traffic went on. Times UTC:
+
+```text
+$ python3 scripts/grafana_alerts.py wait session-save-errors firing
+08:35:31Z  session-save-errors: normal
+08:36:51Z  session-save-errors: pending
+08:37:51Z  session-save-errors: firing
+$ python3 scripts/grafana_alerts.py wait session-save-errors normal
+08:38:36Z  session-save-errors: firing
+08:43:46Z  session-save-errors: normal
+```
+
+It fired 2 min 50 s after fault injection went on, and resolved 5 min 16 s after it went off. Grafana's description of the firing alert read "19.67% of the 64.96 sessions submitted in the last 5 minutes failed" (the count is a whole number now). The traffic script's total: 118 single saves ok and 15 failed, 37 sync batches ok and 2 failed, 110 history loads ok; **History slow** stayed normal throughout. `python3 scripts/grafana_alerts.py wait <rule> firing|pending|normal` waits for a local rule's state, for drills like this one.
+
+**The history minimum**, the same day, with synthetic history metrics pushed over OTLP to the local stack (the app's resource labels, a separate instance). A single 3-second history load in an otherwise quiet window made A, the p95, 4.875 s, over the threshold. B, the loads, stayed "no data" (1 is below 5), and **History slow** stayed Normal for 4 minutes. With 7 slow loads in the window, B was 7, and the rule went pending and then fired a minute later.
+
+### Apply the alert rules to Grafana Cloud
+
+Grafana Cloud doesn't read the repo, and no agent has an editor login, so Yacine applies the rules once, and again after a PR changes them. `apply` creates or updates the environment's rule group through Grafana's alerting provisioning API, in the `I Need To Focus` folder (it creates the folder if it's missing). It keeps the rules editable in the UI, and it's idempotent, so a re-run overwrites with the repo's version.
+
+1. In https://ineedtofocus.grafana.net, go to **Administration → Users and access → Service accounts → Add service account**. Name it `alert-rules-apply`, set the role to **Editor** and choose **Create**.
+2. Choose **Add service account token**, name it `apply-<date>`, set **Expiration** to a day from now, choose **Generate token** and copy it.
+3. From an up-to-date checkout of `main`, run `python3 scripts/grafana_alerts.py apply prod --grafana https://ineedtofocus.grafana.net` and paste the token at the prompt (it isn't echoed, stored or printed). Then run the same command with `dev`. `apply` refuses any `--grafana` URL that isn't `https://` (checked before it asks for the token), and never follows a redirect, which would carry the token elsewhere: use the stack's own URL.
+4. Delete the token (or let it expire). The service account can stay for the next apply.
+5. Check: **Alerting → Alert rules** lists **I Need To Focus → key-journey-prod** and **key-journey-dev**, two rules each, with state **Normal** and no error. Choose a rule's **View** to see its queries return a value.
+
+If the stack's Prometheus data source isn't `grafanacloud-prom`, `apply` uses its one `grafanacloud-*-prom` data source, or asks for `--datasource <uid>` (shown in **Connections → Data sources**, in the data source's URL).
+
+Until the contact point and routing land (#34), a firing alert follows the stack's default notification policy (**Alerting → Notification policies**), so it may notify no one; the rule's state in **Alert rules** is what to check.
 
 ## Where to look
 
@@ -88,9 +153,13 @@ In Grafana Cloud, open **Explore** and run:
 
 | Data source | Query | Expect |
 |---|---|---|
-| `grafanacloud-…-prom` | `count by (deployment_environment_name) (target_info{service_name="ineedtofocus"})` | A `dev` and a `prod` series (an environment shows once its app has sent metrics, within a minute of starting) |
+| `grafanacloud-…-prom` | `count by (deployment_environment_name) (http_server_request_duration_seconds_count{service_name="ineedtofocus"})` | A `dev` and a `prod` series (an environment shows once its app has served requests and sent metrics, within a minute) |
 | `grafanacloud-…-logs` | `{service_name="ineedtofocus"} \| deployment_environment_name="prod"` | Prod's log lines |
 | `grafanacloud-…-traces` | `{resource.service.name="ineedtofocus" && resource.deployment.environment.name="prod"}` | Prod's request traces |
+
+The metrics query counts a request metric's data points, not `target_info`: `target_info` carries the resource attributes even when Grafana Cloud doesn't promote `deployment.environment.name` onto every series, and then every dashboard panel and alert query, which filter on the data points' `deployment_environment_name`, would be empty while that check passed ([#32](https://github.com/ybenzine/ineedtofocus/issues/32#issuecomment-6395384377)).
+
+Then open the dev dashboard (**I Need To Focus: key journey (dev)**) and confirm the panels show data: the **Session saves**, **History loads** and **HTTP, every API route** rows should show lines and numbers, not "No data" (use dev once first if it has had no traffic lately).
 
 If an environment is missing, look at its collector's logs on the server: `APP_TAG=<current tag> infra/compose.sh <env> logs otel-collector`. A 401 there means a wrong instance ID or token.
 
@@ -130,7 +199,7 @@ Do this once, and again after a PR changes a dashboard. Grafana Cloud doesn't re
 
 **Changing a dashboard:** edit `scripts/grafana_dashboards.py`, run `python3 scripts/grafana_dashboards.py` and commit the regenerated JSON with it. `make test-scripts` fails when the JSON and the script disagree. After the merge, re-import. Changes made in the Grafana UI are overwritten by the next import, so move them into the script.
 
-**Locally**, `make up` provisions `key-journey-local.json` into grafana/otel-lgtm (read-only in the UI). After regenerating it, recreate the container with `docker compose up -d lgtm`. This drops the local telemetry, which lgtm keeps in memory. `make check-stack` (in CI too) checks that the dashboard is provisioned and that each of its queries runs against Prometheus, Loki and Tempo (`python3 scripts/grafana_dashboards.py verify`).
+**Locally**, `make up` provisions `key-journey-local.json` into grafana/otel-lgtm (read-only in the UI). After regenerating it, recreate the container with `docker compose up -d lgtm`. This drops the local telemetry, which lgtm keeps in memory. `make check-stack` (in CI too) checks that the dashboard is provisioned and that each of its queries runs against Prometheus, Loki and Tempo (`python3 scripts/grafana_dashboards.py verify`). Since #33 every Prometheus query must also return data, after the probe's save and history load: an unknown metric or label parses fine and returns nothing, which would otherwise blank a panel silently. The Loki and Tempo queries only have to run, since the error panels are rightly empty while nothing fails.
 
 ### Screenshots
 

@@ -5,7 +5,9 @@
     python3 scripts/grafana_dashboards.py --check   # fail if those files are out of date
     python3 scripts/grafana_dashboards.py verify [<grafana url>]
                                   # run every query of the local dashboard against the
-                                  # local stack's Grafana (`make up`; default: GRAFANA_PORT)
+                                  # local stack's Grafana (`make up`; default: GRAFANA_PORT);
+                                  # each metrics query must return data (after journey
+                                  # traffic, which `make check-stack` sends)
 
 The JSON files are what Grafana Cloud imports (prod, dev) and what the local stack
 provisions (local, compose.yaml). Edit this file, never the JSON: `make test-scripts`
@@ -696,8 +698,9 @@ def _get(url: str) -> Any:
         raise RuntimeError(f"HTTP {e.code}: {e.read().decode()[:300]}") from None
 
 
-def run_query(grafana: str, target: dict[str, Any]) -> None:
-    """Raises RuntimeError when the backend refuses the query (bad syntax, unknown function)."""
+def run_query(grafana: str, target: dict[str, Any]) -> list[Any]:
+    """The query's result: Prometheus series, Loki streams or Tempo traces (maybe none).
+    Raises RuntimeError when the backend refuses the query (bad syntax, unknown function)."""
     proxy = f"{grafana}/api/datasources/proxy/uid"
     now = int(time.time())
     kind = target["datasource"]["type"]
@@ -706,7 +709,8 @@ def run_query(grafana: str, target: dict[str, Any]) -> None:
         result = _get(f"{proxy}/prometheus/api/v1/query?{urllib.parse.urlencode(params)}")
         if result.get("status") != "success":
             raise RuntimeError(str(result)[:300])
-    elif kind == "loki":
+        return list((result.get("data") or {}).get("result") or [])
+    if kind == "loki":
         params = {
             "query": _concrete(target["expr"]),
             "start": str((now - 3600) * 10**9),
@@ -716,29 +720,50 @@ def run_query(grafana: str, target: dict[str, Any]) -> None:
         result = _get(f"{proxy}/loki/loki/api/v1/query_range?{urllib.parse.urlencode(params)}")
         if result.get("status") != "success":
             raise RuntimeError(str(result)[:300])
-    elif kind == "tempo":
+        return list((result.get("data") or {}).get("result") or [])
+    if kind == "tempo":
         params = {"q": target["query"], "start": str(now - 3600), "end": str(now), "limit": "5"}
-        _get(f"{proxy}/tempo/api/search?{urllib.parse.urlencode(params)}")
-    else:
-        raise RuntimeError(f"unknown data source type {kind}")
+        found = _get(f"{proxy}/tempo/api/search?{urllib.parse.urlencode(params)}")
+        return list((found or {}).get("traces") or [])
+    raise RuntimeError(f"unknown data source type {kind}")
 
 
-def verify(grafana: str) -> list[str]:
-    """Problems with the local dashboard in the running local Grafana (empty: none)."""
-    problems: list[str] = []
+NO_DATA = "returns no data"
+
+
+def verify(grafana: str, wait_s: float = 0) -> list[str]:
+    """Problems with the local dashboard in the running local Grafana (empty: none).
+
+    Every Prometheus query must return at least one series, not merely parse: a renamed
+    metric or label returns nothing and would blank a panel silently. `make check-stack`
+    sends a save and a history load first, so each one has data (the journey counters'
+    series exist from startup, #33). Loki and Tempo queries only have to run: the error
+    panels are rightly empty while nothing fails. Retries "no data" for up to `wait_s`
+    seconds, for the next metric export to arrive."""
     try:
         found = _get(f"{grafana}/api/dashboards/uid/{uid('local')}")["dashboard"]
     except (RuntimeError, OSError) as e:
         return [f"dashboard {uid('local')} is not provisioned in {grafana}: {e}"]
     expected = dashboard("local")
-    if [p["title"] for p in found["panels"]] != [p["title"] for p in expected["panels"]]:
-        problems.append("the provisioned dashboard differs from the generated one (restart lgtm)")
-    for panel_title, target in targets(expected):
-        try:
-            run_query(grafana, target)
-        except (RuntimeError, OSError) as e:
-            problems.append(f"{panel_title} [{target['refId']}]: {e}")
-    return problems
+    deadline = time.monotonic() + wait_s
+    while True:
+        problems: list[str] = []
+        if [p["title"] for p in found["panels"]] != [p["title"] for p in expected["panels"]]:
+            problems.append(
+                "the provisioned dashboard differs from the generated one (restart lgtm)"
+            )
+        for panel_title, target in targets(expected):
+            where = f"{panel_title} [{target['refId']}]"
+            try:
+                result = run_query(grafana, target)
+            except (RuntimeError, OSError) as e:
+                problems.append(f"{where}: {e}")
+                continue
+            if target["datasource"]["type"] == "prometheus" and not result:
+                problems.append(f"{where}: {NO_DATA} (unknown metric or label?)")
+        if not any(NO_DATA in p for p in problems) or time.monotonic() > deadline:
+            return problems
+        time.sleep(5)
 
 
 def main(argv: list[str]) -> int:
@@ -757,14 +782,14 @@ def main(argv: list[str]) -> int:
         from check_local_stack import GRAFANA
 
         grafana = argv[1] if len(argv) > 1 else GRAFANA
-        problems = verify(grafana)
+        problems = verify(grafana, wait_s=60)
         for problem in problems:
             print(f"FAIL  {problem}", file=sys.stderr)
         if problems:
             return 1
         print(
             f"ok    {uid('local')} is provisioned and its "
-            f"{sum(1 for _ in targets(dashboard('local')))} queries run"
+            f"{sum(1 for _ in targets(dashboard('local')))} queries run (metrics with data)"
         )
         return 0
     if argv:

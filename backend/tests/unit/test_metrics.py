@@ -51,3 +51,18 @@ def test_client_error_is_not_an_error() -> None:
 def test_exception_still_propagates() -> None:
     with pytest.raises(RuntimeError), observe(Recorder(), Recorder()):  # type: ignore[arg-type]
         raise RuntimeError("boom")
+
+
+def test_zero_journey_series_creates_every_counter_series(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#33: every series exists from startup at 0, so the first errors are an increase."""
+    import app.metrics as m
+
+    saves, loads = Recorder(), Recorder()
+    monkeypatch.setattr(m, "SESSION_SAVES", saves)
+    monkeypatch.setattr(m, "HISTORY_LOADS", loads)
+    m.zero_journey_series()
+    assert {amount for amount, _ in saves.calls + loads.calls} == {0}
+    assert sorted((a["kind"], a["outcome"]) for _, a in saves.calls) == sorted(
+        (k, o) for k in ("single", "sync") for o in ("created", "existing", "rejected", "error")
+    )
+    assert sorted(a["outcome"] for _, a in loads.calls) == ["error", "invalid", "ok"]
