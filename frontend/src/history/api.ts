@@ -5,6 +5,7 @@ import type { Mode, Tag } from '../timer/config.ts'
 import type { SessionStatus } from '../timer/engine.ts'
 import type { SyncIndicator } from '../sync/sessionStore.ts'
 import { TAGS } from '../timer/config.ts'
+import { tracedFetch } from '../telemetry/tracedFetch.ts'
 
 export type HistoryView = 'day' | 'week' | 'month' | 'all' | 'custom'
 export type BucketUnit = 'day' | 'month'
@@ -151,7 +152,7 @@ export class HttpHistoryApi implements HistoryApi {
   readonly #fetch: typeof fetch
 
   constructor(options: { fetch?: typeof fetch } = {}) {
-    this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init))
+    this.#fetch = options.fetch ?? tracedFetch
   }
 
   async get(query: HistoryQuery): Promise<ApiResult<HistoryData>> {

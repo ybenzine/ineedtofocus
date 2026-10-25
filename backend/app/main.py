@@ -19,7 +19,7 @@ from app.logging_config import configure_logging
 from app.rate_limit import FailureLimiter
 from app.sessions import router as sessions_router
 from app.settings_api import router as settings_router
-from app.telemetry import install_privacy_filters, telemetry_config
+from app.telemetry import install_privacy_filters, instrument_engine, telemetry_config
 from app.web import mount_frontend
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,7 @@ def create_app(
     settings = settings or get_settings()
     configure_logging(settings.log_level)
     engine = create_engine(settings.database_url)
+    instrument_engine(engine, tracer_provider)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
