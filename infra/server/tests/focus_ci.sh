@@ -46,7 +46,9 @@
 #               (Postgres, the collector, Caddy) or another repository's; a pruned
 #               known-good release is pulled again by a rollback; a failed deploy prunes
 #               nothing; a failed removal, a malformed log or unreadable references keep
-#               images and never fail the deploy
+#               images and never fail the deploy; a malformed log of the other
+#               environment is named by path and line number only (#186); a digest
+#               reference the containerd store repeats is removed and printed once
 #   floor       (#165) each deploy reads its release's schema (the installed
 #               migration_info.py, fed to a one-shot container) before migrating, and
 #               logs schema=<head>; output it can't read stops it there. A contract
@@ -1202,13 +1204,18 @@ check "it warns and keeps the image" contains "$out" "focus-ci: warning: kept $R
 check "the image is still there" on_host "$DX"
 check "the release is recorded" eq "$(value tag) $(value digest) $(value action)" "${P[1]} ${Q[1]} deploy"
 cp -p "$PROD_HISTORY" /tmp/prod-history.bak
-printf 'garbage\n' >>"$PROD_HISTORY"
+printf 'note-left-in-prods-log\n' >>"$PROD_HISTORY"
+bad_n=$(wc -l <"$PROD_HISTORY")
 mark
 dev_release
 cp -p /tmp/prod-history.bak "$PROD_HISTORY"
 check "prod's log is malformed: dev's deploy still succeeds" eq "$rc" 0
-check "it says it doesn't prune, and why" \
-  contains "$out" "focus-ci: warning: not pruning old images: /opt/focus/prod/releases.log line"
+# What the dev key sees of prod's log (#186): its path and the line's number, nothing
+# of what the line holds.
+check "it says it doesn't prune, and why: the path and line number only" eq \
+  "$(grep -F 'not pruning' <<<"$out")" \
+  "focus-ci: warning: not pruning old images: /opt/focus/prod/releases.log line $bad_n is malformed (see _docs/deployment.md, The release record)"
+check "nothing of the bad line reaches the client" not_contains "$out" "note-left"
 check "it lists no image, so removes none" not_contains "$(new_calls)" ":: image ls"
 check "the stray image is still there" on_host "$DX"
 touch "$FAKE/fail/refs"
@@ -1234,6 +1241,26 @@ check "the next deploy prunes the stray image" bash -c "! [ -e '$FAKE/local/$DX'
 check "and says so" contains "$out" "pruned $REPO:$SX $REPO@$DX"
 check "still only the app's references" rm_app_only "$(new_calls)"
 check "the pinned images are all still there" bash -c "[ -e '$FAKE/local/${PG#*@}' ] && [ -e '$FAKE/local/${OTEL#*@}' ] && [ -e '$FAKE/local/${CADDY#*@}' ]"
+
+echo "--- The containerd image store repeats a digest reference: each is named once (#186)"
+SZ=$(sha 0xce) DZ=$(digest 0xfd)
+echo "$SZ" >"$FAKE/labels/$DZ"
+touch "$FAKE/fail/migrate"
+ci "deploy $SZ $DZ" # a failed deploy leaves its image, tagged
+rm "$FAKE/fail/migrate"
+check "sanity: a stray image, tagged" eq "$rc $(cat "$FAKE/tags/$SZ")" "1 $DZ"
+touch "$FAKE/containerd"
+check "sanity: the fake lists its digest reference twice" eq \
+  "$(docker image inspect --format '{{range .RepoTags}}{{println .}}{{end}}{{range .RepoDigests}}{{println .}}{{end}}' "$REPO@$DZ" | grep -c "@$DZ")" 2
+mark
+dev_release
+rm "$FAKE/containerd"
+check "containerd store: the deploy succeeds" eq "$rc" 0
+check "it removes each reference once" eq "$(new_calls | grep -F ":: image rm " | grep -F "$DZ" | sed 's/.* :: //')" \
+  "image rm $REPO:$SZ $REPO@$DZ"
+check "it prints each reference once" eq "$(grep -F "pruned $REPO:$SZ" <<<"$out")" "==> pruned $REPO:$SZ $REPO@$DZ"
+check "with no warning" not_contains "$out" "focus-ci: warning"
+check "the stray image is gone" bash -c "! [ -e '$FAKE/local/$DZ' ] && ! [ -e '$FAKE/tags/$SZ' ]"
 
 echo "--- releases.log is read strictly, and fails closed (#30 review)"
 cp -p "$HISTORY" /tmp/dev-history.bak
