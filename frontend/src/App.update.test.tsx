@@ -43,4 +43,16 @@ describe('App tells the updater when it is idle', () => {
     fireEvent.change(goal, { target: { value: '' } })
     expect(hasOpenEdit()).toBe(false)
   })
+
+  it('a duration typed on the setup screen holds the update after the field loses focus', async () => {
+    renderApp()
+    const minutes = await screen.findByLabelText(/minutes|duration/i)
+    minutes.focus()
+    fireEvent.change(minutes, { target: { value: '45' } })
+    minutes.blur()
+    expect(document.activeElement).not.toBe(minutes)
+    expect(hasOpenEdit()).toBe(true)
+    fireEvent.change(minutes, { target: { value: '25' } })
+    expect(hasOpenEdit()).toBe(false)
+  })
 })

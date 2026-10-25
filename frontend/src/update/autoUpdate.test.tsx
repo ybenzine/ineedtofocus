@@ -31,6 +31,7 @@ interface Harness {
   flush: ReturnType<typeof vi.fn>
   update: ReturnType<typeof vi.fn>
   stop: () => void
+  registration: { active: { state: string } | null }
   /** The waiting worker is found. */
   waiting: () => Promise<void>
   /** The new worker took control (what `activate` ends in). */
@@ -43,6 +44,7 @@ function setup(over: Partial<AutoUpdaterOptions> = {}): Harness {
   const reload = vi.fn()
   const flush = vi.fn(() => Promise.resolve())
   const update = vi.fn(() => Promise.resolve())
+  const registration = { update, active: null, waiting: null, installing: null }
   const updater = new AutoUpdater({
     register: (callbacks) => {
       cbs = callbacks
@@ -50,19 +52,21 @@ function setup(over: Partial<AutoUpdaterOptions> = {}): Harness {
     },
     isViewBusy,
     onViewChange,
+    isControlled: () => true,
     flush,
     reload,
     guard: window.sessionStorage,
     ...over,
   })
   const stop = updater.start()
-  cbs?.onRegisteredSW('/sw.js', { update } as unknown as ServiceWorkerRegistration)
+  cbs?.onRegisteredSW('/sw.js', registration as unknown as ServiceWorkerRegistration)
   return {
     activate,
     reload,
     flush,
     update,
     stop,
+    registration,
     waiting: async () => {
       cbs?.onNeedRefresh()
       await vi.advanceTimersByTimeAsync(0)
@@ -210,6 +214,49 @@ describe('auto update when idle', () => {
     const t = (h = setup({ flush: () => Promise.reject(new Error('offline')) }))
     await t.waiting()
     expect(t.activate).toHaveBeenCalledTimes(1)
+  })
+
+  it('a busy tab reloads on its own once idle, even if another tab has a session by then', async () => {
+    setViewBusy(true)
+    const t = (h = setup())
+    await t.waiting()
+    await t.controlling()
+    localStorage.setItem(ACTIVE_SESSION_KEY, RUNNING) // another tab started one after the switch
+    setViewBusy(false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.reload).toHaveBeenCalledTimes(1)
+  })
+
+  describe('a page no worker controls (first visit, hard reload)', () => {
+    it('reloads once when the new worker is active and the tab is idle', async () => {
+      const t = (h = setup({ isControlled: () => false }))
+      await t.waiting()
+      // Still installing: nothing to reload into yet.
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(t.reload).not.toHaveBeenCalled()
+      expect(t.activate).not.toHaveBeenCalled()
+      t.registration.active = { state: 'activated' }
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(t.reload).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(t.reload).toHaveBeenCalledTimes(1)
+    })
+
+    it('waits for an idle tab, and keeps the loop guard', async () => {
+      setViewBusy(true)
+      let t = (h = setup({ isControlled: () => false }))
+      t.registration.active = { state: 'activated' }
+      await t.waiting()
+      expect(t.reload).not.toHaveBeenCalled()
+      setViewBusy(false)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(t.reload).toHaveBeenCalledTimes(1)
+      t.stop()
+      t = h = setup({ isControlled: () => false })
+      t.registration.active = { state: 'activated' }
+      await t.waiting()
+      expect(t.reload).not.toHaveBeenCalled()
+    })
   })
 
   it('no reload loop: a second reload within a minute is refused', async () => {

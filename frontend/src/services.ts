@@ -9,6 +9,7 @@ import {
   clearParked,
   deviceSaver,
   drainParked,
+  finishedRecordOf,
   parkedFor,
   quarantinePendingRecord,
   type SessionStore,
@@ -33,6 +34,12 @@ export interface AppServices {
    * which clears the owner once the record is handed over.
    */
   isForeignSession?: () => boolean
+  /**
+   * Removes a session still running that a different user started, so their goal and tag can
+   * never reach the timer screen. A finished one is left for the hand-off. Call it before
+   * restoring. Returns true if something was removed.
+   */
+  discardForeignRunning?: () => boolean
 }
 
 export interface SessionHookOptions {
@@ -79,7 +86,9 @@ export function createAppServices(currentOwner: () => string | null = signedInUs
   })
   let draining: Promise<void> | null = null
   const drain = (): Promise<void> => {
-    // One pass at a time in this tab; other tabs are kept apart by the parked list's lock.
+    // One pass at a time in this tab. Another tab may run its own pass and write the same entry
+    // too: harmless, since saving is idempotent by id. The parked list's lock keeps the list
+    // itself consistent (and sign-out out of the middle of a move), not the passes apart.
     draining ??= drainParked(sessions)
       .then((moved) => {
         if (moved > 0) void sync.syncNow()
@@ -107,6 +116,14 @@ export function createAppServices(currentOwner: () => string | null = signedInUs
       },
     }),
   })
+  const isForeignSession = (): boolean => {
+    const stored = active.load()
+    if (stored === null) return false
+    const sessionId = stored.pendingRecord?.id ?? stored.session.id
+    const recorded = active.ownerOf(sessionId)
+    const now = currentOwner()
+    return typeof recorded === 'string' && now !== null && recorded !== now
+  }
   return {
     controller,
     sync,
@@ -114,13 +131,19 @@ export function createAppServices(currentOwner: () => string | null = signedInUs
     hook: sessionDataHook({ sessions, sync, active, currentOwner }),
     // Sessions parked during an earlier sign-in go into the store under their owners.
     drainParked: drain,
-    isForeignSession: () => {
-      const stored = active.load()
-      if (stored === null) return false
-      const sessionId = stored.pendingRecord?.id ?? stored.session.id
-      const recorded = active.ownerOf(sessionId)
-      const now = currentOwner()
-      return typeof recorded === 'string' && now !== null && recorded !== now
+    isForeignSession,
+    discardForeignRunning: () => {
+      if (!isForeignSession()) return false
+      // A finished one (a pending record, or a countdown past its end) is handed over under its
+      // owner instead; only a session still running is dropped, as a sign-in as a different
+      // user does.
+      if (finishedRecordOf(active.load(), Date.now()) !== null) return false
+      try {
+        active.clear()
+      } catch {
+        return false
+      }
+      return true
     },
   }
 }

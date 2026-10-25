@@ -103,6 +103,20 @@ async function syncedSession(overrides: Partial<SessionRecord> = {}) {
   return record
 }
 
+/** One online History load and the Archive load that follows it, run to the end, then unmounted. */
+async function loadPair() {
+  // The clock moves on, so this pair starts after any mark the previous one wrote.
+  await new Promise((resolve) => setTimeout(resolve, 5))
+  const view = renderScreen()
+  await waitFor(() => expect(history.answers.length).toBeGreaterThan(0))
+  await act(async () => {
+    await Promise.all(history.answers)
+    await new Promise((resolve) => setTimeout(resolve, 30))
+  })
+  history.answers.length = 0
+  view.unmount()
+}
+
 describe('a session archived or deleted on another device (#133)', () => {
   it('ac1 an online load marks a session archived elsewhere as archived on the device', async () => {
     const record = await syncedSession({ goal: 'Elsewhere' })
@@ -119,11 +133,13 @@ describe('a session archived or deleted on another device (#133)', () => {
     expect(screen.queryByText('Elsewhere')).not.toBeInTheDocument()
   })
 
-  it('ac1 an online load removes a session deleted on another device from the device', async () => {
+  it('ac1 an online load removes a session deleted on another device only on a second load', async () => {
     const record = await syncedSession({ goal: 'Deleted elsewhere' })
     server.sessions.delete(record.id)
-    renderScreen()
-    await waitFor(async () => expect(await store.get(record.id)).toBeUndefined())
+    await loadPair()
+    expect(await store.get(record.id)).toBeDefined()
+    await loadPair()
+    expect(await store.get(record.id)).toBeUndefined()
   })
 
   it('ac2 a stuck "Couldn’t sync" edit goes away with a session deleted elsewhere', async () => {
@@ -133,9 +149,10 @@ describe('a session archived or deleted on another device (#133)', () => {
     // The 404 keeps the edit as "Couldn't sync" (Decision log)...
     await engine.syncNow()
     expect((await store.get(record.id))?.editState).toBe('rejected')
-    // ...until an online load shows the session is gone.
-    renderScreen()
-    await waitFor(async () => expect(await store.get(record.id)).toBeUndefined())
+    // ...until two online loads show the session is gone.
+    await loadPair()
+    await loadPair()
+    expect(await store.get(record.id)).toBeUndefined()
     expect(await store.countUnsynced('me')).toEqual({ sessions: 0, edits: 0 })
   })
 
@@ -249,12 +266,90 @@ describe('a session restored on another device (#228)', () => {
       await Promise.all(history.answers)
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
-    const forgets = vi.spyOn(store, 'forget')
+    const forgets = vi.spyOn(store, 'markGone')
     release()
     await waitFor(() => expect(forgets).toHaveBeenCalled())
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
     })
     expect((await store.get(record.id))?.archivedAt).toBeNull()
+  })
+})
+
+describe('a session missing from the server is hidden first, deleted on confirmation (#227)', () => {
+  it('ac1 a session missing from one load pair is hidden but kept on the device', async () => {
+    const record = await syncedSession({ goal: 'Missing once' })
+    server.sessions.delete(record.id)
+    await loadPair()
+    const stored = await store.get(record.id)
+    expect(stored).toBeDefined()
+    expect(stored?.goneOnServer).toEqual(expect.any(Number))
+
+    // Offline, with nothing cached: hidden from History, its time not counted.
+    history.offline = true
+    renderScreen()
+    await screen.findByText(/Showing what’s saved on this device/)
+    expect(screen.queryByText('Missing once')).not.toBeInTheDocument()
+    expect(await store.get(record.id)).toBeDefined()
+  })
+
+  it('ac2 a second load pair that still misses it deletes the device copy', async () => {
+    const record = await syncedSession()
+    server.sessions.delete(record.id)
+    await loadPair()
+    await loadPair()
+    expect(await store.get(record.id)).toBeUndefined()
+  })
+
+  it('ac2 a load that started before the mark was set does not confirm it', async () => {
+    const record = await syncedSession()
+    server.sessions.delete(record.id)
+    await loadPair()
+    const mark = (await store.get(record.id))?.goneOnServer ?? 0
+    await store.markGone('me', [record.id], mark)
+    expect(await store.get(record.id)).toBeDefined()
+    await store.markGone('me', [record.id], mark + 1)
+    expect(await store.get(record.id)).toBeUndefined()
+  })
+
+  it('ac3 a session that reappears in the History answer loses its mark and shows again', async () => {
+    const record = await syncedSession({ goal: 'Backup restored' })
+    const kept = server.sessions.get(record.id)
+    server.sessions.delete(record.id)
+    await loadPair()
+    expect((await store.get(record.id))?.goneOnServer).toEqual(expect.any(Number))
+
+    if (kept) server.sessions.set(record.id, kept)
+    await loadPair()
+    expect((await store.get(record.id))?.goneOnServer ?? null).toBeNull()
+    history.offline = true
+    renderScreen()
+    await screen.findByText(/Showing what’s saved on this device/)
+    expect(await screen.findByText('Backup restored')).toBeInTheDocument()
+  })
+
+  it('ac3 a session that reappears in the Archive list is marked archived, not gone', async () => {
+    const record = await syncedSession()
+    const kept = server.sessions.get(record.id)
+    server.sessions.delete(record.id)
+    await loadPair()
+    if (kept) server.sessions.set(record.id, kept)
+    server.archive(record.id)
+    await loadPair()
+    const stored = await store.get(record.id)
+    expect(stored?.goneOnServer ?? null).toBeNull()
+    expect(stored?.archivedAt).not.toBeNull()
+  })
+
+  it('never marks a device-only archived session (#246)', async () => {
+    const record = makeRecord({ startedAt: '2026-10-21T09:00:00Z' })
+    await store.save(record, 'me')
+    await store.markRejected(record.id, null)
+    await store.archiveOnDevice('me', record.id)
+    await loadPair()
+    await loadPair()
+    const stored = await store.get(record.id)
+    expect(stored?.goneOnServer ?? null).toBeNull()
+    expect(stored?.archivedAt).not.toBeNull()
   })
 })

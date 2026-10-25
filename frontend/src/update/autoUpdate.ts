@@ -33,6 +33,8 @@ export interface AutoUpdaterOptions {
   /** Sends settings edits and the sync queue; bounded by this class. */
   flush: () => Promise<void>
   reload?: () => void
+  /** Whether a worker controls this page. A hard reload or a first visit starts uncontrolled. */
+  isControlled?: () => boolean
   now?: () => number
   guard?: Pick<Storage, 'getItem' | 'setItem'>
   checkMs?: number
@@ -73,6 +75,8 @@ export class AutoUpdater {
   #activate: ((reloadPage?: boolean) => Promise<void>) | null = null
   #registration: ServiceWorkerRegistration | undefined
   #waiting = false
+  /** An update arrived for a page no worker controls: it can only take it by reloading. */
+  #uncontrolled = false
   #reloadPending = false
   #working = false
   #timers: ReturnType<typeof setInterval>[] = []
@@ -85,10 +89,16 @@ export class AutoUpdater {
   start(): () => void {
     this.#activate = this.#o.register({
       onNeedRefresh: () => {
-        this.#waiting = true
+        // An uncontrolled page (first visit, hard reload) gets no `controlling` event, and its
+        // worker is not held back by any tab, so there is nothing to activate: reload once the
+        // new worker is active.
+        if (this.#isControlled()) this.#waiting = true
+        else this.#uncontrolled = true
         void this.#attempt()
       },
       onNeedReload: () => {
+        // The switch has happened: from now on only this tab's own state matters.
+        this.#waiting = false
         this.#reloadPending = true
         void this.#attempt()
       },
@@ -114,7 +124,7 @@ export class AutoUpdater {
     this.#timers.push(
       setInterval(() => this.checkForUpdate(), this.#o.checkMs ?? UPDATE_CHECK_MS),
       setInterval(() => {
-        if (this.#waiting || this.#reloadPending) void this.#attempt()
+        if (this.#waiting || this.#reloadPending || this.#uncontrolled) void this.#attempt()
       }, this.#o.recheckMs ?? UPDATE_RECHECK_MS),
     )
     return () => {
@@ -128,6 +138,17 @@ export class AutoUpdater {
   /** Asks the server for a newer worker; it arrives as `onNeedRefresh`. Offline, it fails quietly. */
   checkForUpdate(): void {
     void this.#registration?.update().catch(() => undefined)
+  }
+
+  #isControlled(): boolean {
+    if (this.#o.isControlled) return this.#o.isControlled()
+    return 'serviceWorker' in navigator && navigator.serviceWorker.controller !== null
+  }
+
+  /** The newest worker is active and nothing newer is installing or waiting. */
+  #uncontrolledReady(): boolean {
+    const r = this.#registration
+    return !!r && r.active?.state === 'activated' && !r.waiting && !r.installing
   }
 
   /** This tab shows nothing that a reload would cost. */
@@ -154,7 +175,10 @@ export class AutoUpdater {
   }
 
   async #attempt(): Promise<void> {
-    if (this.#working || !(this.#waiting || this.#reloadPending)) return
+    if (this.#working || !(this.#waiting || this.#reloadPending || this.#uncontrolled)) return
+    if (this.#uncontrolled && !this.#waiting && !this.#reloadPending) {
+      if (!this.#uncontrolledReady()) return
+    }
     if (!this.#localIdle()) return
     if (this.#waiting && hasStoredSession()) return // a session in this or another tab
     if (this.#guarded()) return
@@ -164,8 +188,11 @@ export class AutoUpdater {
       await this.#flush()
       if (!this.#localIdle()) return
       if (this.#waiting && hasStoredSession()) return
-      if (this.#reloadPending) {
+      const lone = this.#uncontrolled && !this.#waiting && !this.#reloadPending
+      if (lone && !this.#uncontrolledReady()) return
+      if (this.#reloadPending || lone) {
         this.#reloadPending = false
+        this.#uncontrolled = false
         this.#waiting = false
         this.#o.guard?.setItem(RELOAD_GUARD_KEY, String((this.#o.now ?? Date.now)()))
         ;(this.#o.reload ?? (() => window.location.reload()))()
