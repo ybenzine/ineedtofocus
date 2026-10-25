@@ -11,6 +11,11 @@
 # Values come from `.env` (copy `.env.example`); the defaults below are
 # local-only development values, never used on a server.
 # Production and dev Compose files live in infra/ (#27).
+#
+# One stack per checkout (#83): COMPOSE_PROJECT_NAME in .env overrides the project name
+# below, and the *_PORT variables move the host ports, so a second git worktree runs its
+# own stack beside this one (_docs/process.md, Parallel sessions). `make up` prints the
+# project and the URLs in use.
 
 name: focus-local
 

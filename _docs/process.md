@@ -42,6 +42,71 @@ Write every issue comment, PR body and review body to a file under `/tmp` (outsi
 
 Never pass a body inline (`--body "…"`, `-b "…"`, `-f body=…`). The permission rules in `.claude/settings.json` match the whole command text, so a word such as "protection", "environments", "dispatches" or "private=" in an inline body triggers an ask or deny rule and stalls an unattended run.
 
+## Parallel sessions: one worktree each
+
+**One git worktree per parallel Claude Code session** (#83). Two sessions never share a folder. A checkout has one current branch and one `.env`, so on 2026-10-23, when M2 and M3 ran in the same folder, the M3 session's `git switch` moved the M2 session's branch too, and both sessions' `make up` drove the same Compose project and ports. Running milestones in parallel (`/work-backlog M2` in one session, `/work-backlog M3` in another) therefore takes one worktree per session, each with its own local stack.
+
+**Create it** from the main checkout, in your own terminal (`<name>` names the session, e.g. `m3`):
+
+```sh
+git fetch origin
+git worktree add --detach ../ineedtofocus-<name> origin/main
+cp .env.example ../ineedtofocus-<name>/.env   # then set its project name and ports (below)
+cd ../ineedtofocus-<name>
+claude-focus                                  # then accept the workspace trust prompt
+```
+
+- `--detach` because a branch can be checked out in only one worktree. Agents create their `<agent>/<n>-<slug>` branches from there as usual.
+- A worktree shares the repository (commits, branches, remotes and the stash) with the main checkout, but has its own files, current branch and git-ignored files: `.env`, `.claude/settings.local.json`, `backend/.venv` and `frontend/node_modules` (the first `make` target that needs them installs them).
+- Start the session with `claude-focus`, so it acts as the agent account ([infra/github/README.md](../infra/github/README.md#agent-account-127)), and accept the trust prompt: trust is per folder, and the rules in `.claude/settings.json` apply only once it's accepted. Run git from the worktree's root ([AGENTS.md](../AGENTS.md#conventions)).
+
+**Its own local stack.** The worktree's `.env` sets its own Compose project name, which keeps the containers, network, database volume and app image apart, and its own host ports. The main checkout keeps the defaults; the second worktree adds 10 to each port (`.env.example` lists the lines):
+
+| Setting | Main checkout | Second worktree |
+|---|---|---|
+| `COMPOSE_PROJECT_NAME` | `focus-local` | `focus-<name>`, e.g. `focus-m3` |
+| `APP_PORT` | 8000 | 8010 |
+| `GRAFANA_PORT` | 3000 | 3010 |
+| `OTLP_HTTP_PORT` / `OTLP_GRPC_PORT` | 4318 / 4317 | 4328 / 4327 |
+| `POSTGRES_PORT` | 5432 | 5442 |
+| `DATABASE_URL` (backend run on the host) | `…@localhost:5432/focus` | `…@localhost:5442/focus` |
+| Vite dev server (no `.env` variable) | 5173 | 5183: `APP_PORT=8010 npm --prefix frontend run dev -- --port 5183` |
+
+- `make up` prints the Compose project and the URLs Compose actually published (`scripts/stack-urls.sh`). `make check-stack` reads `APP_PORT` and `GRAFANA_PORT` from `.env`.
+- `make test` and `make test-e2e` test this checkout's app: the port its stack publishes, or its `APP_PORT` while it's down. `PLAYWRIGHT_BASE_URL` still overrides that. The log-privacy e2e test reads `docker compose logs`, which picks up `COMPOSE_PROJECT_NAME` from `.env`.
+- The backend integration tests take `DATABASE_URL` from the shell, never from `.env`. Without it they use the Postgres on port 5432, whichever checkout runs it, but each test creates and drops its own database, so that's harmless. To use the worktree's own: `DATABASE_URL=postgresql+asyncpg://focus:focus@localhost:5442/focus make test`.
+- `.claude/settings.json` pre-approves `curl` on the second worktree's ports (8010, 5183, 3010, 4328, on `localhost` and `127.0.0.1`) as well as the defaults, so its unattended runs don't stall. A third parallel worktree adds 20 to each port and allows its own in its git-ignored `.claude/settings.local.json`, in the same explicit-port form:
+
+  ```json
+  {
+    "permissions": {
+      "allow": [
+        "Bash(curl http://localhost:8020/*)", "Bash(curl * http://localhost:8020/*)",
+        "Bash(curl http://localhost:5193/*)", "Bash(curl * http://localhost:5193/*)",
+        "Bash(curl http://localhost:3020/*)", "Bash(curl * http://localhost:3020/*)",
+        "Bash(curl http://localhost:4338/*)", "Bash(curl * http://localhost:4338/*)",
+        "Bash(curl http://127.0.0.1:8020/*)", "Bash(curl * http://127.0.0.1:8020/*)",
+        "Bash(curl http://127.0.0.1:5193/*)", "Bash(curl * http://127.0.0.1:5193/*)",
+        "Bash(curl http://127.0.0.1:3020/*)", "Bash(curl * http://127.0.0.1:3020/*)",
+        "Bash(curl http://127.0.0.1:4338/*)", "Bash(curl * http://127.0.0.1:4338/*)"
+      ]
+    }
+  }
+  ```
+
+**Subagent worktrees.** A subagent the lead starts with worktree isolation gets a throwaway worktree under `<main checkout>/.claude/worktrees/`, even when the session runs in `../ineedtofocus-<name>`. `.gitignore` ignores that folder (#81), so it can't be committed. Such a worktree has no `.env`, so `make up` there would run as `focus-local` on the default ports and replace the main checkout's stack. A subagent that needs a stack first copies its session's `.env` (`cp <session folder>/.env .env`; the lead names its folder when it delegates). The session's one stack then runs that subagent's code.
+
+**Remove it** once the session's PRs are merged:
+
+```sh
+cd ../ineedtofocus-<name> && make down        # stop its stack; its database volume stays
+cd ../ineedtofocus
+git worktree remove ../ineedtofocus-<name>    # refuses while it has changes or untracked files
+git worktree prune
+```
+
+`git worktree remove` deletes the folder, git-ignored files such as its `.env` included. The stopped stack's database volume (`focus-<name>_db-data`) stays until it's removed with `docker volume rm`, which asks first: deleting data is a [human gate](#human-gates).
+
 ## Lifecycle of an issue
 
 ### 1. Pick up

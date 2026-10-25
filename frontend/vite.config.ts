@@ -66,7 +66,9 @@ export default defineConfig({
       },
     }),
   ],
-  server: { proxy: { '/api': 'http://localhost:8000' } },
+  // The dev server proxies the API to the local stack's app. A second worktree runs its stack on
+  // its own APP_PORT (#83): `APP_PORT=8010 npm --prefix frontend run dev -- --port 5183`.
+  server: { proxy: { '/api': `http://localhost:${process.env.APP_PORT || '8000'}` } },
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
