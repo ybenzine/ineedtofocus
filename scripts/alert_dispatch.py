@@ -73,7 +73,22 @@ FIELDS = (
     "links",
 )
 LINKS = ("dashboard", "traces", "runbook", "alert")
-MAX_LENGTH = {"title": 200, "summary": 500, "description": 2000}
+MAX_LENGTH = {"title": 200, "summary": 500, "description": 1000}
+# The only values `title` and `summary` may take: the rules' title and summary annotation
+# (#33, scripts/grafana_alerts.py; scripts/tests/test_alert_dispatch.py keeps them in
+# step). Both are fixed text, so nothing a sender writes reaches #35's agent through them.
+TITLES = {
+    "session-save-errors": "Session saves failing ({env})",
+    "history-latency": "History slow ({env})",
+}
+SUMMARIES = {
+    "session-save-errors": "Over 5% of session saves are failing in {env}",
+    "history-latency": "History loads are slow in {env} (p95 over 2 s)",
+}
+# Free text never carries a link: the rules' annotations have none, and a link in text an
+# agent reads is the first step of a prompt injection. Links go only in `links`, checked.
+LINK_IN_TEXT = re.compile(r"https?://|www\.|\]\(", re.IGNORECASE)
+TEXT_FIELDS = ("title", "summary", "description")
 MAX_LINK = 4000
 # GitHub allows at most 10 top-level properties in client_payload.
 assert len(FIELDS) <= 10
@@ -118,6 +133,14 @@ def problems(
             found.append(f"{name} is empty")
         elif len(payload[name]) > limit:
             found.append(f"{name} is longer than {limit} characters")
+    if alert in ALERTS and env in environments:
+        for name, values in (("title", TITLES), ("summary", SUMMARIES)):
+            expected_text = values[alert].format(env=env)
+            if payload[name] != expected_text:
+                found.append(f"{name} is not the rule's: {expected_text!r}")
+    for name in TEXT_FIELDS:
+        if LINK_IN_TEXT.search(payload[name]):
+            found.append(f"{name} holds a link (links belong in `links` only)")
     if not TIMESTAMP.fullmatch(payload["started_at"]):
         found.append(f"started_at {payload['started_at']!r} is not a UTC timestamp")
     resolved_at = payload["resolved_at"]
@@ -221,8 +244,10 @@ def check_event(path: str) -> int:
     payload = event.get("client_payload") if isinstance(event, dict) else None
     found = event_problems(event)
     step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    # Printed as indented JSON, so no line of the payload can start with `::` and be read
-    # as a workflow command.
+    # Printed as JSON, one key or bracket per line: after the leading whitespace (which the
+    # runner strips before it looks for `::`), every line starts with `{`, `}`, `]` or
+    # `"`, and a newline inside a value is escaped as \n. So no line of the payload can be
+    # read as a workflow command.
     print(json.dumps(payload, indent=2, sort_keys=True))
     if found:
         for problem in found:

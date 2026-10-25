@@ -44,6 +44,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import alert_dispatch as d
+import grafana_alerts as ga
 import grafana_dashboards as g
 
 REPO = g.REPO
@@ -214,6 +215,23 @@ def stale() -> bool:
     return not OUT.is_file() or OUT.read_text() != render()
 
 
+def stale_reason() -> str:
+    """Why the committed JSON is out of date, naming the usual cause when it's that one."""
+    fix = (
+        "run python3 scripts/alert_routing.py and commit the result; after the merge, "
+        "Yacine re-runs `apply cloud` (_docs/observability.md, Alert routing)"
+    )
+    committed = OUT.read_text() if OUT.is_file() else ""
+    moved = [a for a in d.ALERTS if json.dumps(runbook_link(a))[1:-1] not in committed]
+    if committed and moved:
+        return (
+            f"{OUT.relative_to(REPO)} is out of date because a runbook was added or removed "
+            f"in _docs/runbooks/ ({', '.join(moved)}), which changes the dispatch's runbook "
+            f"link: {fix}"
+        )
+    return f"{OUT.relative_to(REPO)} is out of date: {fix}"
+
+
 # --- Grafana's API -----------------------------------------------------------------------
 
 
@@ -233,12 +251,34 @@ def call(grafana: str, token: str | None, method: str, api: str, body: Any = Non
         headers=headers,
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        # #33's opener: a redirect is never followed, since urllib would resend the
+        # Authorization header (and a body holding the dispatch token) to its target.
+        with ga._OPENER.open(req, timeout=30) as r:
             raw = r.read()
     except urllib.error.HTTPError as e:
+        if 300 <= e.code < 400:
+            raise RuntimeError(
+                f"{method} {api} -> HTTP {e.code} redirect to {e.headers.get('Location')!r},"
+                " not followed (it would carry the token): use the stack's own URL"
+            ) from None
         # Grafana's error bodies are messages; they never echo a token.
         raise RuntimeError(f"{method} {api} -> HTTP {e.code}: {e.read().decode()[:300]}") from None
     return json.loads(raw) if raw else None
+
+
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def check_grafana_url(target: str, grafana: str) -> str:
+    """The Grafana URL `apply` and `test` may send tokens to, without a trailing slash:
+    Grafana Cloud only over https (#33's check_cloud_url), the local Grafana only on
+    this machine. Checked before any token is asked for."""
+    if target == "cloud":
+        return ga.check_cloud_url(grafana)
+    parts = urllib.parse.urlsplit(grafana)
+    if parts.scheme not in ("http", "https") or parts.hostname not in LOOPBACK:
+        raise RuntimeError(f"--grafana for local must be this machine's Grafana, not {grafana!r}")
+    return grafana.rstrip("/")
 
 
 def render_template(grafana: str, template: str, alerts: list[dict[str, Any]]) -> str:
@@ -262,23 +302,22 @@ def render_template(grafana: str, template: str, alerts: list[dict[str, Any]]) -
 def synthetic_alert(
     grafana: str, env: str, alert: str, status: str, now: datetime | None = None
 ) -> dict[str, Any]:
-    """An alert as the rules (#33) raise it, for the template preview and `test`."""
+    """An alert as the rules (#33) raise it, for the template preview and `test`: the
+    rule's own labels, title and summary; the description says it's synthetic."""
     now = now or datetime.now(UTC).replace(microsecond=0)
     starts = now - timedelta(minutes=12 if status == "resolved" else 2)
     ends = now - timedelta(minutes=1) if status == "resolved" else now + timedelta(hours=1)
-    title = {"session-save-errors": "Session saves failing", "history-latency": "History slow"}
+    (rule,) = [rule for rule in ga.rules(env) if rule["labels"]["alert"] == alert]
     return {
         "labels": {
-            "alertname": f"{title[alert]} ({env})",
-            "alert": alert,
-            "environment": env,
-            "service": g.SERVICE,
-            "grafana_folder": "I Need To Focus",
+            **rule["labels"],
+            "alertname": rule["title"],
+            "grafana_folder": ga.FOLDER,
         },
         "annotations": {
-            "summary": f"Drill: {title[alert].lower()} in {env} (synthetic alert)",
-            "description": "A synthetic alert sent by scripts/alert_routing.py; nothing failed.",
-            "runbook_url": f"{d.RUNBOOKS}{alert}.md",
+            "summary": rule["annotations"]["summary"],
+            "description": "A synthetic alert sent by scripts/alert_routing.py: nothing failed.",
+            "runbook_url": rule["annotations"]["runbook_url"],
         },
         "startsAt": starts.isoformat().replace("+00:00", "Z"),
         "endsAt": ends.isoformat().replace("+00:00", "Z"),
@@ -364,6 +403,7 @@ def apply(
     dispatch_token: str,
     url: str,
 ) -> None:
+    grafana = check_grafana_url(target, grafana)
     traces = TRACES_UID[target]
     if target == "cloud":
         assert grafana_token
@@ -406,6 +446,7 @@ def send_test(grafana: str, token: str | None, target: str, env: str, alert: str
     """One synthetic notification through the stored contact point, with its stored token:
     what the contact point's **Test** button does with custom labels. Grafana sends a
     test as a firing alert with no rule behind it."""
+    grafana = check_grafana_url(target, grafana)
     receivers = call(grafana, token, "GET", f"{RECEIVERS_API}/receivers") or {}
     found = [
         (item["metadata"]["name"], integration)
@@ -455,10 +496,7 @@ def main(argv: list[str]) -> int:
     argv = list(argv)
     if argv[:1] == ["--check"]:
         if stale():
-            print(
-                f"FAIL  out of date: {OUT.relative_to(REPO)}. Run python3 scripts/alert_routing.py",
-                file=sys.stderr,
-            )
+            print(f"FAIL  {stale_reason()}", file=sys.stderr)
             return 1
         print("ok    alert routing is up to date")
         return 0
@@ -488,7 +526,11 @@ def main(argv: list[str]) -> int:
         if target == "cloud" and not grafana:
             print("apply cloud and test cloud need --grafana <Grafana Cloud URL>", file=sys.stderr)
             return 2
-        grafana = grafana or GRAFANA
+        try:
+            grafana = check_grafana_url(target, grafana or GRAFANA)
+        except RuntimeError as e:
+            print(f"FAIL  {e}", file=sys.stderr)
+            return 2
         token = None
         if target == "cloud":
             token = getpass.getpass("Grafana service account token (not echoed): ").strip()

@@ -25,8 +25,26 @@ def template() -> str:
 
 
 def test_committed_json_is_what_the_script_generates() -> None:
-    assert not r.stale(), "run python3 scripts/alert_routing.py and commit the result"
+    assert not r.stale(), r.stale_reason()
     assert json.loads(r.OUT.read_text()) == r.model()
+
+
+def test_a_new_runbook_is_named_as_the_reason_the_json_is_stale(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#35 adding a runbook makes the JSON stale; the failure says so and what to do."""
+    out = tmp_path / "infra" / "grafana" / "routing" / "oncall-github.json"
+    out.parent.mkdir(parents=True)
+    monkeypatch.setattr(r, "REPO", tmp_path)
+    monkeypatch.setattr(r, "OUT", out)
+    out.write_text(r.render())  # every alert links the index: no runbooks in tmp_path
+    assert not r.stale()
+    (tmp_path / "_docs" / "runbooks").mkdir(parents=True)
+    (tmp_path / "_docs" / "runbooks" / "history-latency.md").write_text("# History slow\n")
+    assert r.stale()
+    reason = r.stale_reason()
+    assert "a runbook was added or removed in _docs/runbooks/ (history-latency)" in reason
+    assert "python3 scripts/alert_routing.py" in reason and "apply cloud" in reason
 
 
 def test_the_contact_point_calls_githubs_dispatch_api_for_this_repo() -> None:
@@ -96,7 +114,7 @@ def test_runbook_links_never_point_at_a_missing_file() -> None:
     for name in linked:
         assert (REPO / "_docs" / "runbooks" / name).is_file(), name
     for alert in d.ALERTS:
-        assert r.runbook_link(alert) in template()
+        assert r.runbook_link(alert) in template(), r.stale_reason()
 
 
 def test_runbook_link_is_the_alerts_own_once_it_exists(
@@ -204,6 +222,83 @@ def test_apply_refuses_a_new_contact_point_without_a_token(monkeypatch: pytest.M
     monkeypatch.setattr(r, "call", FakeGrafana(existing=False))
     with pytest.raises(RuntimeError, match="needs the token"):
         r.apply("https://grafana.example", "cloud", "sa-token", "", r.DISPATCH_URL)
+
+
+@pytest.mark.parametrize(
+    "url", ["http://ineedtofocus.grafana.net", "ineedtofocus.grafana.net", "ftp://x", "https://"]
+)
+@pytest.mark.parametrize("command", ["apply", "test"])
+def test_cloud_refuses_anything_but_https(
+    url: str, command: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Neither token may cross the network in clear; the URL is checked before either
+    token is even asked for."""
+
+    def no_prompt(prompt: str) -> str:
+        raise AssertionError("asked for a token")
+
+    monkeypatch.setattr("getpass.getpass", no_prompt)
+    extra = ["--env", "dev", "--alert", "session-save-errors"] if command == "test" else []
+    assert r.main([command, "cloud", "--grafana", url, *extra]) == 2
+    assert "https://" in capsys.readouterr().err
+    with pytest.raises(RuntimeError, match="https://"):
+        r.apply(url, "cloud", "sa-token", "dispatch-token", r.DISPATCH_URL)
+    with pytest.raises(RuntimeError, match="https://"):
+        r.send_test(url, "sa-token", "cloud", "dev", "session-save-errors")
+
+
+@pytest.mark.parametrize("url", ["http://grafana.example", "https://10.0.0.5:3000"])
+def test_local_refuses_anything_but_this_machine(url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`apply local` sends the stand-in token in the contact point: only to a local Grafana."""
+    monkeypatch.setattr("getpass.getpass", lambda prompt: "stand-in")
+    assert r.main(["apply", "local", "--grafana", url]) == 2
+    assert r.check_grafana_url("local", "http://127.0.0.1:3005/") == "http://127.0.0.1:3005"
+    assert r.check_grafana_url("cloud", "https://x.grafana.net/") == "https://x.grafana.net"
+
+
+def test_a_redirect_is_never_followed_with_the_token() -> None:
+    """A real server answers 302 to a second address; neither the Authorization header nor
+    a body holding the dispatch token may reach it."""
+    import http.server
+    import threading
+
+    seen: list[str] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def _any(self) -> None:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = self.rfile.read(length).decode()
+            seen.append(f"{self.command} {self.path} {self.headers.get('Authorization')} {body}")
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{port}/elsewhere")
+            self.end_headers()
+
+        do_GET = do_POST = do_PUT = _any
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with pytest.raises(RuntimeError, match=r"302 redirect .* not followed"):
+            r.call(f"http://127.0.0.1:{port}", "tok", "GET", "/api/datasources")
+        with pytest.raises(RuntimeError, match=r"302 redirect .* not followed"):
+            r.call(
+                f"http://127.0.0.1:{port}",
+                "tok",
+                "POST",
+                "/api/v1/provisioning/contact-points",
+                {"settings": {"authorization_credentials": "dispatch-token"}},
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert len(seen) == 2
+    assert not [s for s in seen if "/elsewhere" in s]  # never followed
+    assert seen[0].startswith("GET /api/datasources Bearer tok")
 
 
 def test_apply_cloud_needs_the_grafana_url() -> None:
