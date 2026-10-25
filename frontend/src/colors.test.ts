@@ -108,18 +108,58 @@ describe('control borders and focus are at least 3:1 (WCAG 1.4.11)', () => {
 })
 
 describe('no colour literals outside :root (#213)', () => {
-  const namedColours =
-    /\b(white|black|red|green|blue|gray|grey|silver|yellow|orange|purple|pink|brown|navy|teal|cyan|magenta|lime|maroon|olive|aqua|fuchsia|gold|indigo|violet|coral|salmon|crimson)\b/i
-  const literal = /#[0-9a-f]{3,8}\b|\b(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch|color)\(/i
+  // Every CSS named colour plus the system colours; `transparent`, `currentColor` and `inherit` are fine.
+  const NAMED = (
+    'aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen ' +
+    'accentcolor accentcolortext activetext buttonborder buttonface buttontext canvas canvastext field fieldtext graytext highlight highlighttext linktext mark marktext selecteditem selecteditemtext visitedtext activeborder activecaption appworkspace background captiontext inactiveborder inactivecaption inactivecaptiontext infobackground infotext menu menutext scrollbar threeddarkshadow threedface threedhighlight threedlightshadow threedshadow window windowframe windowtext'
+  ).split(' ')
+  const NAMED_SET = new Set(NAMED)
+  const FUNCTIONS =
+    /#[0-9a-f]{3,8}\b|\b(?:rgb|rgba|hsl|hsla|hwb|lab|lch|oklab|oklch|color|color-mix)\(/i
+  // Properties whose values are words, not colours.
+  const NOT_COLOURS = /^(font|font-family|content|src|grid-template-areas|animation-name)$/i
 
-  it('index.css uses only var(--token) for colours', () => {
-    const rest = css.replace(/:root\s*\{[^}]*\}/, '').replace(/\/\*[\s\S]*?\*\//g, '')
-    expect(rest.match(literal)).toBeNull()
-    for (const m of rest.matchAll(
-      /([a-z-]*(?:color|background|border|outline|fill|stroke)[a-z-]*):\s*([^;{}]+);/gi,
-    )) {
-      expect(`${m[1]}: ${m[2]}`).not.toMatch(namedColours)
+  /** Named colours in a declaration value (words that are not part of a url or a string). */
+  function namedIn(value: string): string[] {
+    const bare = value.replace(/url\([^)]*\)/gi, '').replace(/(['"]).*?\1/g, '')
+    return (bare.match(/[a-z]+/gi) ?? []).filter((w) => NAMED_SET.has(w.toLowerCase()))
+  }
+
+  /** The offending colours in a stylesheet, ignoring :root (the tokens) and forced-colors rules. */
+  function offenders(source: string): string[] {
+    const rest = source
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/:root\s*\{[^}]*\}/, '')
+      .replace(/@media\s*\(forced-colors:\s*active\)\s*\{(?:[^{}]*\{[^}]*\})*\s*\}/g, '')
+      .replace(/@font-face\s*\{[^}]*\}/g, '')
+    const bad = FUNCTIONS.test(rest) ? ['function or hex literal'] : []
+    for (const m of rest.matchAll(/([a-z-]+)\s*:\s*([^;{}]+);/gi)) {
+      if (m[1]?.startsWith('--') || NOT_COLOURS.test(m[1] ?? '')) continue
+      bad.push(...namedIn(m[2] ?? '').map((w) => `${m[1]}: ${w}`))
     }
+    return bad
+  }
+
+  it('index.css uses only var(--token) for colours, in any property', () => {
+    expect(offenders(css)).toEqual([])
+  })
+
+  it('the guard catches what it should', () => {
+    expect(offenders('a { box-shadow: 0 0 2px black; }')).toEqual(['box-shadow: black'])
+    expect(offenders('a { color: rebeccapurple; }')).toEqual(['color: rebeccapurple'])
+    expect(offenders('a { background: Canvas; }')).toEqual(['background: Canvas'])
+    expect(offenders('a { color: #fff; }')).toHaveLength(1)
+    expect(offenders('a { color: rgb(1 2 3); }')).toHaveLength(1)
+    expect(offenders('a { color: transparent; border-color: currentColor; x: inherit; }')).toEqual(
+      [],
+    )
+    expect(offenders('a { color: var(--text); font-family: Inter, system-ui; }')).toEqual([])
+    expect(offenders('@media (forced-colors: active) { a { color: Highlight; } }')).toEqual([])
+  })
+
+  it('forced-colors rules mark the selected chip with system colours', () => {
+    expect(css).toMatch(/@media \(forced-colors: active\)/)
+    expect(css).toMatch(/background:\s*Highlight/)
   })
 
   it('no component sets a colour literal', () => {
@@ -134,8 +174,14 @@ describe('no colour literals outside :root (#213)', () => {
     }
     walk(resolve(root, 'src'))
     expect(files.length).toBeGreaterThan(20)
+    const styleValue =
+      /\b(?:color|background|backgroundColor|borderColor|border|outline|fill|stroke|boxShadow|textShadow)\s*:\s*(['"`])(.*?)\1/g
     for (const file of files) {
-      expect(readFileSync(file, 'utf8').match(literal), file).toBeNull()
+      const source = readFileSync(file, 'utf8')
+      expect(FUNCTIONS.test(source), file).toBe(false)
+      for (const m of source.matchAll(styleValue)) {
+        expect(namedIn(m[2] ?? ''), `${file}: ${m[0]}`).toEqual([])
+      }
     }
   })
 })

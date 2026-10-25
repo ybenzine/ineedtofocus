@@ -29,6 +29,13 @@ async function check(page: Page, name: string): Promise<void> {
   }
 }
 
+/** The current item stays accent on a surface pill, even hovered or focused (touch keeps hover after a tap). */
+async function expectCurrentNavIsAccent(page: Page): Promise<void> {
+  const current = page.getByRole('navigation', { name: 'Screens' }).locator('[aria-current]')
+  await expect(current).toHaveCSS('color', 'rgb(148, 154, 255)') // --accent
+  await expect(current).toHaveCSS('background-color', 'rgb(27, 27, 60)') // --surface
+}
+
 async function expectNavOnOneRow(page: Page): Promise<void> {
   const tops = await page
     .getByRole('navigation', { name: 'Screens' })
@@ -73,6 +80,16 @@ for (const width of [360, 768, 1280]) {
       await expect(current).toHaveCSS('color', 'rgb(148, 154, 255)') // --accent
       await expect(current).toHaveCSS('background-color', 'rgb(27, 27, 60)') // --surface
 
+      // Selected history view and tag: accent fill with dark text; the rest are outlined.
+      const day = page.getByRole('group', { name: 'View' }).getByRole('button', { name: 'Day' })
+      await expect(day).toHaveCSS('background-color', 'rgb(148, 154, 255)') // --accent
+      await expect(day).toHaveCSS('color', 'rgb(13, 13, 51)') // --on-accent
+      const week = page.getByRole('group', { name: 'View' }).getByRole('button', { name: 'Week' })
+      await expect(week).toHaveCSS('border-top-color', 'rgb(97, 97, 179)') // --control-border
+      const allTags = page.getByRole('group', { name: 'Tags' }).getByRole('button').first()
+      await expect(allTags).toHaveAttribute('aria-pressed', 'true')
+      await expect(allTags).toHaveCSS('background-color', 'rgb(148, 154, 255)')
+
       await page
         .getByRole('button', { name: /^Archive session/ })
         .first()
@@ -80,11 +97,13 @@ for (const width of [360, 768, 1280]) {
       await expect(page.getByText('Session archived.')).toBeVisible()
       await openScreen(page, 'Archive')
       await expect(page.locator('.history-row')).toHaveCount(1)
+      await expectCurrentNavIsAccent(page) // the pointer is still on the item just clicked
       await check(page, 'archive')
       if (width >= 768) await expectNavOnOneRow(page)
 
       await openScreen(page, 'Settings')
       await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+      await expectCurrentNavIsAccent(page)
       await check(page, 'settings')
       if (width >= 768) await expectNavOnOneRow(page)
     })
@@ -100,4 +119,13 @@ test('a selected option is an accent fill with dark text; the others are outline
   await expect(selected).toHaveCSS('color', 'rgb(13, 13, 51)') // --on-accent
   const other = page.locator('.choice:has(input:not(:checked))').first()
   await expect(other).toHaveCSS('border-top-color', 'rgb(97, 97, 179)') // --control-border
+})
+
+test('checkboxes and slider tracks come from the tokens, not the browser', async ({ page }) => {
+  await signUp(page, newEmail())
+  await openScreen(page, 'Settings')
+  const box = page.getByRole('checkbox', { name: /Keep screen awake/ })
+  await expect(box).toHaveCSS('appearance', 'none')
+  await expect(box).toHaveCSS('border-top-color', 'rgb(97, 97, 179)') // --control-border
+  await expect(page.getByRole('slider').first()).toHaveCSS('appearance', 'none')
 })

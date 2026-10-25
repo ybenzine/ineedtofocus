@@ -156,22 +156,89 @@ select {
   max-width: 100%;
 }
 
-input[type='checkbox'],
-input[type='radio'],
-input[type='range'] {
+input[type='radio'] {
   accent-color: var(--accent);
 }
 
+/* Checkbox from the tokens; still a native input (the label around it is the 44 px target). */
 input[type='checkbox'] {
-  width: 1.25rem;
-  height: 1.25rem;
+  appearance: none;
+  flex: none;
+  display: inline-grid;
+  place-content: center;
+  width: 1.375rem;
+  height: 1.375rem;
   margin: 0;
+  border: 2px solid var(--control-border);
+  border-radius: 0.375rem;
+  background: var(--bg);
+  cursor: pointer;
 }
 
+input[type='checkbox']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+input[type='checkbox']:checked::after {
+  content: '';
+  width: 0.3rem;
+  height: 0.6rem;
+  margin-top: -0.1rem;
+  border: solid var(--on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+input[type='checkbox']:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Slider from the tokens: 44 px tall hit area, outlined track, accent thumb. */
 input[type='range'] {
+  appearance: none;
   width: 100%;
-  min-height: 2.75rem;
+  height: 2.75rem;
   margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: var(--control-border);
+}
+
+input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-top: -0.5625rem;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+input[type='range']::-moz-range-track {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: var(--control-border);
+}
+
+input[type='range']::-moz-range-progress {
+  height: 0.375rem;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
 }
 
 :focus-visible {
@@ -279,7 +346,7 @@ main > p {
   border-color: var(--accent-hover);
 }
 
-.choices .choice input[type='radio'] {
+.choices .choice:has(input[type='radio']) input[type='radio'] {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -299,6 +366,17 @@ main > p {
 .choices .choice:has(input[type='radio']:focus-visible) {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* Forced colours drop our fills: mark the selected chip with the system highlight instead. */
+@media (forced-colors: active) {
+  .choices .choice:has(input[type='radio']:checked),
+  button[aria-pressed='true'] {
+    forced-color-adjust: none;
+    background: Highlight;
+    border-color: Highlight;
+    color: HighlightText;
+  }
 }
 
 .field {
@@ -348,7 +426,9 @@ main > p {
   border-color: transparent;
 }
 
-.screen-nav [aria-current='page'] {
+.screen-nav [aria-current='page'],
+.screen-nav [aria-current='page']:hover:not(:disabled),
+.screen-nav [aria-current='page']:focus-visible {
   background: var(--surface);
   color: var(--accent);
   font-weight: 600;
