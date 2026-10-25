@@ -27,7 +27,9 @@ infra_dir=$(dirname "$(dirname "$here")")
 # `Digest:` line at the top of
 #   docker buildx imagetools inspect ubuntu:24.04
 # and replace it here in its own PR; `make test-server` then runs on the new image.
-# UBUNTU_IMAGE overrides it (e.g. UBUNTU_IMAGE=ubuntu:24.04 to try the latest build).
+# UBUNTU_IMAGE overrides it. A tag is used as it is locally if it's already there (the run
+# is --pull never), so to try the latest build, `docker pull ubuntu:24.04` first and then
+# run with UBUNTU_IMAGE=ubuntu:24.04.
 image=${UBUNTU_IMAGE:-ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac}
 
 # Retries for a short registry outage: 4 attempts, 5, 10 then 20 s apart (about 35 s of

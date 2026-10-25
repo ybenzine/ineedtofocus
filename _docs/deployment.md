@@ -58,7 +58,7 @@ The `docker` group is root-equivalent. That's acceptable only because no `deploy
 
 **Re-running is safe.** The script only writes files whose content differs, installs only missing packages (it never upgrades installed ones), and leaves the `.env` contents and the deploy keys alone. A second run on a configured server changes nothing. Re-run it after changing it in the repo.
 
-**It fails loudly.** If writing a managed file fails at any step (temporary file, compare, install, chmod or chown), or a directory sits where the file belongs, the script stops there with `ERROR: writing <path>: …` and a non-zero exit, so it can't report success with a file missing or left with the wrong permissions (#80). Fix the cause and run it again. Fetching Docker's signing key retries a transient failure 3 times.
+**It fails loudly.** If writing a managed file fails at any step (temporary file, compare, install, chmod or chown), or a directory sits where the file belongs, the script stops there with `ERROR: writing <path>: …` and exit status 2 (every `ERROR:` exits 2), so it can't report success with a file missing or left with the wrong permissions (#80). Fix the cause and run it again. Fetching Docker's signing key retries a transient failure 3 times.
 
 ### Verify
 

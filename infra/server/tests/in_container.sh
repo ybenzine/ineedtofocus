@@ -34,7 +34,7 @@ printf 'PasswordAuthentication yes\n' >/etc/ssh/sshd_config.d/50-cloud-init.conf
 echo "--- Refuses to run as a regular user"
 rc=0
 out=$(su -s /bin/bash nobody -c "bash $BOOTSTRAP" 2>&1) || rc=$?
-check "non-root run exits non-zero" [ "$rc" -ne 0 ]
+check "non-root run exits with status 2 (die)" eq "$rc" 2
 check "non-root run says to use sudo" contains "$out" "run as root"
 
 echo "--- First run"
@@ -183,7 +183,7 @@ run_bootstrap /tmp/run4.log || rc=$?
 rm /etc/apt/apt.conf.d
 mv /etc/apt/apt.conf.d.saved /etc/apt/apt.conf.d
 log4=$(cat /tmp/run4.log)
-check "a read-only target makes it exit non-zero" [ "$rc" -ne 0 ]
+check "a read-only target makes it exit with status 2, not 1 (unchanged)" eq "$rc" 2
 check "it says which file failed" \
   contains "$log4" "ERROR: writing /etc/apt/apt.conf.d/20auto-upgrades: install failed"
 check "it stops there (nothing after unattended-upgrades runs)" not_contains "$log4" "==> done"
@@ -194,9 +194,11 @@ mv /etc/docker/daemon.json /tmp/daemon.json.saved
 mkdir /etc/docker/daemon.json
 rc=0
 run_bootstrap /tmp/run5.log || rc=$?
-rmdir /etc/docker/daemon.json
+# rm -rf, not rmdir: if write_file regresses, install leaves a file inside the directory
+# and rmdir would abort the harness before the checks below say why.
+rm -rf -- /etc/docker/daemon.json
 mv /tmp/daemon.json.saved /etc/docker/daemon.json
-check "a directory in place of a managed file makes it exit non-zero" [ "$rc" -ne 0 ]
+check "a directory in place of a managed file makes it exit with status 2" eq "$rc" 2
 check "it says the target isn't a regular file" \
   contains "$(cat /tmp/run5.log)" "ERROR: writing /etc/docker/daemon.json: it exists but isn't a regular file"
 

@@ -34,9 +34,11 @@ DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin dock
 
 log() { printf '==> %s\n' "$*"; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
+# Status 2, not 1: write_file's "unchanged" is 1, so a die that only ends a subshell
+# (a future `$(write_file …)` or pipe) still can't be mistaken for it (#80).
 die() {
   printf 'ERROR: %s\n' "$*" >&2
-  exit 1
+  exit 2
 }
 
 have_systemd() { [[ -d /run/systemd/system ]]; }
@@ -46,8 +48,10 @@ have_systemd() { [[ -d /run/systemd/system ]]; }
 #
 # Callers use it as a condition (`if write_file …`), which turns errexit off inside it,
 # so every step is checked by hand: any failure stops the whole script with an ERROR:
-# (exit, not return), so a caller never mistakes it for "unchanged". Callers that don't
-# care whether the file changed use ensure_file.
+# (die: exit 2, not return), so a caller never mistakes it for "unchanged". Run it in
+# the main shell (not in `$(…)` or a pipe), where that exit ends the script; in a
+# subshell it would only end the subshell, though its status 2 still isn't "unchanged".
+# Callers that don't care whether the file changed use ensure_file.
 write_file() {
   local path=$1 mode=$2 owner=$3 tmp cmp_rc=1
   tmp=$(mktemp) || die "writing $path: can't create a temporary file"
