@@ -90,3 +90,43 @@ def test_env_example_lists_only_settings_the_local_stack_uses() -> None:
     }
     for name in sorted(active & fields - {"DATABASE_URL"}):
         assert name in env, f".env.example lists {name}, but compose.yaml does not pass it"
+
+
+# --- One stack per checkout (#83) ---------------------------------------------------------
+
+PORT_VARIABLES = ("APP_PORT", "POSTGRES_PORT", "GRAFANA_PORT", "OTLP_GRPC_PORT", "OTLP_HTTP_PORT")
+
+
+def env_example(commented: bool) -> dict[str, str]:
+    """The `NAME=value` lines of .env.example: active ones, or the commented `#   NAME=value`
+    example lines for a second worktree."""
+    pattern = r"^#   ([A-Z][A-Z0-9_]*)=(.*)$" if commented else r"^([A-Z][A-Z0-9_]*)=(.*)$"
+    text = (REPO / ".env.example").read_text()
+    return {m[1]: m[2] for m in re.finditer(pattern, text, re.MULTILINE)}
+
+
+def test_project_name_default_matches_compose() -> None:
+    compose = (REPO / "compose.yaml").read_text()
+    assert "\nname: focus-local\n" in compose
+    assert env_example(commented=False)["COMPOSE_PROJECT_NAME"] == "focus-local"
+
+
+def test_every_host_port_is_a_variable() -> None:
+    """A second worktree can only move the ports compose.yaml reads from the environment."""
+    compose = (REPO / "compose.yaml").read_text()
+    published = re.findall(r'^\s+- "127\.0\.0\.1:\$\{([A-Z_]+):-(\d+)\}:\d+"', compose, re.M)
+    defaults = env_example(commented=False)
+    assert sorted(name for name, _ in published) == sorted(PORT_VARIABLES)
+    for name, default in published:
+        assert defaults[name] == default, name
+
+
+def test_second_worktree_example_moves_every_port_by_ten() -> None:
+    defaults = env_example(commented=False)
+    second = env_example(commented=True)
+    assert second["COMPOSE_PROJECT_NAME"] != defaults["COMPOSE_PROJECT_NAME"]
+    for name in PORT_VARIABLES:
+        assert int(second[name]) == int(defaults[name]) + 10, name
+    assert second["DATABASE_URL"] == defaults["DATABASE_URL"].replace(
+        f":{defaults['POSTGRES_PORT']}/", f":{second['POSTGRES_PORT']}/"
+    )

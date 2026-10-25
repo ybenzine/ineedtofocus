@@ -99,7 +99,7 @@ export default function AuthScreen({
       <h2 ref={headingRef} tabIndex={-1}>
         {signUp ? 'Create your account' : 'Sign in'}
       </h2>
-      <form className="setup" onSubmit={(e) => void submit(e)} noValidate>
+      <form className="setup auth-card" onSubmit={(e) => void submit(e)} noValidate>
         <label>
           Email
           <input
@@ -140,7 +140,7 @@ export default function AuthScreen({
           </p>
         )}
         {formError && <p role="alert">{formError}</p>}
-        <button type="submit" disabled={busy}>
+        <button type="submit" className="primary" disabled={busy}>
           {signUp ? 'Create account' : 'Sign in'}
         </button>
       </form>

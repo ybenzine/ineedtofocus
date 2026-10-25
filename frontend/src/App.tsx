@@ -281,7 +281,7 @@ function AppBody({
 
   if (view.name === 'timer') {
     return (
-      <main className="dark-screen">
+      <main className="focus-screen">
         <TimerScreen
           controller={timer}
           audio={audio}
@@ -302,7 +302,7 @@ function AppBody({
 
   if (view.name === 'summary' && view.update.outcome) {
     return (
-      <main className="dark-screen">
+      <main className="focus-screen">
         <SessionSummary
           outcome={view.update.outcome}
           recordPending={view.update.recordPending}
@@ -315,7 +315,7 @@ function AppBody({
 
   if (view.name === 'history') {
     return (
-      <main className="dark-screen history-screen">
+      <main className="history-screen">
         <AccountBar controller={timer} />
         <ScreenNav current="history" onNavigate={goTo} />
         <HistoryScreen
@@ -329,7 +329,7 @@ function AppBody({
 
   if (view.name === 'archive') {
     return (
-      <main className="dark-screen history-screen">
+      <main className="history-screen">
         <AccountBar controller={timer} />
         <ScreenNav current="archive" onNavigate={goTo} />
         <ArchiveScreen sessions={services.sessions} />

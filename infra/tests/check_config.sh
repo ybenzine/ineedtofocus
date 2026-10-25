@@ -9,14 +9,23 @@
 #      export.grafana-cloud.yaml with them, and `otelcol validate` accepts both;
 #   3. `caddy validate` accepts infra/caddy/Caddyfile and `caddy fmt` finds nothing to change;
 #   4. scripts/check_prod_compose.py checks the rendered result against the deploy rules
-#      (memory budget, dev below prod, ports, proxy trust, routing, cookie, migrations).
+#      (memory budget, dev below prod, ports, proxy trust, routing, cookie, migrations,
+#      pinned images, and the process, privilege and disk limits of #117).
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 infra=$(dirname "$here")
 repo=$(dirname "$infra")
+# shellcheck source=/dev/null # exit_guard.sh: exit_guard, harness_done (#183)
+. "$here/exit_guard.sh"
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+cleanup() {
+  local status=$?
+  exit_guard "$status" || status=$?
+  rm -rf "$work"
+  exit "$status"
+}
+trap cleanup EXIT
 
 tag=0123456789abcdef0123456789abcdef01234567
 # Render with this tag only: an APP_TAG from the caller (CI sets one for the job) would
@@ -64,6 +73,17 @@ fi
 grep -q 'POSTGRES_PASSWORD' "$work/err" || fail "missing POSTGRES_PASSWORD: unexpected error: $(cat "$work/err")"
 ok "refuses to render without POSTGRES_PASSWORD"
 
+# Fault injection (#33): off from the committed files (check_prod_compose.py checks the
+# renders above), and the operator's server .env turns it on: infra/env/<env>.env must not
+# set it, or it would win over the server file.
+printf 'POSTGRES_PASSWORD=not-a-real-password\nFAULT_SAVE_ERROR_PERCENT=25\n' > "$work/fault.env"
+for env_name in prod dev; do
+  fault=$(render "$env_name" "$work/fault.env" --format json |
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["services"]["app"]["environment"]["FAULT_SAVE_ERROR_PERCENT"])')
+  [[ $fault == 25 ]] || fail "$env_name: FAULT_SAVE_ERROR_PERCENT from the server .env reached the app as '$fault', not 25"
+done
+ok "fault injection is off by default and only the server .env turns it on"
+
 # --- 2. Collector ------------------------------------------------------------
 otelcol_image=$(render prod "$work/plain.env" --images | grep opentelemetry-collector)
 collector_config() { # <secrets file> -> the second --config file the collector gets
@@ -105,3 +125,4 @@ ok "caddy adapt"
 python3 "$repo/scripts/check_prod_compose.py" \
   --edge "$work/edge.json" --prod "$work/prod.json" --dev "$work/dev.json" \
   --caddy "$work/caddy.json" --tag "$tag"
+harness_done

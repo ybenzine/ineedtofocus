@@ -24,9 +24,40 @@ REQUIRED_JOBS = ["lint", "backend-unit", "backend-integration", "frontend-unit",
 MAIN_PUSH_ONLY = "github.event_name == 'push' && github.ref == 'refs/heads/main'"
 
 
+def load_workflow(path: Path) -> dict[Any, Any]:
+    """A workflow, with each step's effective shell in `_shell` (the step's own `shell`,
+    else the job's, else the workflow's `defaults.run.shell`, else None), so the steps run
+    here exactly as GitHub runs them."""
+    data: dict[Any, Any] = yaml.safe_load(path.read_text())
+    top = (data.get("defaults") or {}).get("run", {}).get("shell")
+    for job in data["jobs"].values():
+        job_shell = (job.get("defaults") or {}).get("run", {}).get("shell", top)
+        for step in job.get("steps", []):
+            step["_shell"] = step.get("shell", job_shell)
+    return data
+
+
+def run_like_github(
+    step: dict[str, Any], tmp_path: Path, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Run a step's `run` the way GitHub's runner does on Linux: the script in a file, run
+    with `bash -e {0}` when no shell is set, or `bash --noprofile --norc -eo pipefail {0}`
+    for `shell: bash`. Adding pipefail here for every step would hide a missing one."""
+    script = tmp_path / "step.sh"
+    script.write_text(step["run"])
+    shell = step.get("_shell", step.get("shell"))
+    if shell is None:
+        argv = ["bash", "-e", str(script)]
+    elif shell == "bash":
+        argv = ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)]
+    else:
+        raise AssertionError(f"unexpected shell {shell!r}")
+    return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
+
+
 @pytest.fixture(scope="module")
 def workflow() -> dict[Any, Any]:
-    data: dict[Any, Any] = yaml.safe_load(CI.read_text())
+    data: dict[Any, Any] = load_workflow(CI)
     return data
 
 
@@ -76,7 +107,7 @@ def test_deploy_dev_uses_the_dev_environment_and_its_own_group(jobs: dict[str, A
     deploy = jobs["deploy-dev"]
     assert deploy["environment"] == {"name": "dev", "url": "https://dev.ineedtofoc.us"}
     assert deploy["concurrency"] == {"group": "deploy-dev", "cancel-in-progress": False}
-    assert deploy["permissions"] == {"contents": "read"}
+    assert deploy["permissions"] == {"contents": "read", "attestations": "read"}
 
 
 def test_secrets_appear_only_where_they_belong(jobs: dict[str, Any]) -> None:
@@ -163,13 +194,7 @@ def run_gate(
         "GITHUB_OUTPUT": str(output),
         "GITHUB_STEP_SUMMARY": str(summary),
     }
-    result = subprocess.run(
-        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = run_like_github(step, tmp_path, env)
     assert result.returncode == status, result
     assert says.format(env=env_title) in result.stdout
     expected = f"configured={configured}\n" if configured else ""
@@ -229,7 +254,7 @@ DIGEST = "sha256:" + "c" * 64
 
 @pytest.fixture(scope="module")
 def prod_workflow() -> dict[Any, Any]:
-    data: dict[Any, Any] = yaml.safe_load(DEPLOY_PROD.read_text())
+    data: dict[Any, Any] = load_workflow(DEPLOY_PROD)
     return data
 
 
@@ -269,7 +294,7 @@ def test_deploy_prod_permissions_are_minimal(
         "actions": "read",
         "deployments": "read",
     }
-    assert prod_jobs["deploy"]["permissions"] == {"contents": "read"}
+    assert prod_jobs["deploy"]["permissions"] == {"contents": "read", "attestations": "read"}
 
 
 def test_deploy_prod_runs_in_production_after_the_plan(prod_jobs: dict[str, Any]) -> None:
@@ -415,13 +440,7 @@ def run_step(
         "GITHUB_SERVER_URL": "https://github.com",
         **env,
     }
-    result = subprocess.run(
-        ["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-        env=full_env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = run_like_github(step, tmp_path, full_env)
     return result, output, summary
 
 
@@ -538,3 +557,785 @@ def test_deploy_prod_resolves_the_digest_dev_ran(
         assert output.read_text() == "dev_time=T\n"
     else:
         assert github_env.read_text() == ""
+
+
+# --- Build provenance (#128) ----------------------------------------------------------
+
+IMAGE_NAME = "ghcr.io/ybenzine/ineedtofocus"
+RUN_URL = "https://github.com/ybenzine/ineedtofocus/actions/runs/123/attempts/1"
+VERIFY_STEP = "Verify the image's build provenance"
+# The exact gh call both verify steps make, one argument per line in the fake's log: this
+# repository's attestations of exactly that digest, signed by ci.yml at the approved
+# commit, built for a push to main from that commit, on a GitHub-hosted runner.
+VERIFY_ARGV = [
+    "attestation",
+    "verify",
+    f"oci://{IMAGE_NAME}@{DIGEST}",
+    "--repo",
+    "ybenzine/ineedtofocus",
+    "--signer-workflow",
+    "ybenzine/ineedtofocus/.github/workflows/ci.yml",
+    "--signer-digest",
+    SHA,
+    "--source-ref",
+    "refs/heads/main",
+    "--source-digest",
+    SHA,
+    "--predicate-type",
+    "https://slsa.dev/provenance/v1",
+    "--deny-self-hosted-runners",
+    "--format",
+    "json",
+    "--jq",
+    ".[0].verificationResult.signature.certificate.runInvocationURI",
+]
+
+
+def effective_permissions(path: Path) -> list[tuple[str, dict[str, str]]]:
+    """Each job's token permissions: its own block, else the workflow's. Every workflow
+    sets one, as a map (never `write-all` or the repository default)."""
+    data: dict[Any, Any] = yaml.safe_load(path.read_text())
+    top = data.get("permissions")
+    assert isinstance(top, dict), path.name
+    result = []
+    for name, job in data["jobs"].items():
+        own = job.get("permissions", top)
+        assert isinstance(own, dict), (path.name, name)
+        result.append((name, own))
+    return result
+
+
+@pytest.mark.parametrize("scope", ["id-token", "attestations"])
+def test_only_publish_can_sign_and_store_attestations(scope: str) -> None:
+    """`id-token: write` (a Sigstore certificate in this repository's name) and
+    `attestations: write` belong to ci.yml's publish job alone, across every workflow."""
+    writers = [
+        (path.name, name)
+        for path in all_workflows()
+        for name, permissions in effective_permissions(path)
+        if permissions.get(scope) == "write"
+    ]
+    assert writers == [("ci.yml", "publish")]
+
+
+def test_publish_permissions_are_exactly_these(jobs: dict[str, Any]) -> None:
+    assert jobs["publish"]["permissions"] == {
+        "contents": "read",
+        "packages": "write",
+        "id-token": "write",
+        "attestations": "write",
+    }
+
+
+def test_publish_attests_the_digest_it_pushed(jobs: dict[str, Any]) -> None:
+    """actions/attest-build-provenance, pinned by sha, for the pushed digest (not the tag),
+    stored next to the image too, after the push and while still logged in to GHCR."""
+    steps = jobs["publish"]["steps"]
+    attest = step_named(jobs["publish"], "Attest build provenance")
+    assert re.fullmatch(r"actions/attest-build-provenance@[0-9a-f]{40}", attest["uses"])
+    assert attest["with"] == {
+        "subject-name": IMAGE_NAME,
+        "subject-digest": "${{ steps.push.outputs.digest }}",
+        "push-to-registry": True,
+        "create-storage-record": False,
+    }
+    assert "if" not in attest and "continue-on-error" not in attest
+    push = next(i for i, step in enumerate(steps) if step.get("id") == "push")
+    assert push < steps.index(attest)
+    assert "docker logout" not in steps[push]["run"]
+    logout = step_named(jobs["publish"], "Log out of GHCR")
+    assert logout == {
+        "name": "Log out of GHCR",
+        "if": "always()",
+        "run": "docker logout ghcr.io",
+        "_shell": None,
+    }
+    assert steps.index(attest) < steps.index(logout) == len(steps) - 1
+    # The version comment (test_actions_are_pinned_to_a_commit checks its shape).
+    assert re.search(r"actions/attest-build-provenance@[0-9a-f]{40} # v4\.", CI.read_text())
+
+
+def verify_jobs(jobs: dict[str, Any], prod_jobs: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {"deploy-dev": jobs["deploy-dev"], "deploy-prod": prod_jobs["deploy"]}
+
+
+def test_both_deploys_verify_with_the_same_script(
+    jobs: dict[str, Any], prod_jobs: dict[str, Any]
+) -> None:
+    """One script, so dev never records a digest prod's check would refuse."""
+    dev, prod = (step_named(job, VERIFY_STEP) for job in verify_jobs(jobs, prod_jobs).values())
+    assert dev["run"] == prod["run"]
+    for step in (dev, prod):
+        assert step["id"] == "provenance"
+        assert step["if"] == "steps.config.outputs.configured == 'true'"
+        assert step["env"] == {"GH_TOKEN": "${{ github.token }}"}
+        assert "continue-on-error" not in step
+        assert "ssh" not in step["run"] and "scripts/" not in step["run"]
+        # The pins, as written in the workflow.
+        for flag in [
+            'gh attestation verify "oci://ghcr.io/ybenzine/ineedtofocus@$DIGEST"',
+            "--repo ybenzine/ineedtofocus \\",
+            "--signer-workflow ybenzine/ineedtofocus/.github/workflows/ci.yml \\",
+            '--signer-digest "$TAG" \\',
+            "--source-ref refs/heads/main \\",
+            '--source-digest "$TAG" \\',
+            "--predicate-type https://slsa.dev/provenance/v1 \\",
+            "--deny-self-hosted-runners \\",
+        ]:
+            assert flag in step["run"], flag
+
+
+@pytest.mark.parametrize("workflow_job", ["deploy-dev", "deploy-prod"])
+def test_a_failed_verify_stops_the_job_before_any_deploy_request(
+    jobs: dict[str, Any], prod_jobs: dict[str, Any], workflow_job: str
+) -> None:
+    """The verify step comes before the SSH deploy request, and every step from it up to
+    that request runs only if all before it succeeded (no always(), failure() or
+    !cancelled()), so a refused attestation means no `deploy` reaches the server. On
+    prod it comes after `candidate`, which reads the digest; on dev, before the key is
+    written."""
+    job = verify_jobs(jobs, prod_jobs)[workflow_job]
+    steps = job["steps"]
+    names = [str(step.get("name", step.get("uses"))) for step in steps]
+    verify = names.index(step_named(job, VERIFY_STEP)["name"])
+    deploy = names.index(step_named(job, "Deploy over SSH")["name"])
+    assert verify < deploy
+    assert not any('"deploy ' in str(step.get("run", "")) for step in steps[:verify])
+    for step in steps[verify : deploy + 1]:
+        condition = str(step.get("if", ""))
+        assert not re.search(r"always\(\)|failure\(\)|cancelled\(\)", condition), step
+        assert "continue-on-error" not in step, step
+    if workflow_job == "deploy-prod":
+        assert names.index(step_named(job, "Resolve the commit")["name"]) < verify
+    else:
+        assert verify < names.index(step_named(job, "Set up the deploy key")["name"])
+
+
+FAKE_GH_ATTEST = r"""#!/usr/bin/env bash
+# Fake gh for the verify step: logs its arguments one per line, then answers like
+# `gh attestation verify … --format json --jq <run URL>` (exit 0), or refuses (exit 1).
+printf '%s\n' "$@" > "$GH_LOG"
+if [[ $GH_STATUS != 0 ]]; then
+  echo "$GH_ERROR" >&2
+  exit "$GH_STATUS"
+fi
+printf '%s\n' "$GH_ANSWER"
+"""
+
+
+@pytest.mark.parametrize("workflow_job", ["deploy-dev", "deploy-prod"])
+@pytest.mark.parametrize(
+    ("overrides", "status", "built_by", "says"),
+    [
+        ({}, 0, RUN_URL, f"was built from {SHA} by {RUN_URL}"),
+        # No attestation at all: an image pushed outside publish, or published before #128.
+        (
+            {"GH_STATUS": "1", "GH_ERROR": "Error: HTTP 404: Not Found"},
+            1,
+            None,
+            "title=Build provenance not verified",
+        ),
+        # An attestation, but not for this commit (or ref, or workflow): gh refuses.
+        (
+            {
+                "GH_STATUS": "1",
+                "GH_ERROR": f"Error: expected SourceRepositoryDigest to be {SHA}, got {OTHER_SHA}",
+            },
+            1,
+            None,
+            "title=Build provenance not verified",
+        ),
+        # Verified, but the run URL isn't the expected shape: verified, no link.
+        ({"GH_ANSWER": "https://evil.example/x|y"}, 0, "", "by a ci.yml run on main"),
+        ({"DIGEST": "sha256:" + "C" * 64}, 1, None, "::error::bad tag or digest"),
+        ({"DIGEST": DIGEST[:-1]}, 1, None, "::error::bad tag or digest"),
+        ({"TAG": SHA[:12]}, 1, None, "::error::bad tag or digest"),
+        ({"TAG": ""}, 1, None, "::error::bad tag or digest"),
+    ],
+    ids=[
+        "attested",
+        "no-attestation",
+        "other-commit",
+        "odd-run-url",
+        "uppercase-digest",
+        "short-digest",
+        "short-tag",
+        "empty-tag",
+    ],
+)
+def test_verify_step_passes_only_an_attestation_gh_accepts(
+    jobs: dict[str, Any],
+    prod_jobs: dict[str, Any],
+    tmp_path: Path,
+    workflow_job: str,
+    overrides: dict[str, str],
+    status: int,
+    built_by: str | None,
+    says: str,
+) -> None:
+    """The verify step, run as GitHub runs it with a fake gh: exactly the pinned call;
+    gh's refusal fails the step with an error (so the job stops before `deploy`); a bad
+    tag or digest never reaches gh."""
+    step = step_named(verify_jobs(jobs, prod_jobs)[workflow_job], VERIFY_STEP)
+    gh_log = tmp_path / "gh.log"
+    env = {
+        "TAG": SHA,
+        "DIGEST": DIGEST,
+        "GH_TOKEN": "not-a-token",
+        "GH_LOG": str(gh_log),
+        "GH_STATUS": "0",
+        "GH_ERROR": "",
+        "GH_ANSWER": RUN_URL,
+        **overrides,
+    }
+    result, output, _ = run_step(step, tmp_path, env, FAKE_GH_ATTEST, "gh")
+    assert result.returncode == status, result
+    assert says in result.stdout
+    if "bad tag or digest" in says:
+        assert not gh_log.exists()
+    else:
+        assert gh_log.read_text().splitlines() == VERIFY_ARGV
+    if built_by is None:
+        assert output.read_text() == ""
+    else:
+        assert output.read_text() == f"built_by={built_by}\n"
+    if status and "bad tag" not in says:
+        assert env["GH_ERROR"] in result.stderr  # gh's reason stays in the log
+
+
+@pytest.mark.parametrize("workflow_job", ["deploy-dev", "deploy-prod"])
+def test_summary_reports_the_provenance(
+    jobs: dict[str, Any], prod_jobs: dict[str, Any], workflow_job: str
+) -> None:
+    summary = step_named(verify_jobs(jobs, prod_jobs)[workflow_job], "Summary")
+    assert summary["env"]["PROVENANCE_OUTCOME"] == "${{ steps.provenance.outcome }}"
+    assert summary["env"]["BUILT_BY"] == "${{ steps.provenance.outputs.built_by }}"
+    assert "| Build provenance |" in summary["run"]
+    assert "$PROVENANCE_OUTCOME == failure" in summary["run"]
+
+
+# --- rollback.yml (#30) ---------------------------------------------------------------
+
+ROLLBACK = WORKFLOWS / "rollback.yml"
+ROLLBACK_ENVIRONMENT = "${{ inputs.env == 'prod' && 'rollback' || 'dev' }}"
+
+
+@pytest.fixture(scope="module")
+def rollback_workflow() -> dict[Any, Any]:
+    data: dict[Any, Any] = load_workflow(ROLLBACK)
+    return data
+
+
+@pytest.fixture(scope="module")
+def rollback_job(rollback_workflow: dict[Any, Any]) -> dict[str, Any]:
+    job: dict[str, Any] = rollback_workflow["jobs"]["rollback"]
+    return job
+
+
+def test_rollback_file_is_the_one_the_allow_rule_names(rollback_workflow: dict[Any, Any]) -> None:
+    """`gh workflow run rollback.yml …` is pre-approved, so on-call never stalls (#53)."""
+    assert ROLLBACK in all_workflows()
+    assert rollback_workflow["name"] == "rollback"
+    settings = json.loads((REPO / ".claude" / "settings.json").read_text())
+    assert "Bash(gh workflow run rollback.yml *)" in settings["permissions"]["allow"]
+
+
+def test_rollback_is_started_by_hand_with_a_choice_and_a_sha(
+    rollback_workflow: dict[Any, Any],
+) -> None:
+    """workflow_dispatch only, and no free-text input: a value the agent types could
+    otherwise contain words a deny rule matches, such as deploy-prod (#136 review)."""
+    triggers: dict[str, Any] = rollback_workflow.get("on", rollback_workflow.get(True)) or {}
+    assert list(triggers) == ["workflow_dispatch"]
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert list(inputs) == ["env", "tag"]
+    assert inputs["env"]["type"] == "choice"
+    assert inputs["env"]["options"] == ["dev", "prod"]
+    assert inputs["env"]["required"] is True
+    assert inputs["env"]["default"] == "dev"
+    assert inputs["tag"]["type"] == "string"
+    assert inputs["tag"]["required"] is False
+    assert inputs["tag"]["default"] == ""
+    assert "deploy-prod" not in yaml.safe_dump(inputs)
+
+
+def test_rollback_permissions_are_minimal(
+    rollback_workflow: dict[Any, Any], rollback_job: dict[str, Any]
+) -> None:
+    assert rollback_workflow["permissions"] == {}
+    assert list(rollback_workflow["jobs"]) == ["rollback"]
+    assert rollback_job["permissions"] == {"contents": "read"}
+
+
+def test_rollback_runs_in_the_environment_holding_that_key(rollback_job: dict[str, Any]) -> None:
+    """prod → `rollback` (the prod rollback key, no reviewer), anything else → `dev` (the dev
+    key), never `production`. No GitHub deployment: deploy-prod's plan reads dev's."""
+    assert rollback_job["environment"] == {"name": ROLLBACK_ENVIRONMENT, "deployment": False}
+    assert "production" not in yaml.safe_dump(rollback_job)
+    env = rollback_job["env"]
+    assert env["URL"] == (
+        "${{ inputs.env == 'prod' && 'https://ineedtofoc.us' || 'https://dev.ineedtofoc.us' }}"
+    )
+    assert env["TARGET_ENV"] == "${{ inputs.env }}"
+    assert env["TAG"] == "${{ inputs.tag }}"
+
+
+def test_rollback_has_its_own_group_and_never_cancels(
+    rollback_workflow: dict[Any, Any],
+    rollback_job: dict[str, Any],
+    jobs: dict[str, Any],
+    prod_jobs: dict[str, Any],
+) -> None:
+    assert "concurrency" not in rollback_workflow
+    assert rollback_job["concurrency"] == {
+        "group": "rollback-${{ inputs.env }}",
+        "cancel-in-progress": False,
+    }
+    others = {
+        jobs["deploy-dev"]["concurrency"]["group"],
+        prod_jobs["deploy"]["concurrency"]["group"],
+    }
+    assert others == {"deploy-dev", "deploy-prod"}
+
+
+def test_rollback_reads_the_key_only_to_check_and_set_it_up(rollback_job: dict[str, Any]) -> None:
+    readers = {
+        step["name"]: set(re.findall(r"secrets\.([A-Za-z_]+)", yaml.safe_dump(step)))
+        for step in rollback_job["steps"]
+        if "secrets." in yaml.safe_dump(step)
+    }
+    assert readers == {
+        "Check the environment is set up": {"DEPLOY_SSH_KEY", "DEPLOY_KNOWN_HOSTS"},
+        "Set up the key": {"DEPLOY_SSH_KEY", "DEPLOY_KNOWN_HOSTS"},
+    }
+    names = [str(step.get("name", step.get("uses"))) for step in rollback_job["steps"]]
+    assert names.index("Check the request") < names.index("Check the environment is set up")
+
+
+@pytest.mark.parametrize(
+    ("overrides", "status", "says"),
+    [
+        ({}, 0, ""),
+        ({"TARGET_ENV": "prod", "TAG": SHA}, 0, ""),
+        ({"GITHUB_REF": "refs/heads/topic"}, 1, "title=Not main"),
+        ({"TARGET_ENV": "staging"}, 1, "title=Bad env"),
+        ({"TARGET_ENV": "prod;id"}, 1, "title=Bad env"),
+        ({"TAG": SHA[:12]}, 1, "title=Bad tag"),
+        ({"TAG": SHA.upper()}, 1, "title=Bad tag"),
+        ({"TAG": f"{SHA};id"}, 1, "title=Bad tag"),
+        ({"TAG": f"{SHA}\nid"}, 1, "title=Bad tag"),
+        ({"TAG": "deploy-prod"}, 1, "title=Bad tag"),
+    ],
+)
+def test_rollback_checks_the_request_before_any_secret(
+    rollback_job: dict[str, Any],
+    tmp_path: Path,
+    overrides: dict[str, str],
+    status: int,
+    says: str,
+) -> None:
+    step = step_named(rollback_job, "Check the request")
+    env = {"GITHUB_REF": "refs/heads/main", "TARGET_ENV": "dev", "TAG": "", **overrides}
+    result, _, _ = run_step(step, tmp_path, env, "", "unused")
+    assert result.returncode == status, result
+    assert says in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("target", "key", "known_hosts", "status", "says"),
+    [
+        ("dev", "KEY", "HOSTS", 0, ""),
+        ("prod", "KEY", "HOSTS", 0, ""),
+        ("dev", "", "", 1, "the dev environment has no DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS"),
+        (
+            "prod",
+            "",
+            "",
+            1,
+            "the rollback environment has no DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS",
+        ),
+        ("prod", "KEY", "", 1, "the rollback environment has no DEPLOY_KNOWN_HOSTS."),
+        ("dev", "", "HOSTS", 1, "the dev environment has no DEPLOY_SSH_KEY."),
+    ],
+)
+def test_rollback_never_skips_green(
+    rollback_job: dict[str, Any],
+    tmp_path: Path,
+    target: str,
+    key: str,
+    known_hosts: str,
+    status: int,
+    says: str,
+) -> None:
+    """Unlike a deploy, a rollback that can't run fails red: on-call must not read a green
+    run as "rolled back"."""
+    step = step_named(rollback_job, "Check the environment is set up")
+    env = {"TARGET_ENV": target, "DEPLOY_SSH_KEY": key, "DEPLOY_KNOWN_HOSTS": known_hosts}
+    result, _, summary = run_step(step, tmp_path, env, "", "unused")
+    assert result.returncode == status, result
+    assert says in result.stdout
+    if status:
+        assert "::error title=Not rolled back::" in result.stdout
+        assert "Nothing changed" in summary.read_text()
+
+
+def test_rollback_sends_requests_the_profiles_accept(rollback_job: dict[str, Any]) -> None:
+    text = steps_text(rollback_job)
+    assert "request=rollback\n" in text and '[[ -n $TAG ]] && request="rollback $TAG"' in text
+    assert 'focus "$request expect $EXPECT"' in text
+    assert "focus status" in text and "focus candidate" in text
+    assert "StrictHostKeyChecking yes" in text and "BatchMode yes" in text
+    script = FOCUS_CI.read_text()
+    rollback_re = re.search(r"readonly ROLLBACK_RE='(.+)'", script)
+    assert rollback_re
+    pattern = rollback_re.group(1).strip("^$")
+    for ok in ["rollback", f"rollback {SHA}", f"rollback expect {DIGEST}"]:
+        assert re.fullmatch(pattern, ok), ok
+    assert re.fullmatch(pattern, f"rollback {SHA} expect {DIGEST}")
+    for bad in [
+        f"rollback {SHA} {DIGEST}",
+        f"rollback expect {SHA}",
+        f"rollback expect {DIGEST} {SHA}",
+    ]:
+        assert not re.fullmatch(pattern, bad), bad
+    assert len(f"rollback {SHA} expect {DIGEST}") <= 160  # MAX_REQUEST_LENGTH
+    profiles = dict(
+        re.findall(r"\n  ([a-z-]+)\)\n    env_name=\w+\n    allowed=\(([^)]*)\)", script)
+    )
+    assert profiles == {
+        "dev": "deploy rollback status",
+        "prod": "deploy status candidate",
+        "rollback-prod": "rollback status",
+    }
+
+
+RESULT = f"result from_tag={SHA} from_digest={DIGEST} tag={THIRD_SHA} digest=sha256:{'e' * 64}"
+
+
+@pytest.mark.parametrize(
+    ("tag", "answer", "sent", "outputs"),
+    [
+        (
+            "",
+            f"==> rolling back\n{RESULT}\n",
+            f"rollback expect {DIGEST}",
+            f"from_tag={SHA}\nfrom_digest={DIGEST}\ntag={THIRD_SHA}\ndigest=sha256:{'e' * 64}\n",
+        ),
+        (SHA, "no result line\n", f"rollback {SHA} expect {DIGEST}", ""),
+    ],
+)
+def test_rollback_step_sends_the_guarded_request_and_reads_the_result(
+    rollback_job: dict[str, Any], tmp_path: Path, tag: str, answer: str, sent: str, outputs: str
+) -> None:
+    """The request carries the digest read just before (`expect`), and From/To come from
+    the server's own result line, written under its lock."""
+    step = step_named(rollback_job, "Roll back over SSH")
+    env = {
+        "TAG": tag,
+        "EXPECT": DIGEST,
+        "SSH_CONFIG": "/dev/null",
+        "SSH_LOG": str(tmp_path / "ssh.log"),
+        "RUNNER_TEMP": str(tmp_path),
+        "ANSWER": answer,
+    }
+    result, output, _ = run_step(step, tmp_path, env, FAKE_SSH, "ssh")
+    assert result.returncode == 0, result
+    assert (tmp_path / "ssh.log").read_text() == f"{sent}\n"
+    assert output.read_text() == outputs
+
+
+def record(env: str = "dev", tag: str = SHA, digest: str = DIGEST, action: str = "deploy") -> str:
+    return (
+        f"env={env}\ntag={tag}\ndigest={digest}\naction={action}\ndeployed_at=T\n"
+        f"previous_tag={THIRD_SHA}\ninfra_revision={OTHER_SHA}\n"
+    )
+
+
+OTHER_DIGEST = "sha256:" + "e" * 64
+
+FAKE_SSH_BY_REQUEST = r"""#!/usr/bin/env bash
+# Fake ssh: `status` prints $ANSWER, `candidate` exits $CANDIDATE_RC.
+request=${*: -1}
+echo "$request" >> "$SSH_LOG"
+case $request in
+  status) printf '%b' "$ANSWER" ;;
+  candidate) exit "$CANDIDATE_RC" ;;
+  *) exit 99 ;;
+esac
+"""
+
+
+@pytest.mark.parametrize(
+    ("target", "answer", "candidate_rc", "status", "sent", "says"),
+    [
+        ("dev", record(), 0, 0, "status\n", ""),
+        ("prod", record(env="prod"), 2, 0, "status\ncandidate\n", ""),
+        (
+            "dev",
+            record(env="prod"),
+            0,
+            1,
+            "status\n",
+            "title=Wrong key::the key answers for 'prod'",
+        ),
+        ("prod", record(), 2, 1, "status\n", "title=Wrong key::the key answers for 'dev'"),
+        # The prod deploy key in `rollback`: it answers for prod but runs candidate.
+        ("prod", record(env="prod"), 0, 1, "status\ncandidate\n", "isn't the prod rollback key"),
+        ("prod", record(env="prod"), 1, 1, "status\ncandidate\n", "got exit 1"),
+        ("prod", record(env="prod"), 255, 1, "status\ncandidate\n", "got exit 255"),
+        ("dev", "", 0, 1, "status\n", "title=Nothing to roll back"),
+        ("dev", record(digest="sha256:short"), 0, 1, "status\n", "release record is malformed"),
+    ],
+)
+def test_rollback_checks_the_key_belongs_there_first(
+    rollback_job: dict[str, Any],
+    tmp_path: Path,
+    target: str,
+    answer: str,
+    candidate_rc: int,
+    status: int,
+    sent: str,
+    says: str,
+) -> None:
+    """A key in the wrong environment stops before the rollback: the record must name the
+    environment, and for prod only the rollback profile refuses `candidate` (exit 2)."""
+    step = step_named(rollback_job, "Read what runs now")
+    env = {
+        "TARGET_ENV": target,
+        "SSH_CONFIG": "/dev/null",
+        "SSH_LOG": str(tmp_path / "ssh.log"),
+        "RUNNER_TEMP": str(tmp_path),
+        "ANSWER": answer,
+        "CANDIDATE_RC": str(candidate_rc),
+    }
+    result, output, _ = run_step(step, tmp_path, env, FAKE_SSH_BY_REQUEST, "ssh")
+    assert result.returncode == status, result
+    assert (tmp_path / "ssh.log").read_text() == sent
+    assert says in result.stdout
+    if status == 0:
+        assert output.read_text() == f"tag={SHA}\ndigest={DIGEST}\n"
+
+
+@pytest.mark.parametrize(
+    ("answer", "tag", "to_digest", "status", "says"),
+    [
+        (record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"), "", OTHER_DIGEST, 0, ""),
+        (
+            record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"),
+            OTHER_SHA,
+            OTHER_DIGEST,
+            0,
+            "",
+        ),
+        (
+            record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="deploy"),
+            "",
+            OTHER_DIGEST,
+            1,
+            "doesn't show a rollback",
+        ),
+        (
+            record(env="prod", tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"),
+            "",
+            OTHER_DIGEST,
+            1,
+            "doesn't show a rollback",
+        ),
+        (record(action="rollback"), "", DIGEST, 1, "rolled back from"),
+        (
+            record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"),
+            "",
+            "sha256:" + "f" * 64,
+            1,
+            "not sha256:fff",
+        ),
+        (
+            record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"),
+            THIRD_SHA,
+            OTHER_DIGEST,
+            1,
+            f"not {THIRD_SHA}",
+        ),
+        (
+            record(tag=OTHER_SHA, digest=OTHER_DIGEST, action="rollback"),
+            "",
+            "",
+            1,
+            "printed no result line",
+        ),
+    ],
+)
+def test_rollback_reads_the_record_back(
+    rollback_job: dict[str, Any],
+    tmp_path: Path,
+    answer: str,
+    tag: str,
+    to_digest: str,
+    status: int,
+    says: str,
+) -> None:
+    """The record must show the rollback the server reported: that environment, action
+    rollback, the result's digest (not the one left), and the tag when one was asked for."""
+    step = step_named(rollback_job, "Read the server's release record")
+    env = {
+        "TARGET_ENV": "dev",
+        "TAG": tag,
+        "FROM_TAG": SHA,
+        "FROM_DIGEST": DIGEST,
+        "TO_DIGEST": to_digest,
+        "SSH_CONFIG": "/dev/null",
+        "SSH_LOG": str(tmp_path / "ssh.log"),
+        "RUNNER_TEMP": str(tmp_path),
+        "ANSWER": answer,
+    }
+    result, output, _ = run_step(step, tmp_path, env, FAKE_SSH, "ssh")
+    assert result.returncode == status, result
+    assert says in result.stdout
+    if status == 0:
+        assert f"tag={OTHER_SHA}\ndigest={OTHER_DIGEST}\n" in output.read_text()
+
+
+def test_rollback_summary_takes_from_and_to_from_the_server(rollback_job: dict[str, Any]) -> None:
+    env = step_named(rollback_job, "Summary")["env"]
+    assert env["FROM_TAG"] == "${{ steps.rollback.outputs.from_tag || steps.before.outputs.tag }}"
+    assert env["FROM_DIGEST"] == (
+        "${{ steps.rollback.outputs.from_digest || steps.before.outputs.digest }}"
+    )
+    assert env["TO_TAG"] == "${{ steps.rollback.outputs.tag }}"
+    assert env["TO_DIGEST"] == "${{ steps.rollback.outputs.digest }}"
+
+
+def test_rollback_deletes_the_key_before_running_repo_code(rollback_job: dict[str, Any]) -> None:
+    steps = rollback_job["steps"]
+    names = [str(step.get("name", step.get("uses"))) for step in steps]
+    early = step_named(rollback_job, "Remove the key before")
+    assert early["run"] == 'rm -rf "$RUNNER_TEMP/deploy-ssh"'
+    assert early["if"] == "always()"
+    position = names.index(early["name"])
+    ssh_steps = [i for i, step in enumerate(steps) if "ssh " in str(step.get("run", ""))]
+    assert ssh_steps and max(ssh_steps) < position
+    assert position < names.index(step_named(rollback_job, "Smoke-test")["name"])
+    assert steps[-1]["if"] == "always()"
+    assert steps[-1]["run"] == 'rm -rf "$RUNNER_TEMP/deploy-ssh"'
+
+
+def test_rollback_smoke_tests_the_environment(rollback_job: dict[str, Any]) -> None:
+    smoke = step_named(rollback_job, "Smoke-test")
+    assert smoke["run"].startswith('python3 scripts/smoke_deploy.py "$URL"')
+    names = [step.get("name", step.get("uses")) for step in rollback_job["steps"]]
+    assert names.index(smoke["name"]) > names.index(
+        step_named(rollback_job, "Roll back over SSH")["name"]
+    )
+
+
+# --- Pipelines run with pipefail (#157 review round 2) --------------------------------
+
+
+def has_pipeline(script: str) -> bool:
+    """A `|` that pipes, outside quotes, comments, `||` and case patterns' `a | b)`."""
+    for line in script.splitlines():
+        code = re.sub(r"\"(?:[^\"\\]|\\.)*\"|'[^']*'", "", line).split(" #")[0]
+        if code.lstrip().startswith("#"):
+            continue
+        code = code.replace("||", "")
+        if re.search(r"^\s*[\w*=-]+(\s*\|\s*[\w*=-]+)+\)", code):  # a case pattern
+            continue
+        if "|" in code:
+            return True
+    return False
+
+
+def test_has_pipeline_reads_scripts_right() -> None:
+    assert has_pipeline('ssh x "a" | tee f')
+    assert has_pipeline("docker save x | gzip > y")
+    assert not has_pipeline("a || b")
+    assert not has_pipeline('echo "| a | b |"')
+    assert not has_pipeline("  from_tag=* | tag=*) echo x ;;")
+    assert not has_pipeline("# a | b")
+
+
+@pytest.mark.parametrize("path", all_workflows(), ids=lambda p: p.name)
+def test_every_step_with_a_pipeline_runs_with_pipefail(path: Path) -> None:
+    """GitHub runs a step with no shell as `bash -e {0}`: a pipeline then takes its last
+    command's status, so `ssh … | tee` hides a failed request. Such steps need `shell: bash`
+    (`-eo pipefail`), on the step or as a default."""
+    for job_name, job in load_workflow(path)["jobs"].items():
+        for step in job.get("steps", []):
+            if "run" in step and has_pipeline(step["run"]):
+                assert step["_shell"] == "bash", (path.name, job_name, step.get("name"))
+
+
+def test_rollback_and_deploy_prod_default_to_bash(
+    rollback_workflow: dict[Any, Any], prod_workflow: dict[Any, Any]
+) -> None:
+    assert rollback_workflow["defaults"] == {"run": {"shell": "bash"}}
+    assert prod_workflow["defaults"] == {"run": {"shell": "bash"}}
+
+
+FAKE_SSH_EXITS = r"""#!/usr/bin/env bash
+# Fake ssh for the rollback step: prints $ANSWER, exits $SSH_RC.
+echo "${*: -1}" >> "$SSH_LOG"
+printf '%b' "$ANSWER"
+exit "$SSH_RC"
+"""
+
+
+@pytest.mark.parametrize(
+    ("rc", "answer"),
+    [
+        (1, "focus-ci: FAILED: dev runs a now, not the expected b\n"),
+        (1, f"{RESULT}\n"),  # even a result line can't turn a failed request green
+        (2, "focus-ci: refused: not a request this key can make\n"),
+        (255, ""),
+    ],
+)
+def test_rollback_step_fails_when_the_server_does(
+    rollback_job: dict[str, Any], tmp_path: Path, rc: int, answer: str
+) -> None:
+    """A failed or refused server rollback turns the step red (pipefail), so the summary
+    reports a failure, not "rolled back"."""
+    step = step_named(rollback_job, "Roll back over SSH")
+    env = {
+        "TAG": "",
+        "EXPECT": DIGEST,
+        "SSH_CONFIG": "/dev/null",
+        "SSH_LOG": str(tmp_path / "ssh.log"),
+        "RUNNER_TEMP": str(tmp_path),
+        "ANSWER": answer,
+        "SSH_RC": str(rc),
+    }
+    result, output, _ = run_step(step, tmp_path, env, FAKE_SSH_EXITS, "ssh")
+    assert result.returncode == rc, result
+    assert output.read_text() == ""
+
+
+@pytest.mark.parametrize(
+    ("target", "outcome", "says", "never"),
+    [
+        ("dev", "failure", "The rollback failed", "marked as rolled back from"),
+        ("prod", "failure", "The rollback failed", "marked as rolled back from"),
+        ("dev", "success", "is marked as rolled back from on dev", "The rollback failed"),
+        ("prod", "success", "rolled back, smoke tests", "marked as rolled back from"),
+    ],
+)
+def test_rollback_summary_reports_a_failed_rollback_as_failed(
+    rollback_job: dict[str, Any], tmp_path: Path, target: str, outcome: str, says: str, never: str
+) -> None:
+    step = step_named(rollback_job, "Summary")
+    env = {
+        "TARGET_ENV": target,
+        "TAG": "",
+        "URL": "https://dev.ineedtofoc.us",
+        "RUNNER_TEMP": str(tmp_path),
+        "FROM_TAG": SHA,
+        "FROM_DIGEST": DIGEST,
+        "TO_TAG": THIRD_SHA if outcome == "success" else "",
+        "TO_DIGEST": OTHER_DIGEST if outcome == "success" else "",
+        "ROLLBACK_OUTCOME": outcome,
+        "SMOKE_OUTCOME": "success" if outcome == "success" else "skipped",
+    }
+    result, _, summary = run_step(step, tmp_path, env, "", "unused")
+    assert result.returncode == 0, result
+    text = summary.read_text()
+    assert f"### Roll back {target}: {'rolled back' if outcome == 'success' else 'failure'}" in text
+    assert says in text and never not in text

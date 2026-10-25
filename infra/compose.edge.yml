@@ -14,7 +14,9 @@ name: focus-edge
 
 services:
   caddy:
-    image: caddy:2.11.4-alpine
+    # Pinned by tag and digest (#170), like every image but the app's: install.sh pulls
+    # exactly these bytes. Bumping it: _docs/deployment.md, Dependency images.
+    image: caddy:2.11.4-alpine@sha256:6aeddd44c3078b0f9a35206472a11420648a79c184603ef95957d0a20044cb2b
     ports:
       - "80:80"
       - "443:443"

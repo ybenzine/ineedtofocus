@@ -1,5 +1,9 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "4",
+    "CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS": "4"
+  },
   "permissions": {
     "allow": [
       "Edit(/**)",
@@ -31,7 +35,13 @@
       "Bash(gh api *)",
       "Bash(gh run *)",
       "Bash(gh repo view *)",
-      "Bash(gh auth status *)",
+      "Bash(gh auth status)",
+      "Bash(gh auth status --active)",
+      "Bash(gh auth status -a)",
+      "Bash(gh auth status --hostname github.com)",
+      "Bash(gh auth status -h github.com)",
+      "Bash(gh auth status --active --hostname github.com)",
+      "Bash(git config --show-origin --get-all credential.https://github.com.helper)",
       "Bash(gh workflow view *)",
       "Bash(gh workflow list *)",
       "Bash(make *)",
@@ -87,6 +97,22 @@
       "Bash(curl * http://127.0.0.1:4318/*)",
       "Bash(curl http://127.0.0.1/*)",
       "Bash(curl * http://127.0.0.1/*)",
+      "Bash(curl http://localhost:8010/*)",
+      "Bash(curl * http://localhost:8010/*)",
+      "Bash(curl http://localhost:5183/*)",
+      "Bash(curl * http://localhost:5183/*)",
+      "Bash(curl http://localhost:3010/*)",
+      "Bash(curl * http://localhost:3010/*)",
+      "Bash(curl http://localhost:4328/*)",
+      "Bash(curl * http://localhost:4328/*)",
+      "Bash(curl http://127.0.0.1:8010/*)",
+      "Bash(curl * http://127.0.0.1:8010/*)",
+      "Bash(curl http://127.0.0.1:5183/*)",
+      "Bash(curl * http://127.0.0.1:5183/*)",
+      "Bash(curl http://127.0.0.1:3010/*)",
+      "Bash(curl * http://127.0.0.1:3010/*)",
+      "Bash(curl http://127.0.0.1:4328/*)",
+      "Bash(curl * http://127.0.0.1:4328/*)",
       "Bash(curl https://dev.ineedtofoc.us/*)",
       "Bash(curl * https://dev.ineedtofoc.us/*)",
       "Bash(curl https://ineedtofoc.us/*)",
@@ -234,7 +260,18 @@
       "Bash(gh secret delete *)",
       "Bash(gh secret remove *)",
       "Bash(gh pr merge * --admin*)",
-      "Bash(gh pr merge --admin*)"
+      "Bash(gh pr merge --admin*)",
+      "Bash(gh auth status *--show-token*)",
+      "Bash(gh auth status -t*)",
+      "Bash(gh auth status * -t*)",
+      "Bash(gh auth status *-at*)",
+      "Bash(gh auth token*)",
+      "Bash(gh auth git-credential*)",
+      "Bash(git credential fill*)",
+      "Bash(git credential-*)",
+      "Bash(security find-generic-password*)",
+      "Bash(security find-internet-password*)",
+      "Bash(security dump-keychain*)"
     ]
   }
 }

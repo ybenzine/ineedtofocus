@@ -40,7 +40,76 @@ Write every issue comment, PR body and review body to a file under `/tmp` (outsi
 - `gh issue create --body-file <file>` and `gh issue edit <n> --body-file <file>`
 - REST fallback: `gh api -X POST <path> -F body=@<file>`
 
+Name each body file with a per-issue prefix, `<agent-abbrev><n>-` (`do34-pr.md`, `fe203-comment.md`), where `<agent-abbrev>` is `pm`, `be`, `fe`, `qa`, `do`, `rev` or `oc`; never a generic `pr.md`. `/tmp` is shared by every session, and a session's scratchpad by all of that session's subagents, so a generic name once posted another issue's body (#206 went up with #199's `Closes #199`). Before posting, check that the body names the right issue (`Closes #<n>` in a PR body).
+
 Never pass a body inline (`--body "…"`, `-b "…"`, `-f body=…`). The permission rules in `.claude/settings.json` match the whole command text, so a word such as "protection", "environments", "dispatches" or "private=" in an inline body triggers an ask or deny rule and stalls an unattended run.
+
+## Parallel sessions: one worktree each
+
+**One git worktree per parallel Claude Code session** (#83). Two sessions never share a folder. A checkout has one current branch and one `.env`, so on 2026-10-23, when M2 and M3 ran in the same folder, the M3 session's `git switch` moved the M2 session's branch too, and both sessions' `make up` drove the same Compose project and ports. Running milestones in parallel (`/work-backlog M2` in one session, `/work-backlog M3` in another) therefore takes one worktree per session, each with its own local stack.
+
+**Create it** from the main checkout, in your own terminal (`<name>` names the session, e.g. `m3`):
+
+```sh
+git fetch origin
+git worktree add --detach ../ineedtofocus-<name> origin/main
+cp .env.example ../ineedtofocus-<name>/.env   # then set its project name and ports (below)
+cd ../ineedtofocus-<name>
+claude-focus                                  # then accept the workspace trust prompt
+```
+
+- `--detach` because a branch can be checked out in only one worktree. Agents create their `<agent>/<n>-<slug>` branches from there as usual.
+- A worktree shares the repository (commits, branches, remotes and the stash) with the main checkout, but has its own files, current branch and git-ignored files: `.env`, `.claude/settings.local.json`, `backend/.venv` and `frontend/node_modules` (the first `make` target that needs them installs them).
+- Start the session with `claude-focus`, so it acts as the agent account ([infra/github/README.md](../infra/github/README.md#agent-account-127)), and accept the trust prompt: trust is per folder, and the rules in `.claude/settings.json` apply only once it's accepted. Run git from the worktree's root ([AGENTS.md](../AGENTS.md#conventions)).
+
+**Its own local stack.** The worktree's `.env` sets its own Compose project name, which keeps the containers, network, database volume and app image apart, and its own host ports. The main checkout keeps the defaults; the second worktree adds 10 to each port (`.env.example` lists the lines):
+
+| Setting | Main checkout | Second worktree |
+|---|---|---|
+| `COMPOSE_PROJECT_NAME` | `focus-local` | `focus-<name>`, e.g. `focus-m3` |
+| `APP_PORT` | 8000 | 8010 |
+| `GRAFANA_PORT` | 3000 | 3010 |
+| `OTLP_HTTP_PORT` / `OTLP_GRPC_PORT` | 4318 / 4317 | 4328 / 4327 |
+| `POSTGRES_PORT` | 5432 | 5442 |
+| `DATABASE_URL` (backend run on the host) | `…@localhost:5432/focus` | `…@localhost:5442/focus` |
+| Vite dev server (no `.env` variable) | 5173 | 5183: `APP_PORT=8010 npm --prefix frontend run dev -- --port 5183` |
+
+- `make up` prints the Compose project and the URLs Compose actually published (`scripts/stack-urls.sh`). `make check-stack` reads `APP_PORT` and `GRAFANA_PORT` from `.env`. It and `scripts/stack-urls.sh app` take `export NAME=value` lines there as well as `NAME=value`, as Compose does.
+- `make test` and `make test-e2e` test this checkout's app: the port its stack publishes, or its `APP_PORT` while it's down. `PLAYWRIGHT_BASE_URL` still overrides that. The log-privacy e2e test reads `docker compose logs`, which picks up `COMPOSE_PROJECT_NAME` from `.env`.
+- The backend integration tests take `DATABASE_URL` from the shell, never from `.env`. Without it they use the Postgres on port 5432, whichever checkout runs it, but each test creates and drops its own database, so that's harmless. To use the worktree's own: `DATABASE_URL=postgresql+asyncpg://focus:focus@localhost:5442/focus make test`.
+- `.claude/settings.json` pre-approves `curl` on the second worktree's ports (8010, 5183, 3010, 4328, on `localhost` and `127.0.0.1`) as well as the defaults, so its unattended runs don't stall. A third parallel worktree adds 20 to each port and allows its own in its git-ignored `.claude/settings.local.json`, in the same explicit-port form:
+
+  ```json
+  {
+    "permissions": {
+      "allow": [
+        "Bash(curl http://localhost:8020/*)", "Bash(curl * http://localhost:8020/*)",
+        "Bash(curl http://localhost:5193/*)", "Bash(curl * http://localhost:5193/*)",
+        "Bash(curl http://localhost:3020/*)", "Bash(curl * http://localhost:3020/*)",
+        "Bash(curl http://localhost:4338/*)", "Bash(curl * http://localhost:4338/*)",
+        "Bash(curl http://127.0.0.1:8020/*)", "Bash(curl * http://127.0.0.1:8020/*)",
+        "Bash(curl http://127.0.0.1:5193/*)", "Bash(curl * http://127.0.0.1:5193/*)",
+        "Bash(curl http://127.0.0.1:3020/*)", "Bash(curl * http://127.0.0.1:3020/*)",
+        "Bash(curl http://127.0.0.1:4338/*)", "Bash(curl * http://127.0.0.1:4338/*)"
+      ]
+    }
+  }
+  ```
+
+**Subagent worktrees.** A subagent the lead starts with worktree isolation gets a throwaway worktree under `<main checkout>/.claude/worktrees/`, even when the session runs in `../ineedtofocus-<name>`. `.gitignore` ignores that folder (#81), so it can't be committed. Such a worktree has no `.env`, so `make up` there would run as `focus-local` on the default ports and replace the main checkout's stack. A subagent that needs a stack first copies its session's `.env` (`cp <session folder>/.env .env`; the lead names its folder when it delegates). The session's one stack then runs that subagent's code.
+
+A guard catches the subagent that forgets (#188). In a checkout whose path contains `/.claude/worktrees/` and that has no `.env`, `scripts/require-worktree-env.sh` stops `make up`, `make down`, `make logs`, `make check-stack` and `make test-e2e` before Compose runs, with a non-zero exit and the `cp` line above. `make test` skips its e2e step there, saying so, instead of testing the main checkout's stack as if it were the worktree's (it fails when `CI` is set). An explicit `PLAYWRIGHT_BASE_URL` gets past the guard on the e2e targets. With a `.env`, or outside `.claude/worktrees/` (the main checkout, a session worktree, CI's `/home/runner/work/…` checkout), every target behaves as before.
+
+**Remove it** once the session's PRs are merged:
+
+```sh
+cd ../ineedtofocus-<name> && make down        # stop its stack; its database volume stays
+cd ../ineedtofocus
+git worktree remove ../ineedtofocus-<name>    # refuses while it has changes or untracked files
+git worktree prune
+```
+
+`git worktree remove` deletes the folder, git-ignored files such as its `.env` included. The stopped stack's database volume (`focus-<name>_db-data`) stays until it's removed with `docker volume rm`, which asks first: deleting data is a [human gate](#human-gates).
 
 ## Lifecycle of an issue
 
@@ -68,8 +137,8 @@ Never pass a body inline (`--body "…"`, `-b "…"`, `-f body=…`). The permis
 ### 4. Review
 - The **reviewer agent** reads the issue and the PR and posts a review with one line per AC: ✅ met / ❌ not met (why) / ➖ not applicable (why), plus the definition-of-done checks and numbered findings.
 - The review ends with `**Verdict: Approve**` or `**Verdict: Request changes**`, the human-readable signal.
-- The reviewer posts it as a **real GitHub review from the reviewer App's bot** (`scripts/reviewer-review.sh`, which runs `gh pr review --approve` or `--request-changes` with `--body-file`), and the event matches the verdict. All agents act through one GitHub account, which also authors the PRs and so can't approve them; the App is a separate bot identity that can ([infra/github/README.md](../infra/github/README.md#reviewer-github-app-70)). Its approval is what lets the PR merge: `gh pr view <pr> --json reviewDecision` shows `APPROVED`.
-- **Fallback:** if the App's private key is unavailable, the script posts the same body as a comment review from the shared account. A comment can't approve, so the merge waits for Yacine to restore the key (a `⛔ Needs Yacine:` on the issue); the reviewer then posts its review again through the App.
+- The reviewer posts it as a **real GitHub review from the reviewer App's bot** (`scripts/reviewer-review.sh`, which runs `gh pr review --approve` or `--request-changes` with `--body-file`), and the event matches the verdict. All agents act through one GitHub account, `merciful-poseidon` ([infra/github/README.md](../infra/github/README.md#agent-account-127)), which also authors the PRs and so can't approve them; the App is a separate bot identity that can ([infra/github/README.md](../infra/github/README.md#reviewer-github-app-70)). Its approval is what lets the PR merge: `gh pr view <pr> --json reviewDecision` shows `APPROVED`.
+- **Fallback:** if the App's private key is unavailable, the script posts the same body as a comment review from the agent account. A comment can't approve, so the merge waits for Yacine to restore the key (a `⛔ Needs Yacine:` on the issue); the reviewer then posts its review again through the App.
 - On Request changes, the author fixes each numbered point and the reviewer reviews again, for at most three rounds, then one retry on Fable 5.1; after that it's a [human gate](#human-gates) (repeated failure).
 - CI must be green. Branch protection on `main` (#5, #70) requires the five CI checks **and one approving review**, for administrators too. A push after the approval dismisses it, so the reviewer reviews the final commit.
 
@@ -81,7 +150,7 @@ Never pass a body inline (`--body "…"`, `-b "…"`, `-f body=…`). The permis
   > ✅ **\<agent\> agent — done** in #\<pr\>. \<one line on anything notable or follow-ups (#n)\>.
 
 ### 6. Verify
-- Merge to `main` deploys to **dev** automatically (once #28 lands; until then, verification uses the local stack).
+- Merge to `main` deploys to **dev** automatically (#28). QA verifies on the local stack instead when dev is unusable for it (e.g. during a [fault-injection](observability.md#alert-trigger-fault-injection) drill on dev).
 - For `type:feature` issues the QA agent runs the feature's flow and comments `🧪 qa agent — verified on dev` (or `verified locally`), or files a `bug` issue.
 
 ### 7. Accept
@@ -96,14 +165,16 @@ Agents stop and ask Yacine **only** for these: they comment `⛔ Needs Yacine: <
 
 | Gate | Examples |
 |---|---|
-| **Production deploys** | Approving the prod deploy workflow run. Exception: the on-call agent may roll prod back to the last known-good tag without approval. The gate is enforced by credentials, not trust: see below |
+| **Production deploys** | Approving the prod deploy workflow run. Exception: the on-call agent may roll prod back to the last known-good tag without approval. The gate is enforced by credentials, not trust: agents' own account can't approve it (see below) |
 | **`owner:human` tasks** | DigitalOcean, Route 53, Grafana Cloud, GitHub secrets/environments, API keys |
 | **Product decisions beyond agreed scope** | Changing or cutting a requirement in `product_decisions.md`, changing the MVP cut order, adding a feature |
 | **Cost** | Anything that spends money (bigger Droplet, paid services) |
 | **Irreversible actions** | Deleting data, servers or repos; force-pushing; rewriting history; destroying volumes |
 | **Repeated failure** | The same PR fails review three rounds in a row and then one more after a Fable 5.1 retry (see [agents.md → Models](agents.md#models)), or CI is still red after three fix attempts — stop and report instead of looping |
 
-**Why agents can merge workflow changes safely:** prod credentials (the prod SSH deploy key and prod secrets) exist **only** as secrets of the GitHub `production` environment, which requires Yacine's approval for every job that uses it. The dev deploy key lives in a `dev` environment and is restricted on the server (SSH forced command) to deploying and rolling back dev. The prod **rollback** key lives in a separate `rollback` environment (no reviewer, so on-call can use it at any hour; limited to the `main` branch) and is restricted by forced command to restoring a recorded known-good tag — it can't deploy anything new. Non-deploy secrets follow the same rule: the Claude API key and the read-only Grafana token used by the on-call workflow (#35, #32) live in an `oncall` environment (no reviewer, `main` branch only), and the Grafana Cloud OTLP token (#32) lives only in the server's per-environment `.env` files, read by the collector. No credential is stored at repo level. A workflow edit merged by an agent therefore can't put new code on prod without Yacine's approval. Set up in #28–#30.
+**Why agents can merge workflow changes safely:** prod credentials (the prod SSH deploy key and prod secrets) exist **only** as secrets of the GitHub `production` environment, which requires Yacine's approval for every job that uses it. The dev deploy key lives in a `dev` environment and is restricted on the server (SSH forced command) to deploying and rolling back dev. The prod **rollback** key lives in a separate `rollback` environment (no reviewer, so on-call can use it at any hour; limited to the `main` branch) and is restricted by forced command to restoring a recorded known-good tag — it can't deploy anything new. Non-deploy secrets follow the same rule: the Claude API key, the read-only Grafana token, the reviewer App's private key and the on-call App's private key used by the on-call workflow (#35, #32, #70) live in an `oncall` environment (no reviewer, `main` branch only), and the Grafana Cloud OTLP token (#32) lives only in the server's per-environment `.env` files, read by the collector. The token Grafana uses to wake on-call (#34) goes the other way: it lives only in Grafana Cloud's contact point. It's limited to this repo with Contents write, the only permission GitHub's dispatch endpoint accepts. It has no Deployments, Actions, Administration, Environments or Workflows permission, so it reads no environment's secrets and can't approve or start a deploy ([observability.md](observability.md#the-token)). No credential is stored at repo level. A workflow edit merged by an agent therefore can't put new code on prod without Yacine's approval. Set up in #28–#30 (the deploy and rollback environments), #32 (the OTLP token in the server `.env` files) and #35 (the `oncall` environment). The full list, with what reads each credential: [deployment.md → Credential separation](deployment.md#credential-separation).
+
+**Why that approval holds against agents (#127):** agents act as the machine account `merciful-poseidon`, never as Yacine. It has write access to the repo and the board, which the whole loop needs (issues, PRs, merges, the board, the `rollback` workflow), but it isn't an administrator and isn't a reviewer of the `production` environment. Only listed reviewers can approve a deployment, only administrators can edit an environment or its protection rules, and the API never returns a secret's value. So no command run with the agent account can approve a prod deploy, remove the reviewer or read the prod key. Yacine is the only `production` reviewer, and administrators can't bypass the rule. The account can most likely **overwrite** the environment's secrets, since GitHub lets collaborators with write access set them. That could break prod deploys but not get one through: every run still waits for Yacine's approval, and a replaced SSH key can't log in to the server. The rules in `.claude/settings.json` stay as a second line: #126 denies starting `deploy-prod` and approving through `pending_deployments` or `approveDeployments`, and #52 denies `gh secret set` and asks before `gh api` calls on environments. Sessions start with `claude-focus` so `gh` and `git push` use that account; setup, checks and the residual risk (Yacine's own login on the same machine) are in [infra/github/README.md](../infra/github/README.md#agent-account-127).
 
 ## Definition of done
 
@@ -126,4 +197,4 @@ An issue is done when **all** of these hold:
 
 ## Incidents
 
-Production alerts wake the **on-call agent** (see [agents.md](agents.md)). It opens a `type:incident` issue, follows the matching runbook in [runbooks/](runbooks/), and either rolls back to the last known-good release or opens a fix PR with a regression test. Fix PRs go through the normal review and merge above (merging deploys the fix to dev); getting the fix to prod is a prod deploy, so Yacine approves it. A rollback to a known-good tag needs no approval.
+Production alerts wake the **on-call agent** (see [agents.md](agents.md)): Grafana dispatches the alert to GitHub, and `.github/workflows/oncall.yml` runs the agent headless ([observability.md → On-call agent](observability.md#on-call-agent-35)). The workflow opens or updates a `type:incident` issue, locked to collaborators. The agent follows the matching runbook in [runbooks/](runbooks/) and decides: roll back to the last known-good release, or open a fix PR with a regression test. Its session only reads; the workflow does every write, from files it checks first. A fix PR goes through the normal review and merge above, with `Refs #<incident>`: the workflow pushes and opens it as the on-call App, runs the reviewer agent as a separate session, posts that review through the reviewer App, and on Approve and green CI merges it as the on-call App, which deploys the fix to dev. Getting the fix to prod is a prod deploy, so Yacine starts and approves it. A rollback to a known-good tag needs no approval, at most once per incident. The incident closes when the alert resolves and the summary is posted.

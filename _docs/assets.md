@@ -45,3 +45,11 @@ ebur128=peak=true -f null -`). That sits below the alerts at background volume 5
   `AudioBufferSourceNode`.
 - **Listening check:** Yacine listened on 2026-10-23 and accepted it for the MVP; a real light-rain
   recording replaces it in #135.
+
+## Typeface (#213)
+
+| File                                                                | Used for                                                   | Source                                                                      | License                   |
+| ------------------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------- |
+| `@fontsource-variable/inter` (npm), `inter-latin-wght-normal.woff2` | The app's text (Inter, 400-700, tabular figures for times) | [Inter](https://rsms.me/inter/) by Rasmus Andersson, packaged by Fontsource | SIL Open Font License 1.1 |
+
+`frontend/src/index.css` loads only the Latin subset through its own `@font-face`; the service worker precaches the `.woff2`. Other scripts fall back to `system-ui`.

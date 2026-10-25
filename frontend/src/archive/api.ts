@@ -5,6 +5,7 @@
 import type { ApiResult } from '../sync/api.ts'
 import { TAGS, type Mode, type Tag } from '../timer/config.ts'
 import type { SessionStatus } from '../timer/engine.ts'
+import { tracedFetch } from '../telemetry/tracedFetch.ts'
 
 export interface ArchivedSession {
   id: string
@@ -55,7 +56,7 @@ export class HttpArchiveApi implements ArchiveApi {
   readonly #fetch: typeof fetch
 
   constructor(options: { fetch?: typeof fetch } = {}) {
-    this.#fetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init))
+    this.#fetch = options.fetch ?? tracedFetch
   }
 
   async archive(id: string): Promise<ApiResult<string>> {
