@@ -34,6 +34,10 @@ export interface HistorySession {
   indicator: SyncIndicator
   /** True for a session on the device that the server doesn't have yet (not for an edit). */
   unsaved?: boolean
+  /** True for a session on the device that the server refused ("Couldn't sync"). */
+  rejected?: boolean
+  /** True while the server refuses this session's queued tag/goal edit ("Couldn't sync"). */
+  editRejected?: boolean
 }
 
 export interface HistoryData {
