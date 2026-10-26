@@ -14,7 +14,10 @@
 // accepted send, a fresh server copy) that is applied to what is stored right now, under a Web
 // Lock (unlocked where there are none), not to this tab's older copy. So `pending` merges per
 // field: two tabs' edits to different fields both survive, and for the same field the later
-// edit wins (#129).
+// edit wins (#129). An edit itself is merged into the stored cache synchronously, in the task
+// of the call, with no lock: it is one localStorage read-modify-write, which no other tab's can
+// interleave with, and waiting for the lock would leave a window in which a reload or a closing
+// tab loses it (#279).
 
 import {
   DEFAULT_SETTINGS,
@@ -165,7 +168,10 @@ export class SettingsStore {
    * written since) under the lock. What other tabs have pending is taken into this tab's state
    * once no write of ours is outstanding.
    */
-  #commit(change: (state: SettingsState) => Partial<SettingsState>): void {
+  #commit(
+    change: (state: SettingsState) => Partial<SettingsState>,
+    { immediate = false }: { immediate?: boolean } = {},
+  ): void {
     if (!this.#live()) return
     this.#state = { ...this.#state, ...change(this.#state) }
     this.#notify()
@@ -184,7 +190,10 @@ export class SettingsStore {
       }
     }
     const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-    if (!locks) {
+    // An edit is merged and stored in this one task: a localStorage read-modify-write can't be
+    // interleaved with another tab's (every merge is one synchronous task, locked or not), and a
+    // reload or close right after the edit finds it in the cache (#279).
+    if (!locks || immediate) {
       merge()
       return
     }
@@ -280,10 +289,13 @@ export class SettingsStore {
     }
     if (Object.keys(changed).length === 0) return
     this.#revision++
-    this.#commit((state) => ({
-      values: { ...state.values, ...changed },
-      pending: { ...state.pending, ...changed },
-    }))
+    this.#commit(
+      (state) => ({
+        values: { ...state.values, ...changed },
+        pending: { ...state.pending, ...changed },
+      }),
+      { immediate: true },
+    )
     void this.flush()
   }
 

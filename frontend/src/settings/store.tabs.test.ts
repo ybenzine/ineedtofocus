@@ -170,10 +170,10 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
     b.update({ background_volume: 70 })
     await b.flush() // the send fails: offline
     expect(stored().pending).toEqual({ week_start_day: 3, background_volume: 70 })
-    expect(held).toContain(SETTINGS_LOCK)
     server.online = true
     await b.flush()
     expect(server.value).toMatchObject({ week_start_day: 3, background_volume: 70 })
+    expect(held).toContain(SETTINGS_LOCK) // the accepted send is applied under the lock
   })
 
   it('sends the merged cache, not its own older copy, when the lock grants later', async () => {
@@ -197,6 +197,34 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
     expect(patches.at(-1)).toEqual({ background_volume: 70 })
     expect(server.value).toMatchObject({ week_start_day: 5, background_volume: 70 })
     expect(b.values.week_start_day).toBe(5)
+  })
+
+  it('has the edit in the cache the moment update() returns, even when the lock grants later (#279)', async () => {
+    deferredLocks()
+    const { api } = fakeServer()
+    const a = openTab(api)
+    a.update({ theme: 'dark' })
+    // Read synchronously: a reload right now must still find the theme (theme-init.js reads it).
+    expect(stored().values.theme).toBe('dark')
+    expect(stored().pending).toEqual({ theme: 'dark' })
+    await a.flush() // let the send finish before the cache is cleared
+  })
+
+  it("keeps another tab's pending edit and the later edit per field with the synchronous write (#279)", async () => {
+    deferredLocks()
+    const { server, api } = fakeServer()
+    server.online = false
+    const a = openTab(api)
+    const b = openTab(api)
+    a.update({ week_start_day: 3 })
+    b.update({ background_volume: 70 }) // b never saw a's edit
+    expect(stored().pending).toEqual({ week_start_day: 3, background_volume: 70 })
+    b.update({ week_start_day: 5 })
+    expect(stored().pending).toEqual({ week_start_day: 5, background_volume: 70 })
+    await Promise.all([a.flush(), b.flush()]) // the sends fail: offline
+    server.online = true
+    await a.flush()
+    expect(server.value).toMatchObject({ week_start_day: 5, background_volume: 70 })
   })
 
   it('still merges, and keeps counting, when the lock request is refused', async () => {
