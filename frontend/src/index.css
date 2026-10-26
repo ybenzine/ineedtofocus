@@ -614,11 +614,12 @@ main.focus-screen {
 
 .timer-screen,
 .summary {
+  --column-gap: 1rem;
   width: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1rem;
+  gap: var(--column-gap);
   text-align: center;
 }
 
@@ -626,7 +627,7 @@ main.focus-screen {
    is empty it would add a flex gap of its own; this takes it back. Not display: none, which
    would drop the live region. */
 .timer-screen > [role='status']:empty {
-  margin-block-start: -1rem;
+  margin-block-start: calc(-1 * var(--column-gap));
 }
 
 .timer-mode {

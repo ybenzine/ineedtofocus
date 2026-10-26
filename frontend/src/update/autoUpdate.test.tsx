@@ -7,7 +7,7 @@ import {
   type AutoUpdaterOptions,
   type RegisterCallbacks,
 } from './autoUpdate.ts'
-import { isViewBusy, onViewChange, setViewBusy } from './idle.ts'
+import { isViewBusy, onViewChange, registerMemoryHolder, setViewBusy } from './idle.ts'
 
 // A running session as the timer stores it; only its shape matters here.
 const RUNNING = JSON.stringify({
@@ -155,6 +155,25 @@ describe('auto update when idle', () => {
     await t.waiting()
     await vi.advanceTimersByTimeAsync(60_000)
     expect(t.activate).not.toHaveBeenCalled()
+  })
+
+  it('a record held only in memory blocks the reload, even back on setup, until it is handed over (#286)', async () => {
+    // Both writes failed: nothing in localStorage, the finished record lives in the tab.
+    let held = true
+    const unregister = registerMemoryHolder(() => held)
+    try {
+      const t = (h = setup())
+      await t.waiting()
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(t.activate).not.toHaveBeenCalled()
+      expect(t.reload).not.toHaveBeenCalled()
+
+      held = false // handed over
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(t.activate).toHaveBeenCalledTimes(1)
+    } finally {
+      unregister()
+    }
   })
 
   it('a busy tab does not reload when another tab activated the worker', async () => {

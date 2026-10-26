@@ -24,6 +24,23 @@ export function onViewChange(listener: Listener): () => void {
   return () => listeners.delete(listener)
 }
 
+const memoryHolders = new Set<() => boolean>()
+
+/**
+ * Registers a check for data that exists only in this tab's memory (a timer or finished record
+ * whose writes failed, #245, #286). Other tabs can't see it, so the updater asks it directly:
+ * a reload of this tab would lose it. Returns the unregister function.
+ */
+export function registerMemoryHolder(holds: () => boolean): () => void {
+  memoryHolders.add(holds)
+  return () => memoryHolders.delete(holds)
+}
+
+export function holdsMemoryOnlyData(): boolean {
+  for (const holds of memoryHolders) if (holds()) return true
+  return false
+}
+
 /** Work to send before a reload (settings edits, the sync queue). Never needs to throw. */
 export function registerUpdateFlush(flush: () => Promise<unknown>): () => void {
   flushers.add(flush)

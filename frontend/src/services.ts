@@ -110,7 +110,9 @@ export function createAppServices(currentOwner: () => string | null = signedInUs
         // The recorded owner, else the one captured at the first save attempt (the record
         // could not be written, #286), else whoever is signed in. Not `ownerOf()` alone:
         // `save` and `isForeignSession` rely on it reporting a missing key.
-        const owner = active.ownerOf(record.id) ?? active.firstOwnerOf(record.id)
+        // `null` is a recorded "nobody", kept as it is; only `undefined` (no record) falls through.
+        const recorded = active.ownerOf(record.id)
+        const owner = recorded !== undefined ? recorded : active.firstOwnerOf(record.id)
         return owner === undefined ? currentOwner() : owner
       },
       afterSave: () => {

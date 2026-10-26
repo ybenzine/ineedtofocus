@@ -61,3 +61,12 @@ describe('danger buttons keep their colour (#238)', () => {
     },
   )
 })
+
+describe('timer screen status gap (#286)', () => {
+  it('takes back the flex gap of the empty status paragraph, without display: none', () => {
+    const empty = rule(".timer-screen > \\[role='status'\\]:empty")
+    expect(empty).toMatch(/margin-block-start:\s*calc\(-1 \* var\(--column-gap\)\)/)
+    expect(empty).not.toMatch(/display:\s*none/)
+    expect(rule('.timer-screen,\n.summary')).toMatch(/gap:\s*var\(--column-gap\)/)
+  })
+})

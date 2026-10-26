@@ -278,9 +278,10 @@ describe('a memory-only session that ends after a 401 (#286)', () => {
     const services = createAppServices(() => who.owner)
     const device = new IndexedDbSessionStore()
     stores.push(device)
+    let failing: ReturnType<typeof vi.spyOn> | undefined
     try {
       // The store is failing for the whole test: the owner record is never written.
-      const failing = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      failing = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
         throw new Error('QuotaExceededError')
       })
       const started = await services.controller.start({
@@ -300,14 +301,45 @@ describe('a memory-only session that ends after a 401 (#286)', () => {
       expect(await device.countUnsynced(null)).toEqual({ sessions: 0, edits: 0 })
 
       // Alice is back: it syncs to her account.
-      failing.mockRestore()
+      failing.mockRestore() // the store works again (also restored in `finally`)
       who.owner = ALICE
       await services.sync?.syncNow()
       expect(server.sessions.size).toBe(1)
     } finally {
+      failing?.mockRestore()
       vi.useRealTimers()
       vi.unstubAllGlobals()
       await device.clearOwner(ALICE)
+    }
+  })
+})
+
+describe('a session recorded as owned by nobody stays that way (#286)', () => {
+  it('is not filed under the user signed in another tab when it ends there', async () => {
+    const aloneServices = createAppServices(() => null)
+    const bobServices = createAppServices(() => BOB)
+    const device = new IndexedDbSessionStore()
+    stores.push(device)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.UTC(2026, 9, 25, 9, 0))
+    try {
+      // Tab 1: nobody signed in; the owner is recorded as null.
+      await aloneServices.controller.start({
+        config: { mode: 'unlimited', reminderMinutes: null },
+        tag: 'work',
+        goal: null,
+      })
+      // Tab 2: Bob is signed in; it follows the stored session and stops it.
+      await bobServices.controller.restore()
+      vi.setSystemTime(Date.UTC(2026, 9, 25, 9, 10))
+      await bobServices.controller.stop()
+      await vi.waitFor(async () => {
+        expect(await device.countUnsynced(null)).toEqual({ sessions: 1, edits: 0 })
+      })
+      expect(await device.countUnsynced(BOB)).toEqual({ sessions: 0, edits: 0 })
+    } finally {
+      vi.useRealTimers()
+      await device.clearOwner(BOB)
     }
   })
 })
