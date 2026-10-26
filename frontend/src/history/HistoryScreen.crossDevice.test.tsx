@@ -312,6 +312,67 @@ describe('a session missing from the server is hidden first, deleted on confirma
     expect(await store.get(record.id)).toBeUndefined()
   })
 
+  it('#258 a marked session whose edit the server refused is hidden (no Discard change) and still counted', async () => {
+    const record = await syncedSession({ goal: 'Mine' })
+    await store.edit('me', record.id, { goal: 'Late edit' })
+    server.sessions.delete(record.id)
+    await engine.syncNow()
+    expect((await store.get(record.id))?.editState).toBe('rejected')
+    await loadPair()
+
+    // Marked and hidden: the row, and so Discard change, is out of reach...
+    expect((await store.get(record.id))?.goneOnServer).toEqual(expect.any(Number))
+    history.offline = true
+    renderScreen()
+    await screen.findByText(/Showing what’s saved on this device/)
+    expect(screen.queryByText('Late edit')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Discard change/ })).not.toBeInTheDocument()
+    // ...but the refused edit is still counted at sign-out, until the next pair deletes the copy.
+    expect(await store.countUnsynced('me')).toEqual({ sessions: 0, edits: 1 })
+    history.offline = false
+    await loadPair()
+    expect(await store.get(record.id)).toBeUndefined()
+    expect(await store.countUnsynced('me')).toEqual({ sessions: 0, edits: 0 })
+  })
+
+  it('#258 a load that started before the mark was written does not confirm it', async () => {
+    const record = await syncedSession()
+    server.sessions.delete(record.id)
+    // Tab A's History request starts first and its answer is held back.
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const slow = new ServerHistory(server)
+    const slowGet = slow.get.bind(slow)
+    slow.get = async (query) => {
+      const answer = await slowGet(query)
+      await gate
+      return answer
+    }
+    const tabA = render(
+      <HistoryScreen
+        api={slow}
+        timeZone="UTC"
+        now={() => NOW}
+        ownerId="me"
+        sessions={store}
+        archiveApi={new HttpArchiveApi({ fetch: server.fetch })}
+      />,
+    )
+    await waitFor(() => expect(slow.answers.length).toBe(1))
+    // Tab B runs a whole pair meanwhile and writes the mark, after A's request started.
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    await loadPair()
+    expect((await store.get(record.id))?.goneOnServer).toEqual(expect.any(Number))
+
+    release()
+    await act(async () => {
+      await Promise.all(slow.answers)
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    })
+    tabA.unmount()
+    expect(await store.get(record.id)).toBeDefined()
+  })
+
   it('ac3 a session that reappears in the History answer loses its mark and shows again', async () => {
     const record = await syncedSession({ goal: 'Backup restored' })
     const kept = server.sessions.get(record.id)

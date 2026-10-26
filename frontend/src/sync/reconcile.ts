@@ -49,9 +49,12 @@ export async function reconcileMissing(
   owner: string,
   missing: readonly string[],
   /** Ids to leave alone, asked per id just before each write. */
-  isSkipped: (id: string) => boolean = () => false,
-  /** When this load's History request started (ms since the epoch). */
-  loadStartedAt: number = Date.now(),
+  isSkipped: (id: string) => boolean,
+  /**
+   * When this load's History request started (ms since the epoch). Required: a default taken
+   * after the answer could confirm a mark written by a pair that overlapped this one.
+   */
+  loadStartedAt: number,
 ): Promise<void> {
   if (missing.length === 0) return
   const result = await archiveApi.list()
@@ -83,9 +86,9 @@ export async function reconcileArchivedGone(
   store: SessionStore,
   owner: string,
   listed: readonly Pick<ArchivedSession, 'id'>[],
-  isSkipped: (id: string) => boolean = () => false,
-  /** When this load's Archive request started (ms since the epoch). */
-  loadStartedAt: number = Date.now(),
+  isSkipped: (id: string) => boolean,
+  /** When this load's Archive request started (ms since the epoch). Required, as above. */
+  loadStartedAt: number,
 ): Promise<void> {
   const present = new Set(listed.map((s) => s.id))
   const device = await store.list(owner)

@@ -222,20 +222,31 @@ describe('ArchiveScreen', () => {
       expect((await store.get(record.id))?.goneOnServer ?? null).toBeNull()
     })
 
-    it('never touches device-only archived or unsynced sessions', async () => {
+    it('never marks or deletes device-only archived sessions, unsynced ones or ones with a pending edit', async () => {
+      // Archived on this device only (rejected): the server never had it.
       const rejected = makeRecord({ goal: 'Refused' })
       await store.save(rejected, 'me')
       await store.markRejected(rejected.id, null)
       await store.archiveOnDevice('me', rejected.id)
+      // Archived and synced, but with an edit waiting to be sent: it is never removed.
+      const edited = await archived('Edited')
+      await store.edit('me', edited.id, { goal: 'Edited again' })
+      server.sessions.delete(edited.id)
       const pending = makeRecord({ goal: 'Pending' })
       await store.save(pending, 'me')
-      for (let i = 0; i < 2; i++) {
-        renderScreen().unmount()
+      for (let i = 0; i < 3; i++) {
+        const view = renderScreen()
+        await screen.findByText('Refused')
         await new Promise((r) => setTimeout(r, 20))
+        view.unmount()
       }
-      expect((await store.get(rejected.id))?.goneOnServer ?? null).toBeNull()
+      const stored = await store.get(rejected.id)
+      expect(stored?.goneOnServer ?? null).toBeNull()
+      expect(stored?.syncState).toBe('rejected')
+      expect(stored?.archivedAt).not.toBeNull()
+      expect((await store.get(edited.id))?.goneOnServer ?? null).toBeNull()
+      expect(await store.get(edited.id)).toBeDefined()
       expect(await store.get(pending.id)).toBeDefined()
-      expect(await store.get(rejected.id)).toBeDefined()
     })
   })
 

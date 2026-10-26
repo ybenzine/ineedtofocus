@@ -18,9 +18,14 @@ it('clearArchivedOnDevice, markArchivedOnDevice and reconcileMissing leave it ar
 
   // Even if the server's lists named the id, the device-only archive stays.
   await clearArchivedOnDevice(store, 'me', [record.id])
-  await reconcileMissing(store, { list: async () => ({ kind: 'ok', value: [] }) }, 'me', [
-    record.id,
-  ])
+  await reconcileMissing(
+    store,
+    { list: async () => ({ kind: 'ok', value: [] }) },
+    'me',
+    [record.id],
+    () => false,
+    Date.now(),
+  )
   await markArchivedOnDevice(store, 'me', [{ id: record.id, archivedAt: '2026-10-25T00:00:00Z' }])
 
   const stored = await store.get(record.id)
