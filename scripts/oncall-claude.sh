@@ -23,8 +23,13 @@
 # `grep`, `find`, `git log|show|diff`) in the checkout and $ONCALL_OUT are allowed by
 # Claude Code itself. Bash writes (a redirect, say) only where the Edit rules allow, so to
 # the session's own output files. Not allowed: Read outside the checkout and $ONCALL_OUT,
-# `$(…)`, secret variables. scripts/tests/test_oncall_cli.py runs the pinned CLI against a
-# fake API to check what each session can and can't do.
+# `$(…)`, secret variables, environment prefixes (`GRAFANA_URL=… python3 …`). The respond
+# session stages and commits only through scripts/oncall-commit.sh, which checks its
+# arguments after the shell has parsed them; `git add` and `git commit` themselves are
+# refused. The rules match a command's text, so a deny rule is a second, best-effort layer:
+# a quoted option can get past one. That's why nothing here allows a command whose options
+# could read a file outside the checkout. scripts/tests/test_oncall_cli.py runs the pinned
+# CLI against a fake API to check what each session can and can't do.
 #
 # First it checks that the pinned CLI knows every flag used: each takes a value, so given
 # alone it fails to parse with "argument missing", before any API call. An unknown flag
@@ -71,26 +76,23 @@ case $session in
       "${GH_READ[@]}" "${GRAFANA[@]}" 'Bash(gh issue list *)' 'Bash(gh pr list *)'
       'Bash(gh run view *)' 'Bash(gh run list *)'
       "Edit(/$out/decision.json)" "Edit(/$out/comment.md)" "Edit(/$out/pr.md)"
-      # A fix: its branch, its commits, the tests and linters that cover it, and the code.
-      'Bash(git switch -c oncall/*)' 'Bash(git add *)' 'Bash(git commit -m *)'
+      # A fix: its branch, its commits (scripts/oncall-commit.sh only), the tests and
+      # linters that cover it, and the code.
+      'Bash(git switch -c oncall/*)' 'Bash(scripts/oncall-commit.sh *)'
       'Bash(make test-backend-unit)' 'Bash(make test-scripts)' 'Bash(make test-frontend)'
       'Bash(make lint-backend)' 'Bash(make lint-scripts)' 'Bash(make lint-frontend)'
       'Edit(./backend/**)' 'Edit(./frontend/**)' 'Edit(./scripts/**)' 'Edit(./infra/**)'
       'Edit(./_docs/**)'
     )
     DENIED=(
-      # A commit's message comes from -m only: no option that reads a file or another
-      # commit into it (-F/--file, -t/--template, -C/-c/--reuse-message/--reedit-message,
-      # --pathspec-from-file), bundled short options (-aF) included. So no option after
-      # the message: a message with " -" in it is refused too.
-      'Bash(git commit * -*F*)' 'Bash(git commit * -*t*)' 'Bash(git commit * -*C*)'
-      'Bash(git commit * -*c*)' 'Bash(git commit * --*)' 'Bash(git add *--pathspec*)'
+      # Not allowed anyway; denied too, as a second layer.
+      'Bash(git add*)' 'Bash(git commit*)'
       # What scripts/oncall.py's check-fix refuses (PROTECTED_PATHS), refused here first.
       'Edit(./infra/github/**)' 'Edit(./scripts/oncall*)' 'Edit(./scripts/oncall*/**)'
       'Edit(./scripts/alert_dispatch.py)' 'Edit(./scripts/alert_routing.py)'
       'Edit(./scripts/check_local_stack.py)' 'Edit(./scripts/grafana_alerts.py)'
       'Edit(./scripts/grafana_dashboards.py)' 'Edit(./scripts/reviewer*)'
-      'Edit(./scripts/tests/test_oncall*)' 'Edit(./scripts/tests/oncall_sim.py)'
+      'Edit(./scripts/oncall-commit.sh)' 'Edit(./scripts/tests/test_oncall*)' 'Edit(./scripts/tests/oncall_sim.py)'
       'Edit(./scripts/tests/test_claude_settings.py)'
     )
     ;;

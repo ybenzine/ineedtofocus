@@ -33,6 +33,7 @@ checked values in its prompt, never through what an earlier session wrote on the
     follow-up-prompt <out dir> --key value ...
     stalled-body <alert> <status> <environment> <incident title> <run url> <reason>
         [<session line>]
+    commit-check <message> <path>...     # what scripts/oncall-commit.sh refuses; exit 1
     reviewer-agent                       # the headless review's agent, as `--agents` JSON
     session-summary <result.json> respond|review|follow-up
         # after a session: Claude Code's result (subtype, turns, cost, refused tool calls,
@@ -103,6 +104,9 @@ PROTECTED_PATHS = (
     "^scripts/grafana_dashboards\\.py$",
     "^scripts/reviewer_token\\.py",
     "^scripts/reviewer-review\\.sh$",
+    # The respond session's only way to commit (#232); `^scripts/oncall` covers it, named
+    # here so the sync test and the wrapper's denies keep it.
+    "^scripts/oncall-commit\\.sh$",
     # The tests that pin those guards (#232): a fix mustn't loosen them with its change.
     "^scripts/tests/test_oncall",
     "^scripts/tests/oncall_sim\\.py$",
@@ -456,6 +460,45 @@ def _one_line(text: str) -> str:
 
 
 # --- The fix branch -------------------------------------------------------------------
+
+MAX_COMMIT_MESSAGE = 500
+
+
+def commit_problems(root: Path, message: str, paths: list[str]) -> list[str]:
+    """What scripts/oncall-commit.sh refuses (#232): the respond session's only way to
+    stage and commit. Its arguments come from a session that reads untrusted text, so
+    nothing in them may become a git option, reach outside the checkout or a guarded file,
+    or put a key or a closing keyword in the commit."""
+    problems = []
+    if not message.strip() or message.startswith("-") or len(message) > MAX_COMMIT_MESSAGE:
+        problems.append(f"the message must be 1 to {MAX_COMMIT_MESSAGE} characters, not '-…'")
+    if any((c < " " and c != "\n") or c == "\x7f" for c in message):
+        problems.append("the message holds a control character")
+    if CLOSING.search(message):
+        problems.append("the message has a closing keyword (Closes/Fixes/Resolves #n): use Refs")
+    if SECRET_SHAPES.search(message):
+        problems.append("the message holds token-shaped text (a key or a token)")
+    if not paths:
+        problems.append("name at least one file to commit")
+    real_root = root.resolve()
+    for given in paths:
+        shown = json.dumps(given[:80])
+        if not given or given.startswith("-") or any(c < " " or c == "\x7f" for c in given):
+            problems.append(f"{shown} isn't a plain path")
+            continue
+        path = Path(os.path.normpath(real_root / given))
+        resolved = path.resolve()
+        if any(real_root not in p.parents for p in (path, resolved)):
+            problems.append(f"{shown} is outside the checkout")
+            continue
+        names = {path.relative_to(real_root).as_posix(), resolved.relative_to(real_root).as_posix()}
+        if any(n == ".git" or n.startswith(".git/") for n in names):
+            problems.append(f"{shown} is in .git")
+        elif any(re.search(p, n) for p in PROTECTED_PATHS for n in names):
+            problems.append(f"{shown} is a file the fix may not change")
+        elif path.is_dir() or resolved.is_dir():
+            problems.append(f"{shown} is a directory: name the files")
+    return problems
 
 
 def _git(*args: str) -> str:
@@ -934,6 +977,11 @@ def main(argv: list[str]) -> int:
             return 0
         if command == "session-summary" and len(args) == 2:
             return session_summary(args[0], args[1])
+        if command == "commit-check" and args:
+            problems = commit_problems(Path.cwd(), args[0], args[1:])
+            for p in problems:
+                print(f"refused: {p}", file=sys.stderr)
+            return 1 if problems else 0
         if command == "reviewer-agent" and not args:
             print(json.dumps(ci_reviewer_agent()))
             return 0
