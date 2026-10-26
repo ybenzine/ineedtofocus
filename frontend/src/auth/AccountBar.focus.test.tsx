@@ -44,9 +44,12 @@ describe('sign-out confirmation keyboard use (#151)', () => {
 })
 
 describe('sign-out with a timer only in memory (#245)', () => {
+  let unregisterProbe: (() => void) | undefined
+  afterEach(() => unregisterProbe?.())
+
   it('is refused, and allowed again once the timer is stored or gone', async () => {
     let memoryOnly = true
-    const unregister = registerMemoryTimerProbe(() => memoryOnly)
+    unregisterProbe = registerMemoryTimerProbe(() => memoryOnly)
     const signOut = vi.fn().mockResolvedValue(null)
     const controller = new TimerController({
       store: new LocalActiveSessionStore(),
@@ -67,6 +70,5 @@ describe('sign-out with a timer only in memory (#245)', () => {
     memoryOnly = false
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
-    unregister()
   })
 })

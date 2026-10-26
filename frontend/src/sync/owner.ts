@@ -29,6 +29,13 @@ export class OwnedActiveSessionStore implements ActiveSessionStore {
   readonly #inner: ActiveSessionStore
   readonly #currentOwner: () => string | null
   readonly #storage: Storage
+  /**
+   * Who was signed in at the first save attempt of the current session, kept in memory in case
+   * the owner record itself could not be written. A later retry of the same session then records
+   * the original owner, not whoever is signed in by then (or nobody, after a sign-out in another
+   * tab), so a different user can't adopt the session (#245, AC1.3).
+   */
+  #first: { sessionId: string; ownerId: string | null } | null = null
 
   constructor(
     inner: ActiveSessionStore,
@@ -46,15 +53,16 @@ export class OwnedActiveSessionStore implements ActiveSessionStore {
 
   save(state: StoredTimer): void {
     if (this.ownerOf(state.session.id) === undefined) {
-      this.#storage.setItem(
-        ACTIVE_OWNER_KEY,
-        JSON.stringify({ sessionId: state.session.id, ownerId: this.#currentOwner() }),
-      )
+      if (this.#first?.sessionId !== state.session.id) {
+        this.#first = { sessionId: state.session.id, ownerId: this.#currentOwner() }
+      }
+      this.#storage.setItem(ACTIVE_OWNER_KEY, JSON.stringify(this.#first))
     }
     this.#inner.save(state)
   }
 
   clear(): void {
+    this.#first = null
     this.#inner.clear()
     this.#storage.removeItem(ACTIVE_OWNER_KEY)
   }

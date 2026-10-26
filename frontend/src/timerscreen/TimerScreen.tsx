@@ -174,11 +174,9 @@ export default function TimerScreen({
         {snapshot.goal && <span className="timer-goal">{snapshot.goal}</span>}
       </p>
 
-      {unsaved && (
-        <p role="status" className="timer-unsaved">
-          {UNSAVED_NOTICE}
-        </p>
-      )}
+      <p role="status" className={unsaved ? 'timer-unsaved' : undefined}>
+        {unsaved ? UNSAVED_NOTICE : ''}
+      </p>
 
       <div className="timer-controls">
         {snapshot.paused ? (

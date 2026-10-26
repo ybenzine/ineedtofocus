@@ -124,7 +124,8 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
       if (event.key !== USER_KEY) return
       if (event.newValue === null) {
         // Another tab signed out or found the sign-in expired. A timer running here keeps its
-        // screen (an explicit sign-out has removed the active session first).
+        // screen. An explicit sign-out removes a stored session first, but cannot see one kept only in
+        // this tab's memory (#245); that one also stays, in expired mode.
         if (userRef.current && hasActiveTimer()) setExpired(true)
         else setUser(null)
       } else if (expiredRef.current) {

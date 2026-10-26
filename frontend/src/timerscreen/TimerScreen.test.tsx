@@ -440,11 +440,38 @@ describe('a timer that runs only in memory (#245)', () => {
 
     failing = false
     await advance(1_000)
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toBeEmptyDOMElement()
   })
 
   it('shows no note when the timer is stored', async () => {
     await mount({ mode: 'countdown', minutes: 25 })
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toBeEmptyDOMElement()
+  })
+
+  it('re-reads the note when another tab writes the stored session', async () => {
+    const inner = new MemoryActiveSessionStore()
+    const store: ActiveSessionStore = {
+      load: () => inner.load(),
+      clear: () => inner.clear(),
+      save() {
+        throw new Error('QuotaExceededError')
+      },
+    }
+    const controller = new TimerController({ store, saveRecord: () => undefined })
+    await controller.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'study', goal: null })
+    render(
+      <SettingsContext.Provider value={settings}>
+        <TimerScreen controller={controller} audio="rain" onEnded={vi.fn()} />
+      </SettingsContext.Provider>,
+    )
+    expect(screen.getByRole('status')).toHaveTextContent('saved on this device')
+
+    // Another tab starts and stores its own session: ours is dropped, so the note goes.
+    const other = new TimerController({ store: inner, saveRecord: () => undefined })
+    await other.start({ config: { mode: 'countdown', minutes: 10 }, tag: 'work', goal: null })
+    await act(async () => {
+      window.dispatchEvent(new StorageEvent('storage', { key: ACTIVE_SESSION_KEY }))
+    })
+    expect(screen.getByRole('status')).toBeEmptyDOMElement()
   })
 })

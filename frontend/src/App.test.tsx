@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AlertPlayer, MemoryAlertVolumeStore } from './sounds/alerts.ts'
 import App from './App.tsx'
 import { AccountContext } from './auth/AccountContext.tsx'
+import { ACTIVE_TIMER_MESSAGE } from './auth/localData.ts'
 import { MemoryPreferencesStore } from './setup/preferences.ts'
 import { SettingsStore } from './settings/store.ts'
 import type { SyncEngine } from './sync/index.ts'
 import {
+  type ActiveSessionStore,
   ACTIVE_SESSION_KEY,
   LocalActiveSessionStore,
   MemoryActiveSessionStore,
@@ -111,6 +113,44 @@ describe('App account bar', () => {
   })
 })
 
+describe('App sign-out guard with a timer only in memory (#245)', () => {
+  it('refuses to sign out while the timer exists only in this tab', async () => {
+    const inner = new MemoryActiveSessionStore()
+    const store: ActiveSessionStore = {
+      load: () => inner.load(),
+      clear: () => inner.clear(),
+      save() {
+        throw new Error('QuotaExceededError')
+      },
+    }
+    const controller = new TimerController({ store, saveRecord: () => undefined })
+    // The store refuses every write, so the started timer lives in memory only.
+    const update = await controller.start({
+      config: { mode: 'countdown', minutes: 25 },
+      tag: 'work',
+      goal: null,
+    })
+    expect(update.unsaved).toBe(true)
+    const signOut = vi.fn().mockResolvedValue(null)
+    render(
+      <AccountContext.Provider
+        value={{
+          user: { id: 'u', email: 'a@b.co', created_at: '' },
+          expired: false,
+          leaveExpired: () => undefined,
+          signOut,
+        }}
+      >
+        <App controller={controller} preferences={new MemoryPreferencesStore()} />
+      </AccountContext.Provider>,
+    )
+    // The store is empty, so the app opens on the setup screen, which has Sign out.
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(ACTIVE_TIMER_MESSAGE)
+    expect(signOut).not.toHaveBeenCalled()
+  })
+})
+
 describe('App', () => {
   it('shows the setup screen', async () => {
     setup()
@@ -187,7 +227,7 @@ describe('App', () => {
     await screen.findByRole('timer')
     store.clear()
     window.dispatchEvent(new StorageEvent('storage', { key: ACTIVE_SESSION_KEY }))
-    expect(await screen.findByRole('status')).toHaveTextContent('ended in another tab')
+    expect(await screen.findByText(/ended in another tab/)).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'I Need To Focus' })).toBeInTheDocument()
   })
 
