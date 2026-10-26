@@ -327,6 +327,42 @@ The sim's `claude` is fake, so it can't show what the real CLI allows on a fresh
 
 The end-to-end drill on dev needs #33's rules and #34's contact point applied to Grafana Cloud first ([#35](https://github.com/ybenzine/ineedtofocus/issues/35)), and the server's installed infra at #33 or later: follow [Alert trigger](#alert-trigger-fault-injection) from its step 1, which checks `/opt/focus/infra/REVISION`, and confirm with `docker exec focus-dev-app-1 env | grep FAULT` before starting the traffic.
 
+That first real drill on dev (incident [#231](https://github.com/ybenzine/ineedtofocus/issues/231), [firing run](https://github.com/ybenzine/ineedtofocus/actions/runs/40276987971), [resolved run](https://github.com/ybenzine/ineedtofocus/actions/runs/40278298276), [write-up on #35](https://github.com/ybenzine/ineedtofocus/issues/35#issuecomment-6409695167)) used fault injection, so the runbook's right answer was to escalate, and the agent escalated. The drill below is the one where the agent fixes the problem itself.
+
+### On-call drill: rollback of a bad deploy (#317)
+
+On 2026-10-26 a deliberately broken release reached dev. The real **Session saves failing (dev)** alert fired, and the on-call agent tied the failures to that deploy and rolled dev back through the `oncall` workflow, with no human acting on the incident. There was no fault injection and no simulated payload. The full evidence is on [#317](https://github.com/ybenzine/ineedtofocus/issues/317).
+
+- **Releases:** `G` = `d6bc665` (dev before the drill), `B` = `3ceae88` (demo [#318](https://github.com/ybenzine/ineedtofocus/pull/318): both save endpoints raise `RuntimeError` when the app is labelled `deployment.environment.name=dev`), `R` = `34a1bf3` (revert [#321](https://github.com/ybenzine/ineedtofocus/pull/321), tree identical to `G`).
+- **Runs:** CI for `B` [40341748427](https://github.com/ybenzine/ineedtofocus/actions/runs/40341748427) (deployed it to dev), firing on-call run [40343299665](https://github.com/ybenzine/ineedtofocus/actions/runs/40343299665), `rollback.yml` [40343637237](https://github.com/ybenzine/ineedtofocus/actions/runs/40343637237), resolved on-call run [40344593714](https://github.com/ybenzine/ineedtofocus/actions/runs/40344593714), CI for `R` [40347922616](https://github.com/ybenzine/ineedtofocus/actions/runs/40347922616) (deployed it to dev). Incident: [#319](https://github.com/ybenzine/ineedtofocus/issues/319).
+
+| UTC | Event |
+|---|---|
+| 14:40:05 | #318 merges (`B`) |
+| 14:44:59–14:45:53 | **Deploy to dev** deploys `B`; rollback target in its record: `d6bc665` |
+| 14:46:35 | `traffic.py --base-url https://dev.ineedtofoc.us --minutes 25 --rate 30` starts |
+| 14:46:36 | First failed save trace (`17c612a8349edc04692f3b2058e7eb54`) |
+| 14:49:30 | Alert fires |
+| 14:49:44 | Firing on-call run starts; 14:50:05 incident #319 opens |
+| 14:50:12–14:51:32 | On-call agent session |
+| 14:51:41 | [Decision: roll back dev](https://github.com/ybenzine/ineedtofocus/issues/319#issuecomment-6419076929) |
+| 14:51:52 | `rollback.yml` starts; 14:52:06 "rolling dev back from `3ceae882…` to `d6bc665c…`, no migration" |
+| 14:52:36 | Rollback done, smoke checks ok (dev runs `G`) |
+| 14:57:30 | Alert resolves |
+| 14:59:23 | [Follow-up report](https://github.com/ybenzine/ineedtofocus/issues/319#issuecomment-6419264070) (from, to, verification) |
+| 14:59:53–14:59:54 | Resolved run, over the daily cap, posts the workflow's [incident summary](https://github.com/ybenzine/ineedtofocus/issues/319#issuecomment-6419277737) (#312) and closes #319 |
+| 15:10:32 | Revert #321 merges (`R`) |
+
+Alert to restored in about 3 minutes, alert to resolved in 8.
+
+**The agent's evidence.** `journey dev` showed 116 of 116 saves failing over 5 minutes, history fine. Every failure was a 500 with `RuntimeError` raised in `fastapi.endpoint` before any write: error logs with trace IDs `6eb9179b3048735ed0468e8f1ca56c35`, `4beb0828debbb27eb4838762ce363295` and `230b9d73fcfc3525ffc9845a67b4e3aa`, and failed trace `1378029f127697884af454347590123c`, all from `service.version` `3ceae882df6bfb182a551ea0e4793b2a3adb9243`. It ruled out the database (healthy SQL spans) and fault injection (`RuntimeError`, not `InjectedSaveFault`), found `_broken_build_gate()` in #318's diff, and applied the runbook's first row ([session-save-errors.md](runbooks/session-save-errors.md)): errors started with a deploy, the previous release was fine, no migration, so roll back. Verification after the rollback: `save_error_rate` 0.0 over 98 sessions, both alerts normal, the offline queue draining (`sync` `created` results).
+
+**Traffic totals** (`traffic.py`, stopped at 14:56:11): single saves 54 ok and 73 failed, sync batches 15 ok and 28 failed, history loads 112 ok and 4 failed while the app container was recreated. Clients kept the failed sessions queued and synced them after the rollback.
+
+**Prod never ran `B`:** its last deploy ([40327763725](https://github.com/ybenzine/ineedtofocus/actions/runs/40327763725)) was at 13:06Z, before `B` existed, and `focus-ci prod` refuses a release dev rolled back from ([deployment.md → Known-good releases](deployment.md#known-good-releases)).
+
+**What to know.** The agent's comments date #318's merge at 14:34; it merged at 14:40:05. With a read-only token it couldn't file its follow-ups, so it listed them on #319: fix forward (done by the revert #321), drill design (a deploy-triggered drill leaves `main` broken until it's reverted), and a guard against redeploying a commit dev rolled back from while it's still on `main`.
+
 ## Where to look
 
 | Where | Grafana | Dashboard |
