@@ -6,9 +6,10 @@
 # `production` environment's approval.
 #
 #   plan    no credentials. Picks the commit: the `tag` input, or the release dev runs now
-#           (dev's latest successful GitHub deployment). Checks that it's on main, that
-#           CI passed on it and that a dev deployment of it succeeded (deploy-dev's smoke
-#           tests passed), and shows it in the summary. Pinning it here means Yacine
+#           (the newest commit among dev's successful GitHub deployments since dev's
+#           last rollback, by commit order, not creation order: #275). Checks that it's
+#           on main, that CI passed on it and that a dev deployment of it succeeded
+#           (deploy-dev's smoke tests passed), and shows it in the summary. Pinning it here means Yacine
 #           approves one exact commit. (What prod runs now is in prod's release record,
 #           shown by the deploy job as the rollback target: a `production` deployment's
 #           sha is the ref this workflow ran on, not the tag it deployed.)
@@ -100,29 +101,65 @@ jobs:
             done
             return 1
           }
-          # dev_now: the sha of dev's newest deployment whose latest status is success
-          # (GitHub marks older ones inactive), or nothing. deploy-dev runs on push, so a
-          # dev deployment's sha is the commit it deployed.
+          # utc_digits <ISO 8601 UTC time>: its digits (YYYYMMDDhhmmss), to compare GitHub's
+          # timestamps as numbers whatever the locale; anything else fails closed.
+          utc_digits() {
+            [[ $1 =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] ||
+              die "Dev's release unknown" "unexpected timestamp from GitHub's API."
+            digits=${1//[!0-9]/}
+          }
+          # dev_now: sets `tag` to the commit dev runs according to its GitHub deployments
+          # (#275). Of dev's recent deployments that reached success (latest status success,
+          # or inactive: superseded after one) and were created after dev's last rollback
+          # run, it takes the newest commit on main, not the newest deployment: dev-deployment
+          # jobs can create theirs out of order (one may wait for a runner while the next
+          # commit deploys), but deploy-dev only moves dev forward (#257), so the newest
+          # commit it deployed is the one dev runs. Only a rollback moves dev back, hence the
+          # cutoff; with no deployment since, the plan stops here, before any approval.
+          # deploy-dev runs on push, so a dev deployment's sha is the commit it deployed.
           dev_now() {
-            local list id sha state
-            list=$(gh api "repos/$GH_REPO/deployments?environment=dev&per_page=30" --jq '.[] | "\(.id) \(.sha)"')
-            while read -r id sha; do
+            local since="" since_digits=0 rolled list id sha created state order seen=" " digits
+            rolled=$(gh api "repos/$GH_REPO/actions/workflows/rollback.yml/runs?branch=main&event=workflow_dispatch&per_page=100" \
+              --jq '[.workflow_runs[] | select(.display_title | startswith("Roll back dev ")) | .updated_at] | max // ""')
+            if [[ -n $rolled ]]; then
+              utc_digits "$rolled"
+              since=$rolled since_digits=$digits
+            fi
+            list=$(gh api "repos/$GH_REPO/deployments?environment=dev&per_page=30" --jq '.[] | "\(.id) \(.sha) \(.created_at)"')
+            tag=""
+            while read -r id sha created; do
               [[ -n $id ]] || continue
+              [[ $seen == *" $sha "* ]] && continue
+              utc_digits "$created"
+              ((digits > since_digits)) || continue
               state=$(gh api "repos/$GH_REPO/deployments/$id/statuses?per_page=1" --jq '.[0].state // ""')
-              if [[ $state == success ]]; then
-                printf '%s' "$sha"
-                return 0
+              [[ $state == success || $state == inactive ]] || continue
+              [[ $sha =~ ^[0-9a-f]{40}$ ]] ||
+                die "Dev's release unknown" "a dev deployment has a malformed sha."
+              seen+="$sha "
+              if [[ -z $tag ]]; then
+                tag=$sha
+                continue
               fi
+              order=$(gh api "repos/$GH_REPO/compare/$tag...$sha?per_page=1" --jq .status) || order=""
+              case $order in
+                ahead) tag=$sha ;;
+                behind) ;;
+                *) die "Dev's release unknown" "couldn't order dev's deployments of $tag and $sha on main (compare: ${order:-failed}); pass the tag explicitly." ;;
+              esac
             done <<< "$list"
+            if [[ -z $tag && -n $since ]]; then
+              die "Dev's release unknown" "dev was rolled back (run finished $since) and no dev deployment succeeded since, so its release isn't known here; pass the tag explicitly."
+            fi
+            [[ -n $tag ]] ||
+              die "Dev's release unknown" "found no successful dev deployment; pass the tag explicitly."
           }
           if [[ -n $INPUT_TAG ]]; then
             [[ $INPUT_TAG =~ ^[0-9a-f]{40}$ ]] ||
               die "Bad tag" "the tag must be a full 40-character lowercase commit sha, or empty for dev's release."
             tag=$INPUT_TAG from_dev=false
           else
-            tag=$(dev_now)
-            [[ $tag =~ ^[0-9a-f]{40}$ ]] ||
-              die "Dev's release unknown" "found no successful dev deployment; pass the tag explicitly."
+            dev_now
             from_dev=true
           fi
           status=$(gh api "repos/$GH_REPO/compare/$tag...main?per_page=1" --jq .status) ||
@@ -141,7 +178,7 @@ jobs:
             echo ""
             echo "- Commit: [\`${tag:0:12}\`]($GITHUB_SERVER_URL/$GH_REPO/commit/$tag) ${subject//|/\\|}"
             if [[ $from_dev == true ]]; then
-              echo "- Chosen as: the release dev runs now (the deploy re-checks that dev still runs it)"
+              echo "- Chosen as: the release dev runs now, the newest commit dev deployed and smoke-tested since its last rollback (the deploy re-checks that dev still runs it)"
             else
               echo "- Chosen as: the \`tag\` input (dev must have run it successfully)"
             fi
@@ -244,7 +281,7 @@ jobs:
           get() { sed -n "s/^$1=//p" "$RUNNER_TEMP/candidate"; }
           digest=$(get digest)
           if [[ $(get tag) != "$TAG" ]]; then
-            echo "::error title=Dev's record differs::dev's release record shows $(get tag), not $TAG, which the plan chose (dev's newest deployment that passed its smoke tests) and was approved. Either dev moved since the plan (a newer deploy or a rollback), or dev's latest deploy passed the server checks but failed its smoke tests. Nothing deployed. Start a new run, or pass the tag explicitly."
+            echo "::error title=Dev's record differs::dev's release record shows $(get tag), not $TAG, which the plan chose (the newest commit dev deployed and smoke-tested) and was approved. Either dev moved since the plan (a newer deploy or a rollback), or dev's latest deploy passed the server checks but failed its smoke tests. Nothing deployed. Start a new run, or pass the tag explicitly."
             exit 1
           fi
           [[ $(get source) == dev && $digest =~ ^sha256:[0-9a-f]{64}$ ]] ||
