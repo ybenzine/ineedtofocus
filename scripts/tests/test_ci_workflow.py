@@ -38,11 +38,12 @@ def load_workflow(path: Path) -> dict[Any, Any]:
 
 
 def run_like_github(
-    step: dict[str, Any], tmp_path: Path, env: dict[str, str]
+    step: dict[str, Any], tmp_path: Path, env: dict[str, str], cwd: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
     """Run a step's `run` the way GitHub's runner does on Linux: the script in a file, run
     with `bash -e {0}` when no shell is set, or `bash --noprofile --norc -eo pipefail {0}`
-    for `shell: bash`. Adding pipefail here for every step would hide a missing one."""
+    for `shell: bash`. Adding pipefail here for every step would hide a missing one. `cwd`
+    stands for the job's checkout."""
     script = tmp_path / "step.sh"
     script.write_text(step["run"])
     shell = step.get("_shell", step.get("shell"))
@@ -52,7 +53,7 @@ def run_like_github(
         argv = ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)]
     else:
         raise AssertionError(f"unexpected shell {shell!r}")
-    return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
+    return subprocess.run(argv, env=env, capture_output=True, text=True, check=False, cwd=cwd)
 
 
 @pytest.fixture(scope="module")
@@ -104,8 +105,9 @@ def test_deploy_dev_runs_only_after_publish_on_main(jobs: dict[str, Any]) -> Non
 
 
 def test_deploy_dev_uses_the_dev_environment_and_its_own_group(jobs: dict[str, Any]) -> None:
+    """No GitHub deployment from deploy-dev itself (#257): dev-deployment creates it."""
     deploy = jobs["deploy-dev"]
-    assert deploy["environment"] == {"name": "dev", "url": "https://dev.ineedtofoc.us"}
+    assert deploy["environment"] == {"name": "dev", "deployment": False}
     assert deploy["concurrency"] == {"group": "deploy-dev", "cancel-in-progress": False}
     assert deploy["permissions"] == {"contents": "read", "attestations": "read"}
 
@@ -423,7 +425,12 @@ echo "$*" >> "$GH_LOG"
 
 
 def run_step(
-    step: dict[str, Any], tmp_path: Path, env: dict[str, str], fake: str, name: str
+    step: dict[str, Any],
+    tmp_path: Path,
+    env: dict[str, str],
+    fake: str,
+    name: str,
+    cwd: Path | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -440,7 +447,7 @@ def run_step(
         "GITHUB_SERVER_URL": "https://github.com",
         **env,
     }
-    result = run_like_github(step, tmp_path, full_env)
+    result = run_like_github(step, tmp_path, full_env, cwd)
     return result, output, summary
 
 
@@ -557,6 +564,212 @@ def test_deploy_prod_resolves_the_digest_dev_ran(
         assert output.read_text() == "dev_time=T\n"
     else:
         assert github_env.read_text() == ""
+
+
+# --- Deploy order on dev (#257) -------------------------------------------------------
+
+ORDER_STEP = "Check this commit isn't older"
+ORDER_GATE = "steps.order.outputs.deploy == 'true'"
+
+FAKE_SSH_DEV = r"""#!/usr/bin/env bash
+# Fake ssh for the order step: `status` prints dev's record (the tag in $DEV_STATE, if
+# any; nothing on stdout without one, like focus-ci), or exits $SSH_RC.
+request=${*: -1}
+echo "$request" >> "$SSH_LOG"
+[[ ${SSH_RC:-0} == 0 ]] || exit "$SSH_RC"
+[[ $request == status ]] || exit 99
+if [[ -s $DEV_STATE ]]; then
+  printf 'env=dev\ntag=%s\ndigest=sha256:%064d\naction=deploy\n' "$(cat "$DEV_STATE")" 0
+else
+  echo "focus-ci: no release recorded for dev yet" >&2
+fi
+"""
+
+
+def git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+@pytest.fixture(scope="module")
+def main_history(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, list[str]]:
+    """A linear main like the job's checkout (fetch-depth: 0): five squash commits, oldest
+    first. The last one is a revert of the one before (newer, so it deploys)."""
+    repo = tmp_path_factory.mktemp("main")
+    git(repo, "init", "-q", "-b", "main")
+    shas = []
+    for n in range(4):
+        (repo / f"f{n}").write_text(f"{n}\n")
+        git(repo, "add", f"f{n}")
+        git(repo, "commit", "-q", "-m", f"change {n}")
+        shas.append(git(repo, "rev-parse", "HEAD"))
+    git(repo, "revert", "--no-edit", "HEAD")
+    shas.append(git(repo, "rev-parse", "HEAD"))
+    return repo, shas
+
+
+def run_order(
+    jobs: dict[str, Any], tmp_path: Path, repo: Path, tag: str, dev_runs: str, **env: str
+) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
+    state = tmp_path / "dev_state"
+    state.write_text(dev_runs)
+    for name in ("output", "summary", "ssh.log"):
+        (tmp_path / name).unlink(missing_ok=True)
+    full_env = {
+        "TAG": tag,
+        "SSH_CONFIG": "/dev/null",
+        "SSH_LOG": str(tmp_path / "ssh.log"),
+        "DEV_STATE": str(state),
+        "RUNNER_TEMP": str(tmp_path),
+        **env,
+    }
+    step = step_named(jobs["deploy-dev"], ORDER_STEP)
+    return run_step(step, tmp_path, full_env, FAKE_SSH_DEV, "ssh", cwd=repo)
+
+
+@pytest.mark.parametrize(
+    ("tag", "dev_runs", "status", "outputs", "says"),
+    [
+        # #257: an older commit's run reaches the group after a newer one deployed.
+        (0, 2, 0, "deploy=false\n", "::notice title=Dev deploy skipped::"),
+        (1, 2, 0, "deploy=false\n", "::notice title=Dev deploy skipped::"),
+        (2, 0, 0, "deploy=true\n", ""),  # newer: deploys
+        (3, 2, 0, "deploy=true\n", ""),
+        (4, 3, 0, "deploy=true\n", ""),  # a revert commit is newer: deploys
+        (2, 2, 0, "deploy=true\n", ""),  # the same commit again (a re-run): deploys
+        (2, None, 0, "deploy=true\n", ""),  # dev has no release yet: a first deploy
+        (2, "f" * 40, 1, "", "title=Deploy order unknown"),  # not in main's history
+        (2, "abc", 1, "", "title=Dev's release unknown"),  # malformed record
+    ],
+    ids=[
+        "oldest-after-newest",
+        "older-after-newer",
+        "newer",
+        "next",
+        "revert-commit",
+        "same-commit",
+        "first-deploy",
+        "unknown-commit",
+        "malformed-record",
+    ],
+)
+def test_order_step_skips_an_older_commit_and_deploys_a_newer_one(
+    jobs: dict[str, Any],
+    tmp_path: Path,
+    main_history: tuple[Path, list[str]],
+    tag: int,
+    dev_runs: int | str | None,
+    status: int,
+    outputs: str,
+    says: str,
+) -> None:
+    """The order step, run as GitHub runs it in a checkout of main with a fake ssh: an
+    ancestor of the commit dev runs skips green with a notice and a summary; the same
+    commit, a newer one or a first deploy goes on; anything it can't place fails red.
+    It only ever sends `status`, so dev's record is unchanged by it."""
+    repo, shas = main_history
+    current = shas[dev_runs] if isinstance(dev_runs, int) else (dev_runs or "")
+    result, output, summary = run_order(jobs, tmp_path, repo, shas[tag], current)
+    assert result.returncode == status, result
+    assert output.read_text() == outputs
+    assert says in result.stdout
+    assert (tmp_path / "ssh.log").read_text() == "status\n"
+    assert (tmp_path / "dev_state").read_text() == current
+    if outputs == "deploy=false\n":
+        text = summary.read_text()
+        assert "Deploy to dev: skipped, dev runs a newer commit" in text
+        assert current in text and shas[tag] in text
+
+
+def test_order_step_fails_when_dev_cant_be_read(
+    jobs: dict[str, Any], tmp_path: Path, main_history: tuple[Path, list[str]]
+) -> None:
+    repo, shas = main_history
+    result, output, _ = run_order(jobs, tmp_path, repo, shas[2], shas[1], SSH_RC="255")
+    assert result.returncode == 1, result
+    assert "title=Dev's release unknown" in result.stdout
+    assert output.read_text() == ""
+
+
+def test_merges_finishing_out_of_order_leave_dev_on_the_newest(
+    jobs: dict[str, Any], tmp_path: Path, main_history: tuple[Path, list[str]]
+) -> None:
+    """The 2026-10-25 timeline from #257: three merges whose deploy jobs ran middle,
+    newest, oldest. Each run's order step decides; a `deploy=true` stands for the deploy
+    that follows (it records the tag). Dev ends on the newest, and a revert merged
+    afterwards still deploys."""
+    repo, shas = main_history
+    dev_runs = shas[0]
+    deployed = []
+    for tag in (shas[2], shas[3], shas[1], shas[4]):
+        result, output, _ = run_order(jobs, tmp_path, repo, tag, dev_runs)
+        assert result.returncode == 0, result
+        if output.read_text() == "deploy=true\n":
+            dev_runs = tag
+            deployed.append(tag)
+    assert deployed == [shas[2], shas[3], shas[4]]
+    assert dev_runs == shas[4]
+
+
+def test_deploy_dev_checks_order_inside_its_group_before_deploying(jobs: dict[str, Any]) -> None:
+    """The order step reads dev with the key, before the deploy request, in a checkout
+    with main's history; every step after it that touches dev or reports a deploy runs
+    only when it let the commit through. The Summary also runs when a check before it
+    failed (no output), but not after a skip, which wrote its own summary."""
+    job = jobs["deploy-dev"]
+    steps = job["steps"]
+    names = [str(step.get("name", step.get("uses"))) for step in steps]
+    order = names.index(step_named(job, ORDER_STEP)["name"])
+    assert names.index(step_named(job, "Set up the deploy key")["name"]) < order
+    assert order < names.index(step_named(job, "Deploy over SSH")["name"])
+    assert steps[order]["id"] == "order"
+    assert steps[order]["if"] == "steps.config.outputs.configured == 'true'"
+    assert "git merge-base --is-ancestor" in steps[order]["run"]
+    checkout = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@"))
+    assert checkout["with"]["fetch-depth"] == 0
+    assert steps.index(checkout) < order
+    for step in steps[order + 1 :]:
+        condition = str(step.get("if", ""))
+        if step.get("name") == "Summary":
+            assert "steps.order.outputs.deploy != 'false'" in condition
+        else:
+            assert ORDER_GATE in condition or condition == "always()", step
+    assert job["outputs"]["deployed"] == "${{ steps.order.outputs.deploy }}"
+    # The check holds until the deploy because only this group's jobs move dev forward.
+    assert job["concurrency"] == {"group": "deploy-dev", "cancel-in-progress": False}
+
+
+def test_dev_deployment_is_created_only_after_a_real_deploy(jobs: dict[str, Any]) -> None:
+    """The `dev` GitHub deployment, which deploy-prod's plan reads as what dev ran, comes
+    from a job that runs only when deploy-dev passed and deployed (not after a skip),
+    with no token permissions, no secret and no repository code."""
+    record = jobs["dev-deployment"]
+    assert record["needs"] == "deploy-dev"
+    assert record["if"] == f"{MAIN_PUSH_ONLY} && needs.deploy-dev.outputs.deployed == 'true'"
+    assert record["environment"] == {"name": "dev", "url": "https://dev.ineedtofoc.us"}
+    assert record["permissions"] == {}
+    assert "secrets." not in yaml.safe_dump(record)
+    assert all("uses" not in step for step in record["steps"])
+    # deploy-dev's own job creates none, and nothing else deploys to dev.
+    in_dev = [
+        name
+        for name, job in jobs.items()
+        if isinstance(job.get("environment"), dict)
+        and job["environment"].get("name") == "dev"
+        and job["environment"].get("deployment", True)
+    ]
+    assert in_dev == ["dev-deployment"]
+
+
+def test_rollback_has_no_order_check() -> None:
+    """A deliberate rollback goes back on purpose: rollback.yml never compares commits."""
+    assert "merge-base" not in (WORKFLOWS / "rollback.yml").read_text()
 
 
 # --- Build provenance (#128) ----------------------------------------------------------

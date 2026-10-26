@@ -290,12 +290,35 @@ Every push to `main` runs CI. Once the five required checks and `image` pass, `p
 |---|---|---|
 | Gate | runner | Neither `DEPLOY_SSH_KEY` nor `DEPLOY_KNOWN_HOSTS` set in the `dev` environment: skips with a notice, green (not set up yet). Only one of them set: fails red, since the environment is half configured. Both: deploys |
 | Provenance | runner, `gh` | `gh attestation verify` on the digest, before the key is written: `publish` (ci.yml on `refs/heads/main`) must have attested exactly these bytes as built from this commit ([Build provenance](#build-provenance-128)). Otherwise the job fails and nothing reaches the server |
+| Order | runner, `ssh … status`, `git` | Deploys only go forward ([Deploy order](#deploy-order-257)). If this commit is an ancestor of the one dev runs, it's older: skips with a notice, green, and dev keeps the newer one. The same commit (a re-run), a newer one or a first deploy goes on. Fails red if it can't place dev's commit in `main`'s history |
 | Deploy | server, `focus-ci dev` | `ssh deploy@159.223.188.176 "deploy <sha> sha256:<digest>"`: waits for the deploy lock, notes the current release, pulls the [dependency images](#dependency-images-170) the host lacks, pulls the app by digest, checks the image's `org.opencontainers.image.revision` label is `<sha>`, tags it `:<sha>`, migrates (`run --rm`), starts (`up -d --wait`, the `/healthz` healthcheck), checks that the app container runs exactly that image and that `/healthz` and `/readyz` answer inside it, then records the release. If the start or a check fails, it starts the release that ran before again and fails ([Automatic revert](#automatic-revert)) |
 | Record | runner | `ssh … status` reads the record back; the job fails if it doesn't show this tag and digest |
 | Smoke | runner | `scripts/smoke_deploy.py https://dev.ineedtofoc.us`: `/healthz` and `/readyz` answer `{"status":"ok"}`, `/` serves the frontend, `http://` redirects to `https://`, the certificate verifies. Retried for up to 90 s |
 | Summary | runner | Tag, image digest, provenance (with the CI run that built it), server time of the deploy, rollback target, infra revision, smoke results |
+| GitHub deployment | job `dev-deployment` | Only after `deploy-dev` deployed this commit and passed: creates the `dev` GitHub deployment, which deploy-prod's plan reads as what dev ran. `deploy-dev` itself runs with `deployment: false` |
 
 A failed step stops the deploy and exits non-zero, which turns the job red. The record keeps the last successful release, and the attempt is logged with the step that failed. A failure at the start (after `up`) also puts the previous release back ([Automatic revert](#automatic-revert)). To undo a deploy that passed its checks, run the [rollback workflow](#rollback-rollbackyml).
+
+### Deploy order (#257)
+
+A dev deploy never replaces a newer commit with an older one. Merges that land close together finish CI in any order. On 2026-10-25, three merges landed within two minutes, and the oldest one's `Deploy to dev` started last, after the newest had finished. It deployed anyway, and dev lost two merges with every job green.
+
+So before the deploy request, the job reads dev's record (`ssh … status`) and compares commits in its checkout, which has `main`'s whole history (`fetch-depth: 0`). `main` is linear (squash merges), so "older" means an ancestor: if `git merge-base --is-ancestor <this commit> <dev's commit>` holds, the job skips with the notice "Dev deploy skipped", green, and sends nothing else. Otherwise it deploys:
+
+- **The same commit** (a re-run of its job) deploys again, as before.
+- **A newer commit** deploys. That includes a revert merged on `main`: it's a new commit, so it goes out like any fix.
+- **A first deploy** (no record yet) deploys.
+- **A commit it can't place** (dev runs a commit missing from `main`'s history, or the record can't be read) fails red with nothing deployed.
+
+**Why in the workflow, not `focus-ci`.** Only git knows the order of commits, and the server has no clone of the repository: `/opt/focus/infra` is a copy of `infra/` at one revision. A check on the server would need git and the history there, or a call to GitHub, and every change to `focus-ci` needs Yacine to reinstall `infra/`. The check doesn't guard against a malicious client either: the dev key can already roll dev back. The workflow check is enough because only `deploy-dev` moves dev forward and its concurrency group runs one at a time. Nothing that could move dev forward runs between the check and the deploy. A dev rollback can, but it only goes back, and this commit is newer than what dev ran at the check.
+
+**Why `cancel-in-progress` alone wouldn't fix it.** Jobs reach the `deploy-dev` group in the order their CI finishes, not in commit order. On 2026-10-25 the oldest commit's job arrived after the newest one's had finished: nothing was running or pending to cancel, and it would have deployed anyway. When jobs do overlap, `cancel-in-progress` would cancel a running *newer* deploy in favour of a late older one. A cancelled job doesn't even stop a deploy: `focus-ci` finishes it on the server. The job would just go red while the server records the release.
+
+**What GitHub shows.** A skipped deploy is green, so with `environment: dev` GitHub would record it as a successful `dev` deployment of the older commit. deploy-prod's plan would then take that commit as "the release dev runs now", and the prod deploy would fail after approval with "Dev's record differs". So `deploy-dev` runs with `deployment: false`, like `rollback.yml`, and the small `dev-deployment` job creates the deployment once `deploy-dev` actually deployed and passed its smoke tests. A skip because the environment isn't set up creates none either.
+
+**Rollback.** `rollback.yml` doesn't run this check: going back is its job, and it's unchanged. After a dev rollback, the check compares against the release dev runs then. So a commit newer than the rollback target deploys as usual, even one merged before the rollback whose CI was still running. A commit older than the rollback target is skipped. The [rollback floor](#rollback-floor-165) stays safe: dev's release is always at or above its floor, and a commit newer than it is too, so a deploy never brings back a schema a contract migration removed.
+
+**A newer commit can still miss dev.** GitHub keeps one *pending* job per group ([Serialization](#the-forced-command-focus-ci)): the job that joins last replaces the pending one, whichever commit is newer. If an older commit's job replaces a newer one's, the newer one shows as cancelled and dev stays on an older commit until the next merge. Nothing older replaces something newer, though. To catch up straight away, re-run the cancelled `Deploy to dev` job: its commit is newer, so it deploys.
 
 ### The forced command: `focus-ci`
 
@@ -310,7 +333,7 @@ A failed step stops the deploy and exits non-zero, which turns the job red. The 
 
 Anything else gets exit status 2 and `focus-ci: refused`, before anything runs: another verb, a verb the profile doesn't have, extra or malformed arguments, a shell, scp or sftp, a newline, or an unknown profile. Requests are logged to syslog (`journalctl -t focus-ci`). Every `docker` and `compose.sh` call runs under `env -i` with only `PATH`, `HOME` and `APP_TAG`, so nothing from the SSH session (such as `LC_*`, which sshd accepts) can override `infra/env/<env>.env`.
 
-**Serialization.** Every deploy and rollback takes `flock /opt/focus/deploy.lock` (waits up to 15 minutes), across environments, and holds it through an automatic revert. `install.sh` takes the same lock. The memory budget counts one migration container at a time ([Memory](#memory-dev-cant-starve-prod)). In GitHub, `deploy-dev` has its own concurrency group (`deploy-dev`, no cancelling of the running deploy). Deploys of different environments don't share one group: GitHub cancels a *pending* job when another one joins the group, so a dev deploy queued behind a prod deploy would cancel a pending prod rollback. The server lock is what orders them. When merges queue up, the group keeps only the newest pending deploy: an intermediate commit's `Deploy to dev` shows as cancelled and dev goes straight to the newest commit. That's intended.
+**Serialization.** Every deploy and rollback takes `flock /opt/focus/deploy.lock` (waits up to 15 minutes), across environments, and holds it through an automatic revert. `install.sh` takes the same lock. The memory budget counts one migration container at a time ([Memory](#memory-dev-cant-starve-prod)). In GitHub, `deploy-dev` has its own concurrency group (`deploy-dev`, no cancelling of the running deploy). Deploys of different environments don't share one group: GitHub cancels a *pending* job when another one joins the group, so a dev deploy queued behind a prod deploy would cancel a pending prod rollback. The server lock is what orders them. When merges queue up, the group keeps only the pending deploy that joined last: an intermediate commit's `Deploy to dev` shows as cancelled and dev goes straight to the last one. That's intended. The job that joins last is usually the newest commit's, but not always, since jobs join when their CI finishes: the [order check](#deploy-order-257) keeps an older one from replacing a newer release.
 
 ### The release record
 
@@ -631,6 +654,8 @@ Or **Actions** → **rollback** → **Run workflow** → branch `main`, then cho
 **Concurrency:** one rollback per environment at a time (`rollback-dev`, `rollback-prod`). A running one is never cancelled. GitHub keeps one *pending* run per group: a second dispatch while one waits replaces it, which drops a duplicate step back. The groups are separate from `deploy-dev` and `deploy-prod`, for the reason under [Serialization](#the-forced-command-focus-ci): the server lock orders them.
 
 **After a prod rollback**, prod runs an older release and dev may still run the bad one. The fix goes through the usual path: a PR, a merge that deploys it to dev, then an approved prod deploy. Roll dev back too if the bad release blocks work there.
+
+**After a dev rollback**, the next `Deploy to dev` of a commit newer than the release dev now runs deploys as usual: the [order check](#deploy-order-257) only stops commits older than what dev runs. That includes a deploy still waiting for its CI when you rolled back. A revert merged on `main` is a newer commit, so it deploys.
 
 ### Credentials
 
