@@ -400,8 +400,13 @@ def test_deploy_prod_smoke_tests_prod(prod_jobs: dict[str, Any]) -> None:
 
 
 FAKE_GH = r"""#!/usr/bin/env bash
-# Fake gh for the plan step: canned answers (after --jq) per API path.
+# Fake gh for the plan step: canned answers (after --jq) per API path. A path matching
+# the glob GH_FAIL fails, as gh does when the API call does.
 path=$2
+if [[ -n ${GH_FAIL:-} && $path == $GH_FAIL ]]; then
+  echo "gh: HTTP 502" >&2
+  exit 1
+fi
 case $path in
   repos/o/r/deployments\?environment=dev\&sha=*) # the API's sha filter, on DEV_DEPLOYMENTS
     sha=${path#*sha=}
@@ -523,6 +528,25 @@ def run_step(
         # before the approval, not after it.
         ({"DEV_ROLLED_BACK_AT": T3}, 1, "", f"dev was rolled back (run finished {T3})"),
         ({"DEV_ROLLED_BACK_AT": "yesterday"}, 1, "", "title=Dev's release unknown"),
+        # #283: each of dev_now's lookups that fails says which one did, before approval.
+        (
+            {"GH_FAIL": "*/rollback.yml/runs*"},
+            1,
+            "",
+            "title=Dev's release unknown::listing dev's rollback runs failed",
+        ),
+        (
+            {"GH_FAIL": "*/deployments?environment=dev&per_page=*"},
+            1,
+            "",
+            "title=Dev's release unknown::listing dev's deployments failed",
+        ),
+        (
+            {"GH_FAIL": "*/deployments/*/statuses?per_page=1"},
+            1,
+            "",
+            "title=Dev's release unknown::reading a dev deployment's statuses failed",
+        ),
         # A deployment of a commit off main (a force-push): no order, fail closed.
         (
             {
@@ -1147,6 +1171,31 @@ def test_catch_up_rejects_odd_answers(jobs: dict[str, Any], tmp_path: Path) -> N
     assert result.returncode == 0, result
     assert "::error::x" not in result.stdout
     assert "::warning title=Dev catch-up not checked::" in result.stdout and summary == ""
+
+
+@pytest.mark.parametrize(
+    ("runs", "job_id"),
+    [([{"id": "::error::run"}], HEAD_JOB), (None, "::error::job")],
+    ids=["run-id", "job-id"],
+)
+def test_catch_up_rejects_ids_that_arent_numbers(
+    jobs: dict[str, Any], tmp_path: Path, runs: list[dict[str, Any]] | None, job_id: Any
+) -> None:
+    """#283: a run id or job id that isn't a number is a warning (exit 0), never echoed
+    or put in a URL: the run's jobs aren't listed with a bad run id, and a bad job id
+    isn't flagged."""
+    job = deploy_job("completed", "cancelled")
+    job[-1]["id"] = job_id
+    result, summary, log = run_catch_up(jobs, tmp_path, head_answers(runs=runs, jobs=job))
+    assert result.returncode == 0, result
+    bad = runs[0]["id"] if runs else job_id
+    assert bad not in result.stdout and bad not in result.stderr
+    assert "::warning title=Dev catch-up not checked::" in result.stdout and summary == ""
+    if runs:
+        assert "unexpected run id" in result.stdout
+        assert not any("/jobs?" in call for call in log)
+    else:
+        assert "unexpected job id" in result.stdout
 
 
 def test_catch_up_job_runs_after_every_deploy_dev_that_got_past_the_order_check(

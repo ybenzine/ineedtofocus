@@ -120,19 +120,22 @@ jobs:
           dev_now() {
             local since="" since_digits=0 rolled list id sha created state order seen=" " digits
             rolled=$(gh api "repos/$GH_REPO/actions/workflows/rollback.yml/runs?branch=main&event=workflow_dispatch&per_page=100" \
-              --jq '[.workflow_runs[] | select(.display_title | startswith("Roll back dev ")) | .updated_at] | max // ""')
+              --jq '[.workflow_runs[] | select(.display_title | startswith("Roll back dev ")) | .updated_at] | max // ""') ||
+              die "Dev's release unknown" "listing dev's rollback runs failed; pass the tag explicitly."
             if [[ -n $rolled ]]; then
               utc_digits "$rolled"
               since=$rolled since_digits=$digits
             fi
-            list=$(gh api "repos/$GH_REPO/deployments?environment=dev&per_page=30" --jq '.[] | "\(.id) \(.sha) \(.created_at)"')
+            list=$(gh api "repos/$GH_REPO/deployments?environment=dev&per_page=30" --jq '.[] | "\(.id) \(.sha) \(.created_at)"') ||
+              die "Dev's release unknown" "listing dev's deployments failed; pass the tag explicitly."
             tag=""
             while read -r id sha created; do
               [[ -n $id ]] || continue
               [[ $seen == *" $sha "* ]] && continue
               utc_digits "$created"
               ((digits > since_digits)) || continue
-              state=$(gh api "repos/$GH_REPO/deployments/$id/statuses?per_page=1" --jq '.[0].state // ""')
+              state=$(gh api "repos/$GH_REPO/deployments/$id/statuses?per_page=1" --jq '.[0].state // ""') ||
+                die "Dev's release unknown" "reading a dev deployment's statuses failed; pass the tag explicitly."
               [[ $state == success || $state == inactive ]] || continue
               [[ $sha =~ ^[0-9a-f]{40}$ ]] ||
                 die "Dev's release unknown" "a dev deployment has a malformed sha."
