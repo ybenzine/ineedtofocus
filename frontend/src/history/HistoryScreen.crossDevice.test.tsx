@@ -205,7 +205,11 @@ describe('a session restored on another device (#228)', () => {
   it('keeps the mark of a session archived here when an older answer still lists it', async () => {
     await syncedSession({ goal: 'Mine to archive' })
     renderScreen()
-    const archive = await screen.findByRole('button', { name: /^Archive/ })
+    await screen.findByText('Mine to archive')
+    // Wait on the row's text (cheap), then look the button up once: a role query computes every
+    // accessible name and takes ~150 ms here, several seconds on a busy machine, so polling it
+    // for 1 s timed out while the list was already on screen.
+    const archive = screen.getByRole('button', { name: /^Archive/ })
     // The answer that follows the archive still lists the session as live (it predates it).
     history.stale = true
     fireEvent.click(archive)
@@ -255,7 +259,11 @@ describe('a session restored on another device (#228)', () => {
         archiveApi={archiveApi}
       />,
     )
-    const archive = await screen.findByRole('button', { name: /^Archive/ })
+    await screen.findByText('Undone')
+    // Wait on the row's text (cheap), then look the button up once: a role query computes every
+    // accessible name and takes ~150 ms here, several seconds on a busy machine, so polling it
+    // for 1 s timed out while the list was already on screen.
+    const archive = screen.getByRole('button', { name: /^Archive/ })
     hold = true
     fireEvent.click(archive)
     fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))

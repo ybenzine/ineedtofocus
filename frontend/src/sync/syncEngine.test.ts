@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FakeSessionsServer, freshDbName, makeRecord } from '../test/fakeSessionsServer.ts'
 import { MemoryActiveSessionStore, TimerController } from '../timer/index.ts'
 import { HttpSessionsApi } from './api.ts'
@@ -432,10 +432,19 @@ describe('SyncEngine', () => {
         }
       },
     })
-    expect((await engine.syncNow()).outcome).toBe('unavailable')
-    expect(held).toBe(0)
-    stall = false
-    expect((await engine.syncNow()).synced).toBe(1)
+    // The time limit runs on a fake clock, so only the test decides when it expires: a real 20 ms
+    // limit also cut off the healthy second pass when the machine was busy.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const stalled = engine.syncNow()
+      await vi.advanceTimersByTimeAsync(20)
+      expect((await stalled).outcome).toBe('unavailable')
+      expect(held).toBe(0)
+      stall = false
+      expect((await engine.syncNow()).synced).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('reports a 401 to the accounts UI, but not a change of user', async () => {
