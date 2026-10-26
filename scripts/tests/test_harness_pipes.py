@@ -4,8 +4,8 @@ The harnesses run under `set -euo pipefail`. In `x=$(writer | head -n1)`, head e
 one line; a writer with more left to write then dies of SIGPIPE, the pipeline's status is
 141, and set -e stops the harness with it, after a passing check. Whether it happens
 depends on the writer's write sizes and on scheduling, so it flakes: `make test-server`
-failed with Error 141 that way, from `new_calls | head -n1` (tail writes a file 8 KiB at a
-time). The harnesses use `first_line` (infra/server/tests/lib.sh), which reads its input
+failed with Error 141 that way, from `new_calls | head -n1` (tail writes to a pipe 4 KiB at
+a time). The harnesses use `first_line` (infra/server/tests/lib.sh), which reads its input
 to the end, or read the file itself.
 
 This checks every shell script of the harnesses (the host side and what runs in the test
