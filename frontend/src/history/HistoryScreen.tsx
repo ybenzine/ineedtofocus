@@ -163,6 +163,10 @@ export default function HistoryScreen({
     return () => window.removeEventListener('online', onOnline)
   }, [])
 
+  // A sync that changed something on the device (a session saved to the account, an edit
+  // applied) refreshes the list, its "not saved" note and the rows' badges (AC10.9).
+  useEffect(() => sync?.onChange(() => setReload((n) => n + 1)), [sync])
+
   const needsRange = view === 'custom' && custom === null
   const query = useMemo<HistoryQuery>(
     () => ({

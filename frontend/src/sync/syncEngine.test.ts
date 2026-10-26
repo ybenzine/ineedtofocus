@@ -493,3 +493,33 @@ describe('SyncEngine', () => {
     expect(scheduler.pending.size).toBe(0)
   })
 })
+
+describe('onChange (#264)', () => {
+  it('calls the listener once per run that changed something, not for an idle run', async () => {
+    const { store, engine } = setup()
+    const reports: number[] = []
+    const stop = engine.onChange((report) => reports.push(report.synced))
+    await engine.syncNow() // nothing to send
+    expect(reports).toEqual([])
+    await store.save(makeRecord(), ALICE)
+    await engine.syncNow()
+    expect(reports).toEqual([1])
+    stop()
+    await store.save(makeRecord(), ALICE)
+    await engine.syncNow()
+    expect(reports).toEqual([1])
+  })
+
+  it('a throwing listener does not break the sync or the other listeners', async () => {
+    const { store, engine } = setup()
+    const seen: string[] = []
+    engine.onChange(() => {
+      throw new Error('boom')
+    })
+    engine.onChange(() => seen.push('ok'))
+    await store.save(makeRecord(), ALICE)
+    const report = await engine.syncNow()
+    expect(report.synced).toBe(1)
+    expect(seen).toEqual(['ok'])
+  })
+})

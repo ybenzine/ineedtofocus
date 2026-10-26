@@ -106,6 +106,7 @@ export class SyncEngine {
   readonly #exclusive: <T>(run: () => Promise<T>) => Promise<T>
   readonly #storeTimeoutMs: number
   readonly #onUnauthorized: () => void
+  readonly #listeners = new Set<(report: SyncReport) => void>()
   #running: Promise<SyncReport> | null = null
   #again = false
   #failures = 0
@@ -122,6 +123,19 @@ export class SyncEngine {
     this.#exclusive = options.exclusive ?? browserExclusive
     this.#storeTimeoutMs = options.storeTimeoutMs ?? SAVE_TIMEOUT_MS
     this.#onUnauthorized = options.onUnauthorized ?? (() => undefined)
+  }
+
+  /**
+   * Calls `listener` once after each sync run that changed something on the device (a session
+   * synced or refused, an edit applied or dropped), so open screens can refresh what they show
+   * (AC10.9). A run that changed nothing, or a caller that joined a run already going, adds no
+   * call. Returns a function that stops listening.
+   */
+  onChange(listener: (report: SyncReport) => void): () => void {
+    this.#listeners.add(listener)
+    return () => {
+      this.#listeners.delete(listener)
+    }
   }
 
   /** Consecutive failed passes; drives the backoff. */
@@ -163,6 +177,15 @@ export class SyncEngine {
     })
     return this.#running.then((report) => {
       this.#afterPass(report)
+      if (report.synced + report.rejected + report.edited > 0 || report.dropped.length > 0) {
+        for (const listener of [...this.#listeners]) {
+          try {
+            listener(copyReport(report))
+          } catch {
+            // A screen's refresh must not break the sync.
+          }
+        }
+      }
       return copyReport(report)
     })
   }

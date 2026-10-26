@@ -217,6 +217,7 @@ describe('editing a session (AC11.1)', () => {
       const pending: ((r: SyncReport) => void)[] = []
       const stub = {
         syncNow: vi.fn(() => new Promise<SyncReport>((resolve) => pending.push(resolve))),
+        onChange: () => () => undefined,
       }
       return { sync: stub as unknown as SyncEngine, pending }
     }
