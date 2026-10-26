@@ -8,16 +8,24 @@ crosses from a session to those steps is a file the step checks: decision.json, 
 a review verdict, a git bundle. State passes from one session to the next only through the
 checked values in its prompt, never through what an earlier session wrote on the issue.
 
-    incident <event.json> <issues.json> <prs.json> <runs.json> <run id> <out dir>
-        # find (or plan) the incident issue, the daily run cap, what the incident already
-        # had; GITHUB_OUTPUT: alert, environment, status, incident, create, rolled_back,
-        # open_pr, capped, cap_notice, run_agent; writes incident-body.md and cap-body.md
+    cap-runs <event.json> <runs.json> <run id>
+        # the earlier runs the daily cap looks at (same alert and environment, last 24 h),
+        # one ID per line, for the step that reads each one's jobs
+    incident <event.json> <issues.json> <prs.json> <runs.json> <run id> <out dir> <jobs dir>
+        # find (or plan) the incident issue, the daily run cap (runs whose agent session
+        # started, from <jobs dir>/<run id>.json), what the incident already had;
+        # GITHUB_OUTPUT: alert, environment, status, incident, create, rolled_back, open_pr,
+        # capped, cap_notice, close_capped, run_agent; writes incident-body.md, cap-body.md
+    capped-summary <event.json> <incident> <issues.json> <runs.json> <run id>
+        <comments.json> <open pr or "">
+        # a resolution over the cap (#312): the workflow's own incident summary, no session
     prompt <event.json> <out dir> --incident <n> --rolled-back <bool> --open-pr <n>
         # the on-call agent's prompt.md and alert.json
     decision <dir> --status <s> --environment <env> --incident <n> --rolled-back <bool>
-        --open-pr <n>
+        --open-pr <n> [--run-url <url>]
         # the agent's decision.json and comment.md, checked; GITHUB_OUTPUT: action,
-        # rollback_tag, branch, comment, reason ("stalled" when they don't pass)
+        # rollback_tag, branch, cause, reason ("stalled" when they don't pass); writes
+        # <dir>/update.md: the comment, then the workflow's record of the decision
     check-fix <branch> <incident>
         # the agent's fix branch, in this checkout: name, base, files, size
     pr-body <pr.md or -> <incident>      # the fix PR's body: `Refs #<n>`, never Closes
@@ -82,9 +90,34 @@ AGENT_FIELDS = (
     "started_at",
     "resolved_at",
 )
-# Agent runs per alert and environment in 24 hours (firing, repeats and resolution). The
-# Anthropic spend limit is the backstop.
+# Runs per alert and environment in 24 hours in which the on-call agent session started
+# (firing, repeats and resolution). Runs with no session (capped, skipped, no agent job)
+# don't count, and a resolution over the cap still closes its incident, with the
+# workflow's own summary and no session (#312). The Anthropic spend limit is the backstop.
 DAILY_RUN_CAP = 4
+# How the cap tells, from a run's jobs (`gh run view <id> --json jobs`), that its agent
+# session started and that it posted the cap's ⛔: the job and step names in oncall.yml
+# (tested, so a rename there fails here).
+SESSION_JOB = "On-call agent"
+SESSION_STEP = "Run the on-call agent"
+INCIDENT_JOB = "Incident issue"
+CAP_STEP = "Post the daily cap"
+# The account the workflow token posts as.
+WORKFLOW_BOT = "github-actions[bot]"
+# The workflow's record of a checked decision: the last line of the comment it posts for
+# it (#312). Session text can't carry one: check_comment refuses it.
+DECISION_MARKER = re.compile(r"<!-- oncall:decision (\{.*\}) -->")
+MARKER_TEXT = re.compile(r"<!--\s*oncall\s*:", re.IGNORECASE)
+# The decision's cause as the workflow's summary may show it: one line, at most MAX_CAUSE
+# characters of letters, digits, spaces and `_ . , ; : ( ) ' / % + = -` (no mention,
+# link, issue reference, HTML or Markdown).
+CAUSE_UNSAFE = re.compile(r"[^A-Za-z0-9 _.,;:()'/%+=-]")
+MAX_CAUSE = 200
+# Runs this long before the incident opened still belong to it: the run that opens an
+# issue starts before the issue exists.
+RUN_MARGIN = dt.timedelta(minutes=10)
+MAX_LISTED_RUNS = 20
+RUN_ID = re.compile(r"[1-9][0-9]{0,19}")
 MAX_COMMENT = 20_000
 MAX_FIX_FILES = 20
 MAX_FIX_LINES = 1000
@@ -235,22 +268,77 @@ def open_fix_pr(prs: list[dict[str, Any]], incident: int) -> int | None:
     return None
 
 
-def runs_today(
-    runs: list[dict[str, Any]], payload: dict[str, Any], run_id: str, now: dt.datetime
-) -> int:
-    """This workflow's earlier runs for the same alert and environment in the last 24 h."""
+def _alert_runs(runs: list[dict[str, Any]], payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """This workflow's runs for the same alert and environment, by their run name."""
     pattern = re.compile(
         rf"Alert: {re.escape(payload['alert'])} (firing|resolved) in "
         rf"{re.escape(payload['environment'])}"
     )
-    since = now - dt.timedelta(hours=24)
-    return sum(
-        1
+    return [
+        r
         for r in runs
-        if str(r.get("databaseId")) != run_id
-        and pattern.fullmatch(str(r.get("displayTitle", "")))
-        and _time(str(r["createdAt"])) >= since
+        if pattern.fullmatch(str(r.get("displayTitle", "")))
+        and RUN_ID.fullmatch(str(r.get("databaseId", "")))
+        and r.get("createdAt")
+    ]
+
+
+def cap_runs(
+    runs: list[dict[str, Any]], payload: dict[str, Any], run_id: str, now: dt.datetime
+) -> list[str]:
+    """The earlier runs the cap looks at, newest first: same alert and environment, last
+    24 h. Their jobs say whether each one's session started."""
+    since = now - dt.timedelta(hours=24)
+    found = [
+        r
+        for r in _alert_runs(runs, payload)
+        if str(r["databaseId"]) != run_id and _time(str(r["createdAt"])) >= since
+    ]
+    found.sort(key=lambda r: _time(str(r["createdAt"])), reverse=True)
+    return [str(r["databaseId"]) for r in found]
+
+
+def _step(jobs: Any, job_name: str, step_name: str) -> dict[str, Any] | None:
+    if not isinstance(jobs, dict) or not isinstance(jobs.get("jobs"), list):
+        return None
+    for job in jobs["jobs"]:
+        if isinstance(job, dict) and job.get("name") == job_name:
+            for step in job.get("steps") or []:
+                if isinstance(step, dict) and step.get("name") == step_name:
+                    return step
+    return None
+
+
+def _step_ran(step: dict[str, Any] | None) -> bool:
+    """Running, or finished with anything but `skipped` (a failure or a cancel counts)."""
+    if step is None:
+        return False
+    if step.get("status") == "in_progress":
+        return True
+    return step.get("status") == "completed" and step.get("conclusion") not in (
+        "skipped",
+        "",
+        None,
     )
+
+
+def session_started(jobs: Any) -> bool:
+    """Whether a run's on-call agent session started, from `gh run view --json jobs`. A
+    run whose jobs couldn't be read (None) counts: the cap bounds cost, so an unknown run
+    is counted rather than ignored."""
+    return jobs is None or _step_ran(_step(jobs, SESSION_JOB, SESSION_STEP))
+
+
+def cap_posted(jobs: Any) -> bool:
+    """Whether a run posted the cap's ⛔ (its incident job ran the step)."""
+    return _step_ran(_step(jobs, INCIDENT_JOB, CAP_STEP))
+
+
+def _run_jobs(jobs_dir: Path, run: str) -> Any:
+    try:
+        return json.loads((jobs_dir / f"{run}.json").read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
 
 
 def incident(
@@ -260,6 +348,7 @@ def incident(
     runs_path: str,
     run_id: str,
     out: str,
+    jobs_dir: str,
     now: dt.datetime | None = None,
 ) -> int:
     payload = _checked_payload(event_path)
@@ -270,8 +359,17 @@ def incident(
     found = find_incident(issues, payload)
     number = int(found["number"]) if found else None
     create = found is None and payload["status"] == "firing"
-    count = runs_today(runs, payload, run_id, now)
+    earlier = [_run_jobs(Path(jobs_dir), r) for r in cap_runs(runs, payload, run_id, now)]
+    count = sum(1 for jobs in earlier if session_started(jobs))
     capped = count >= DAILY_RUN_CAP
+    # A resolution needs no paid session: over the cap, the workflow closes the incident
+    # with its own summary (#312).
+    close_capped = capped and payload["status"] == "resolved" and number is not None
+    # The cap's ⛔ once in 24 hours: not when an earlier run in the window posted it, and
+    # not for a resolution, which the workflow still handles.
+    cap_notice = (
+        capped and payload["status"] == "firing" and not any(cap_posted(j) for j in earlier)
+    )
     out_dir = Path(out)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "incident-body.md").write_text(
@@ -307,17 +405,165 @@ def incident(
             "rolled_back": str(found is not None and ROLLED_BACK in _labels(found)).lower(),
             "open_pr": (open_fix_pr(prs, number) if number else None) or "",
             "capped": str(capped).lower(),
-            # Post the cap's ⛔ once: on the first run over it, not on every later one.
-            "cap_notice": str(count == DAILY_RUN_CAP).lower(),
+            "cap_notice": str(cap_notice).lower(),
+            "close_capped": str(close_capped).lower(),
             "run_agent": str(run_agent).lower(),
         }
     )
     what = f"#{number}" if number else ("a new one" if create else "none (nothing to do)")
     print(
         f"ok    {payload['alert']} {payload['status']} in {payload['environment']}; incident "
-        f"{what}; {count} earlier runs in 24 h (cap {DAILY_RUN_CAP})"
+        f"{what}; {count} of {len(earlier)} earlier runs in 24 h had an agent session "
+        f"(cap {DAILY_RUN_CAP})"
     )
     return 0
+
+
+# --- A resolution over the cap (#312) -------------------------------------------------
+
+
+def _cause(value: Any) -> str:
+    return _one_line(CAUSE_UNSAFE.sub("", _one_line(str(value))))[:MAX_CAUSE].strip()
+
+
+def decision_marker(action: str, cause: str, run_url: str) -> str:
+    """The workflow's record of a checked decision, on the last line of the act job's
+    comment: what a capped resolution's summary reads back."""
+    record = {"action": action, "cause": _cause(cause), "run": run_url}
+    return f"<!-- oncall:decision {json.dumps(record, sort_keys=True)} -->"
+
+
+def read_comments(text: str) -> list[dict[str, Any]]:
+    """`gh api …/comments --jq '.[] | {login: …, body: …}'`: JSON objects one after the
+    other, compact or not, or one array."""
+    decoder = json.JSONDecoder()
+    found: list[dict[str, Any]] = []
+    i = 0
+    while True:
+        while i < len(text) and text[i].isspace():
+            i += 1
+        if i >= len(text):
+            return found
+        value, i = decoder.raw_decode(text, i)
+        values = value if isinstance(value, list) else [value]
+        found += [v for v in values if isinstance(v, dict)]
+
+
+def last_decision(comments: list[dict[str, Any]]) -> dict[str, str] | None:
+    """The last decision the workflow recorded on the incident: the marker on the last line
+    of a comment by the workflow's bot, checked again here."""
+    last = None
+    for comment in comments:
+        if comment.get("login") != WORKFLOW_BOT:
+            continue
+        lines = [line for line in str(comment.get("body") or "").splitlines() if line.strip()]
+        m = DECISION_MARKER.fullmatch(lines[-1].strip()) if lines else None
+        if not m:
+            continue
+        try:
+            record = json.loads(m.group(1))
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict) or record.get("action") not in ACTIONS:
+            continue
+        run = str(record.get("run") or "")
+        last = {
+            "action": str(record["action"]),
+            "cause": _cause(record.get("cause") or ""),
+            "run": run if RUN_URL.fullmatch(run) else "",
+        }
+    return last
+
+
+def incident_runs(
+    issues: list[dict[str, Any]],
+    runs: list[dict[str, Any]],
+    payload: dict[str, Any],
+    number: int,
+    run_id: str,
+) -> list[tuple[str, str, str]]:
+    """The incident's on-call runs, oldest first, as (run ID, firing|resolved, created
+    at): its alert and environment's runs from shortly before the incident opened (or
+    this firing started, if earlier), after the previous incident of that title closed.
+    This run is last, as "now"."""
+    title = incident_title(payload)
+    this = next((i for i in issues if str(i.get("number")) == str(number)), {})
+    opened = _time(payload["started_at"])
+    if this.get("createdAt"):
+        opened = min(opened, _time(str(this["createdAt"])))
+    since = opened - RUN_MARGIN
+    for other in issues:
+        closed = other.get("closedAt")
+        if (
+            other.get("title") == title
+            and NUMBER.fullmatch(str(other.get("number", "")))
+            and int(other["number"]) < number
+            and closed
+            and since < _time(str(closed)) <= opened
+        ):
+            since = _time(str(closed))
+    found = [
+        (str(r["databaseId"]), str(r["displayTitle"]).split()[2], str(r["createdAt"]))
+        for r in _alert_runs(runs, payload)
+        if str(r["databaseId"]) != run_id and _time(str(r["createdAt"])) >= since
+    ]
+    found.sort(key=lambda r: _time(r[2]))
+    return [*found, (run_id, payload["status"], "now")]
+
+
+def capped_summary(
+    payload: dict[str, Any],
+    number: int,
+    issues: list[dict[str, Any]],
+    runs: list[dict[str, Any]],
+    run_id: str,
+    comments: list[dict[str, Any]],
+    open_pr: int | None,
+) -> str:
+    """The incident summary the workflow posts for a resolution over the cap. No session
+    wrote it: it holds the payload's checked values, run links and the decision the
+    workflow recorded, checked again."""
+    if payload["status"] != "resolved":
+        raise Invalid("a capped summary is for a resolved alert")
+    if not RUN_ID.fullmatch(run_id):
+        raise Invalid("not a run ID")
+    base = f"https://github.com/{d.REPOSITORY}/actions/runs/"
+    listed = incident_runs(issues, runs, payload, number, run_id)
+    shown = listed[-MAX_LISTED_RUNS:]
+    lines = [
+        f"  - [{rid}]({base}{rid}): {status}, " + ("this run" if at == "now" else at)
+        for rid, status, at in shown
+    ]
+    if len(listed) > len(shown):
+        lines.insert(0, f"  - and {len(listed) - len(shown)} earlier ones")
+    found = last_decision(comments)
+    if found is None:
+        action = cause = "not analysed by the agent: daily cap reached"
+    else:
+        where = f" (run {found['run']})" if found["run"] else ""
+        action = f"`{found['action']}`{where}"
+        cause = found["cause"] or "not recorded in the decision (see the agent's update above)"
+    if open_pr:
+        closing = (
+            f"The incident stays open: its fix PR #{open_pr} is still open. Close it once that "
+            "PR is merged or closed."
+        )
+    else:
+        closing = "The workflow closes the incident."
+    return render(
+        "capped-summary",
+        alert=payload["alert"],
+        env=payload["environment"],
+        title=payload["title"],
+        started_at=payload["started_at"],
+        resolved_at=payload["resolved_at"],
+        cap=DAILY_RUN_CAP,
+        action=action,
+        cause=cause,
+        runs="\n".join(lines),
+        closing=closing,
+        runbook=f"{RUNBOOKS}/{payload['alert']}.md",
+    )
 
 
 # --- The on-call agent's prompt -------------------------------------------------------
@@ -378,13 +624,23 @@ def check_decision(raw: Any, context: dict[str, Any]) -> dict[str, Any]:
     rolled_back, open_pr, all from the workflow's own outputs, never from the agent."""
     if not isinstance(raw, dict):
         raise Invalid("decision.json is not an object")
-    extra = set(raw) - {"action", "rollback", "branch"}
+    extra = set(raw) - {"action", "rollback", "branch", "cause"}
     if extra:
         raise Invalid(f"unexpected keys: {', '.join(sorted(extra))}")
     action = raw.get("action")
     if action not in ACTIONS:
         raise Invalid(f"action {str(action)[:20]!r} is not one of {', '.join(ACTIONS)}")
-    result: dict[str, Any] = {"action": action, "rollback_tag": "", "branch": ""}
+    cause = raw.get("cause", "")
+    if not isinstance(cause, str):
+        raise Invalid("cause must be a string")
+    # The cause is what the workflow's own summary shows if a resolution comes over the
+    # cap (#312): cut to one safe line here.
+    result: dict[str, Any] = {
+        "action": action,
+        "rollback_tag": "",
+        "branch": "",
+        "cause": _cause(cause),
+    }
     if action in ("rollback", "fix") and context["status"] != "firing":
         raise Invalid(f"a {action} is only for a firing alert")
     if action == "rollback":
@@ -421,6 +677,8 @@ def check_comment(path: Path) -> None:
         raise Invalid("comment.md is empty")
     if len(text) > MAX_COMMENT:
         raise Invalid(f"comment.md is longer than {MAX_COMMENT} characters")
+    if MARKER_TEXT.search(text):
+        raise Invalid("comment.md holds the workflow's own record (<!-- oncall:…)")
 
 
 def decision(directory: str, values: dict[str, str]) -> int:
@@ -433,6 +691,9 @@ def decision(directory: str, values: dict[str, str]) -> int:
     }
     if context["status"] not in d.STATUSES or context["environment"] not in d.DEPLOYED:
         raise Invalid("bad status or environment")
+    run_url = values.get("run_url", "")
+    if run_url and not RUN_URL.fullmatch(run_url):
+        raise Invalid("--run-url is not a run of this repo")
     base = Path(directory)
     try:
         path = base / "decision.json"
@@ -447,9 +708,20 @@ def decision(directory: str, values: dict[str, str]) -> int:
     except Invalid as e:
         print(f"::error title=On-call decision refused::{json.dumps(str(e))}")
         _write_outputs(
-            {"action": "stalled", "rollback_tag": "", "branch": "", "reason": _one_line(str(e))}
+            {
+                "action": "stalled",
+                "rollback_tag": "",
+                "branch": "",
+                "cause": "",
+                "reason": _one_line(str(e)),
+            }
         )
         return 0
+    # What the act job posts: the agent's comment, then the workflow's record of the
+    # checked decision, which a capped resolution's summary reads back (#312).
+    comment = (base / "comment.md").read_text().rstrip()
+    marker = decision_marker(result["action"], result["cause"], run_url)
+    (base / "update.md").write_text(f"{comment}\n\n{marker}\n")
     _write_outputs({**result, "reason": ""})
     print(f"ok    decision: {result['action']} for incident #{context['incident']}")
     return 0
@@ -913,8 +1185,26 @@ def _write(out: str, name: str, text: str) -> int:
 def main(argv: list[str]) -> int:
     command, args = (argv[0], argv[1:]) if argv else ("", [])
     try:
-        if command == "incident" and len(args) == 6:
-            return incident(args[0], args[1], args[2], args[3], args[4], args[5])
+        if command == "cap-runs" and len(args) == 3:
+            payload = _checked_payload(args[0])
+            runs = json.loads(Path(args[1]).read_text() or "[]")
+            for run in cap_runs(runs, payload, args[2], dt.datetime.now(dt.UTC)):
+                print(run)
+            return 0
+        if command == "incident" and len(args) == 7:
+            return incident(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+        if command == "capped-summary" and len(args) == 7:
+            body = capped_summary(
+                _checked_payload(args[0]),
+                _number(args[1], "incident"),
+                json.loads(Path(args[2]).read_text() or "[]"),
+                json.loads(Path(args[3]).read_text() or "[]"),
+                args[4],
+                read_comments(Path(args[5]).read_text()),
+                _optional_number(args[6], "open_pr"),
+            )
+            print(body, end="")
+            return 0
         if command == "prompt" and len(args) >= 2:
             return prompt(args[0], args[1], _options(args[2:]))
         if command == "decision" and args:

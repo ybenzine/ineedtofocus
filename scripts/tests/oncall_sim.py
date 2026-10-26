@@ -56,15 +56,21 @@ case "$1 $2" in
       [[ ${args[i]} == --body-file ]] && cp "${args[i + 1]}" "$SIM/comments/$((n + 1))-$3.md"
     done ;;
   "pr merge") [[ -f $SIM/fail-pr-merge ]] && { echo "merge failed: HTTP 405" >&2; exit 1; } ;;
-  "issue lock" | "issue edit" | "issue close" | "label create" | "pr checks") ;;
+  "issue close") [[ -f $SIM/fail-issue-close ]] && { echo "close failed: HTTP 502" >&2; exit 1; } ;;
+  "issue lock" | "issue edit" | "label create" | "pr checks") ;;
   "workflow run") touch "$SIM/dispatched" ;;
   "run watch") exit "$(cat "$SIM/watch-exit" 2> /dev/null || echo 0)" ;;
+  "run view")
+    # An earlier oncall run's jobs (the daily cap, #312): run-<id>.json, else not found.
+    [[ -f $SIM/run-$3.json ]] || { echo "HTTP 404: Not Found" >&2; exit 1; }
+    answer "$SIM/run-$3.json" ;;
   "pr view") answer "$SIM/pr.json" ;;
   "pr create")
     [[ -f $SIM/fail-pr-create ]] && { echo "pull request create failed: HTTP 422" >&2; exit 1; }
     echo "https://github.com/ybenzine/ineedtofocus/pull/$(cat "$SIM/new-pr")" ;;
   "pr review") ;;
   "auth setup-git") ;;
+  "api repos/"*/comments) answer "$SIM/issue-comments.json" ;;
   "api repos/"*) answer "$SIM/issue-api.json" ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
@@ -219,6 +225,7 @@ class Simulation:
             "runs.json",
             "rollback-before.json",
             "rollback-after.json",
+            "issue-comments.json",
         ):
             self.write(name, "[]")
         self.write("pr.json", "{}")

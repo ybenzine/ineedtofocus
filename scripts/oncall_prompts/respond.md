@@ -25,7 +25,9 @@ ${todo}
 2. `/tmp/oncall/decision.json`, with nothing else in it:
 
 ```json
-{"action": "rollback | fix | escalate | none", "rollback": {"tag": "<empty, or a 40-hex known-good sha>"}, "branch": "<oncall/${incident}-<slug>, for fix only>"}
+{"action": "rollback | fix | escalate | none", "cause": "<the cause in one line>", "rollback": {"tag": "<empty, or a 40-hex known-good sha>"}, "branch": "<oncall/${incident}-<slug>, for fix only>"}
 ```
+
+`cause` is the cause as you found it, in one plain line of at most 200 characters (for example `InjectedSaveFault: fault injection left on in dev`), with no customer data. If a later run comes over the workflow's daily cap, the incident summary the workflow writes without an agent quotes it. The workflow keeps only letters, digits, spaces and `_ . , ; : ( ) ' / % + = -`.
 
 The workflow checks both. A rollback is of this alert's environment (${env}), only while it's firing, and only once per incident. A fix is only while it's firing, and only when the incident has no open fix PR. Files that don't pass the check get no action: the workflow posts `⛔ Needs Yacine:` instead.
