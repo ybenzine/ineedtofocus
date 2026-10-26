@@ -355,6 +355,24 @@ def test_an_unexpected_failure_inside_the_handler_is_counted_once(
     assert _value("focus.session.saves", kind="sync", outcome="error") == sync_errors + 3
 
 
+def test_dev_build_fails_saves_as_errors_and_stores_nothing(
+    traced: tuple[TestClient, InMemorySpanExporter], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#317 demo: in dev, both save endpoints fail with a 500 counted as `outcome="error"`
+    (what the session-save alert counts), and nothing is written."""
+    c, _ = traced
+    _signed_in(c)
+    monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "deployment.environment.name=dev")
+    single = _value("focus.session.saves", kind="single", outcome="error")
+    sync = _value("focus.session.saves", kind="sync", outcome="error")
+    assert c.post("/api/sessions", json=make_session()).status_code == 500
+    batch = {"sessions": [make_session() for _ in range(3)]}
+    assert c.post("/api/sessions/sync", json=batch).status_code == 500
+    assert _value("focus.session.saves", kind="single", outcome="error") == single + 1
+    assert _value("focus.session.saves", kind="sync", outcome="error") == sync + 3
+    assert c.get("/api/history?view=all&tz=UTC").json()["total_focus_seconds"] == 0
+
+
 def test_an_unexpected_failure_in_a_history_load_is_counted_once(
     traced: tuple[TestClient, InMemorySpanExporter], monkeypatch: pytest.MonkeyPatch
 ) -> None:
