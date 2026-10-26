@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   OWNER_KEY,
   USER_KEY,
@@ -8,7 +8,7 @@ import {
   registerLocalDataHook,
   signedInUserId,
 } from '../auth/localData.ts'
-import { sessionDataHook } from '../services.ts'
+import { createAppServices, sessionDataHook } from '../services.ts'
 import { FakeSessionsServer, freshDbName, makeRecord } from '../test/fakeSessionsServer.ts'
 import {
   LocalActiveSessionStore,
@@ -265,5 +265,81 @@ describe('a session whose first write failed keeps its owner on the retry (#245)
     full = false
     active.save(state)
     expect(active.ownerOf('s1')).toBe(ALICE)
+  })
+})
+
+describe('a memory-only session that ends after a 401 (#286)', () => {
+  it('is saved under the user who started it and syncs when that user is back', async () => {
+    const server = new FakeSessionsServer()
+    vi.stubGlobal('fetch', server.fetch)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.UTC(2026, 9, 25, 9, 0))
+    const who = { owner: ALICE as string | null }
+    const services = createAppServices(() => who.owner)
+    const device = new IndexedDbSessionStore()
+    stores.push(device)
+    let failing: ReturnType<typeof vi.spyOn> | undefined
+    try {
+      // The store is failing for the whole test: the owner record is never written.
+      failing = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new Error('QuotaExceededError')
+      })
+      const started = await services.controller.start({
+        config: { mode: 'unlimited', reminderMinutes: null },
+        tag: 'work',
+        goal: 'Secret goal',
+      })
+      expect(started.unsaved).toBe(true)
+
+      // The sign-in expires (401): nobody is signed in when the session ends.
+      who.owner = null
+      vi.setSystemTime(Date.UTC(2026, 9, 25, 9, 10))
+      await services.controller.stop()
+      await vi.waitFor(async () => {
+        expect(await device.countUnsynced(ALICE)).toEqual({ sessions: 1, edits: 0 })
+      })
+      expect(await device.countUnsynced(null)).toEqual({ sessions: 0, edits: 0 })
+
+      // Alice is back: it syncs to her account.
+      failing.mockRestore() // the store works again (also restored in `finally`)
+      who.owner = ALICE
+      await services.sync?.syncNow()
+      expect(server.sessions.size).toBe(1)
+    } finally {
+      failing?.mockRestore()
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+      await device.clearOwner(ALICE)
+    }
+  })
+})
+
+describe('a session recorded as owned by nobody stays that way (#286)', () => {
+  it('is not filed under the user signed in another tab when it ends there', async () => {
+    const aloneServices = createAppServices(() => null)
+    const bobServices = createAppServices(() => BOB)
+    const device = new IndexedDbSessionStore()
+    stores.push(device)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.UTC(2026, 9, 25, 9, 0))
+    try {
+      // Tab 1: nobody signed in; the owner is recorded as null.
+      await aloneServices.controller.start({
+        config: { mode: 'unlimited', reminderMinutes: null },
+        tag: 'work',
+        goal: null,
+      })
+      // Tab 2: Bob is signed in; it follows the stored session and stops it.
+      await bobServices.controller.restore()
+      vi.setSystemTime(Date.UTC(2026, 9, 25, 9, 10))
+      await bobServices.controller.stop()
+      await vi.waitFor(async () => {
+        expect(await device.countUnsynced(null)).toEqual({ sessions: 1, edits: 0 })
+      })
+      expect(await device.countUnsynced(BOB)).toEqual({ sessions: 0, edits: 0 })
+    } finally {
+      vi.useRealTimers()
+      await device.clearOwner(BOB)
+    }
   })
 })

@@ -14,7 +14,7 @@ import {
   signedInUserId,
   trySyncAll,
 } from './auth/localData.ts'
-import { registerUpdateFlush, setViewBusy } from './update/idle.ts'
+import { registerMemoryHolder, registerUpdateFlush, setViewBusy } from './update/idle.ts'
 import ScreenNav from './nav/ScreenNav.tsx'
 import { pathForScreen, screenFromPath, type ScreenId } from './nav/screens.ts'
 import { httpSettingsApi } from './settings/api.ts'
@@ -256,6 +256,8 @@ function AppBody({
 
   // A timer kept only in this tab's memory still blocks sign-out and keeps its screen (#245).
   useEffect(() => registerMemoryTimerProbe(() => timer.hasUnsaved()), [timer])
+  // ...and so does a finished record held only in memory: no update reload until it is handed over.
+  useEffect(() => registerMemoryHolder(() => timer.hasUnsaved() || timer.holdsRecord()), [timer])
 
   // Send what is on the device now, when the connection returns, and on backoff (AC13.3).
   // Runs only while someone is signed in: AuthGate renders the app only then (#9).
