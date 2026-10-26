@@ -57,6 +57,13 @@ GH_READ = [
 GRAFANA = ["Bash(python3 scripts/oncall_grafana.py *)"]
 
 
+def frontmatter(session: str) -> dict[str, str]:
+    """The session's agent definition's front matter (model, effort, tools)."""
+    text = (REPO / ".claude" / "agents" / f"{DEFINITION[session]}.md").read_text()
+    front = text.split("\n---\n", 1)[0]
+    return dict(line.split(": ", 1) for line in front.splitlines() if ": " in line)
+
+
 def allowed(session: str, out: str) -> list[str]:
     """Each session's allow list, pinned: a change shows up here, in review."""
     if session == "review":
@@ -183,6 +190,8 @@ def test_each_session_gets_its_own_allow_list_on_the_command_line(
     assert argv[0] == "-p"
     opts = options(argv)
     assert opts["--agent"] == [AGENT[session]]
+    # The definition's effort, passed as a flag: -p doesn't apply an agent's `effort:`.
+    assert opts["--effort"] == [frontmatter(session)["effort"]]
     if session == "review":
         # The reviewer's own definition, plus Write for its two files (#232).
         (agents,) = opts["--agents"]
@@ -279,6 +288,8 @@ class FakeAPI(http.server.BaseHTTPRequestHandler):
     every tool result it gets back."""
 
     calls: ClassVar[list[dict[str, Any]]] = []
+    # The model and effort of each main-loop request.
+    asked: ClassVar[list[tuple[str, str]]] = []
     results: ClassVar[dict[str, dict[str, Any]]] = {}
 
     def log_message(self, *_: Any) -> None:
@@ -309,6 +320,9 @@ class FakeAPI(http.server.BaseHTTPRequestHandler):
                     FakeAPI.results[block["tool_use_id"]] = block
                     done += 1
         tools = {t.get("name") for t in request.get("tools", [])}
+        if "Bash" in tools:
+            effort = (request.get("output_config") or {}).get("effort", "")
+            FakeAPI.asked.append((str(request.get("model")), str(effort)))
         if "Bash" in tools and done < len(FakeAPI.calls):
             call = FakeAPI.calls[done]
             block = {
@@ -612,6 +626,7 @@ def test_the_pinned_cli_allows_each_session_exactly_its_tools(
     table = probes(session, work, out)
     FakeAPI.calls = [call for call, _ in table]
     FakeAPI.results = {}
+    FakeAPI.asked = []
     done = run_wrapper(session, work, out, env, turns=len(table) + 5)
     result = json.loads((root / f"{session}-result.json").read_text())
     assert result.get("subtype") == "success", (result, done.stderr)
@@ -625,6 +640,11 @@ def test_the_pinned_cli_allows_each_session_exactly_its_tools(
         if ok == (tool_id in denied):
             wrong.append(("refused" if ok else "allowed", call["tool"], call["input"]))
     assert not wrong, wrong
+    # The agent definition's model and effort reach the API (#35's AC, #232).
+    meta = frontmatter(session)
+    assert FakeAPI.asked, "no main-loop request"
+    for model, effort in FakeAPI.asked:
+        assert meta["model"] in model and effort == meta["effort"], (model, effort)
     for call, ok in table:
         if ok and call["tool"] == "Write":
             assert Path(call["input"]["file_path"]).is_file(), call

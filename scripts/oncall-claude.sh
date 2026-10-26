@@ -41,9 +41,13 @@ esac
 [[ $turns =~ ^[1-9][0-9]?$ && $budget =~ ^[1-9][0-9]?$ ]] || { echo "bad caps" >&2; exit 2; }
 [[ -s $prompt ]] || { echo "no prompt at $prompt" >&2; exit 2; }
 [[ -f .claude/agents/$agent.md ]] || { echo "run from the checkout's root" >&2; exit 2; }
+# The definition's effort: in -p mode Claude Code doesn't apply an agent's `effort:` (it
+# sends medium), so it's passed as a flag. Its `model:` does apply (#232, tested).
+effort=$(sed -n 's/^effort: *//p' ".claude/agents/$agent.md" | head -n 1)
+[[ $effort =~ ^(low|medium|high|xhigh|max)$ ]] || { echo "no effort in $agent.md" >&2; exit 2; }
 
-FLAGS=(--agent --agents --tools --permission-mode --max-turns --max-budget-usd --output-format
-  --add-dir --allowedTools --disallowedTools)
+FLAGS=(--agent --agents --effort --tools --permission-mode --max-turns --max-budget-usd
+  --output-format --add-dir --allowedTools --disallowedTools)
 for flag in "${FLAGS[@]}"; do
   said=$(claude -p "$flag" < /dev/null 2>&1 || true)
   [[ $said == *"argument missing"* ]] || {
@@ -120,7 +124,7 @@ echo "::notice title=Session permissions::$session: tools $TOOLS, ${#ALLOWED[@]}
 export BASH_DEFAULT_TIMEOUT_MS=600000 BASH_MAX_TIMEOUT_MS=900000
 # --add-dir and the rule lists take several values: each list ends at the next flag, and
 # the prompt comes on stdin.
-claude -p "${AGENT[@]}" --tools "$TOOLS" --permission-mode dontAsk \
+claude -p "${AGENT[@]}" --effort "$effort" --tools "$TOOLS" --permission-mode dontAsk \
   --max-turns "$turns" --max-budget-usd "$budget" --output-format json \
   --add-dir "$out" \
   --allowedTools "${ALLOWED[@]}" \
