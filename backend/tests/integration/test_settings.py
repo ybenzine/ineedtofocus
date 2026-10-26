@@ -540,3 +540,35 @@ def test_first_gets_for_a_new_user_race_to_one_row(
             codes = [f.result().status_code for f in futures]
     assert codes == [200, 200]
     assert run(_scalar(test_db_url, "SELECT count(*) FROM user_settings"))[0][0] == 1
+
+
+@pytest.mark.parametrize(
+    "text_link",
+    [
+        "https://www.youtube.com/@channel",
+        "https://www.youtube.com/results?search_query=rain",
+        "https://youtu.be/",
+    ],
+)
+def test_ac_249_a_link_with_no_id_is_keyed_by_its_text(client: TestClient, text_link: str) -> None:
+    """The server accepts links the client can't play; those are keyed `url:<text>`."""
+    assert settings_api.youtube_key(text_link) == f"url:{text_link}"
+    assert settings_api.youtube_key(f"  {text_link} ") == f"url:{text_link}"  # trimmed
+    use(client, text_link)
+    use(client, link(1))
+    use(client, text_link)  # identical text: one entry, moved to the top
+    assert urls(client) == [text_link, link(1)]
+    use(client, text_link + "&x=1" if "?" in text_link else text_link + "?x=1")  # other text
+    assert len(urls(client)) == 3
+
+
+def test_ac_249_concurrent_pastes_of_one_id_leave_one_row(
+    client: TestClient, test_db_url: str
+) -> None:
+    """Two (here eight) simultaneous POSTs for one user end with one row per key, no 500."""
+    variants = [SAME_VIDEO[i % len(SAME_VIDEO)] for i in range(8)] + [link(1), link(1)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        codes = [f.result().status_code for f in [pool.submit(use, client, v) for v in variants]]
+    assert codes == [200] * len(variants)
+    assert run(_scalar(test_db_url, "SELECT count(*) FROM youtube_recent_links"))[0][0] == 2
+    assert len(urls(client)) == 2

@@ -212,23 +212,50 @@ _PLAYLIST_ID = re.compile(r"[A-Za-z0-9_-]{12,64}")
 _PATH_VIDEO = re.compile(r"/(?:embed|shorts|live|v)/([^/]+)")
 
 
+_SINGLE_DOT = {".", "%2e"}
+_DOUBLE_DOT = {"..", ".%2e", "%2e.", "%2e%2e"}
+
+
+def _resolve_dot_segments(path: str) -> str:
+    """The path as the browser's URL parser reports it: `.` and `..` segments (also written
+    `%2e`, any case) resolved, never popping above the root (WHATWG URL, path state)."""
+    out: list[str] = []
+    segments = path.split("/")[1:] if path.startswith("/") else path.split("/")
+    for i, segment in enumerate(segments):
+        lowered = segment.lower()
+        last = i == len(segments) - 1
+        if lowered in _DOUBLE_DOT:
+            if out:
+                out.pop()
+            if last:
+                out.append("")
+        elif lowered in _SINGLE_DOT:
+            if last:
+                out.append("")
+        else:
+            out.append(segment)
+    return "/" + "/".join(out)
+
+
 def youtube_key(url: str) -> str:
     """The identity of a link in the recent list: the id the player plays (#249).
 
     Mirrors `findTarget` in frontend/src/sounds/youtubeLink.ts: a video id (youtu.be/<id>,
     `v=`, or /embed|shorts|live|v/<id>) wins over a playlist id, so a video inside a playlist is
     keyed as the video, as the player plays it; otherwise the `list=` playlist id. Host, scheme,
-    other parameters (t, si, feature) and parameter order don't matter. A link with no id (the
-    server doesn't check the path) is keyed by its own text. Never logged or returned.
+    other parameters (t, si, feature) and parameter order don't matter, and dot segments in the
+    path are resolved first, as the client's `new URL()` does (`/foo/../embed/<id>`). A link with
+    no id (the server doesn't check the path) is keyed by its own text. Never logged or returned.
     """
     parts = urlsplit(url.strip())
+    path = _resolve_dot_segments(parts.path)
     host = (parts.hostname or "").lower()
     query = parse_qs(parts.query, keep_blank_values=True)
     if host == "youtu.be":
-        segments = parts.path.split("/")
+        segments = path.split("/")
         video = segments[1] if len(segments) > 1 else None
     else:
-        path_match = _PATH_VIDEO.match(parts.path)
+        path_match = _PATH_VIDEO.match(path)
         video = query["v"][0] if "v" in query else (path_match.group(1) if path_match else None)
     if video is not None and video != "videoseries" and _VIDEO_ID.fullmatch(video):
         return f"video:{video}"
@@ -282,15 +309,21 @@ async def use_youtube_link(
     """Record a link as just used and drop all but the 5 newest ids. A link whose video or
     playlist id is already listed replaces that entry and moves to the top, with the URL just
     used. Returns the updated list."""
-    # One writer per user at a time, so two pastes of the same id can't both insert.
+    # One writer per user at a time, so two pastes of the same id can't both insert (the lock
+    # is what makes the delete-then-insert below safe). The ON CONFLICT on the insert is the
+    # fallback if the lock is ever removed or moved: a duplicate (user, url) then updates the
+    # row instead of failing with a 500.
     await db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(str(user.id), 0))))
     key = youtube_key(body.url)
     stale = [row[0] for row in await _user_rows(db, user) if youtube_key(row[1]) == key]
     if stale:
         await db.execute(delete(YoutubeRecentLink).where(YoutubeRecentLink.id.in_(stale)))
     await db.execute(
-        insert(YoutubeRecentLink).values(
-            user_id=user.id, url=body.url, last_used_at=func.clock_timestamp()
+        insert(YoutubeRecentLink)
+        .values(user_id=user.id, url=body.url, last_used_at=func.clock_timestamp())
+        .on_conflict_do_update(
+            constraint="uq_youtube_recent_links_user_url",
+            set_={"last_used_at": func.clock_timestamp()},
         )
     )
     keep = [row[0] for row in _newest_per_key(await _user_rows(db, user))]

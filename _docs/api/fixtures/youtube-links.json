@@ -838,5 +838,53 @@
   "sent": "https://www.youtube.com/watch?v=dQw4w9WgXcQ&x=%D8%9D",
   "reason": "newer Unicode: U+061D",
   "key": "video:dQw4w9WgXcQ"
+ },
+ {
+  "url": "https://www.youtube.com/./embed/dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/./embed/dQw4w9WgXcQ",
+  "reason": "dot segment at the start",
+  "key": "video:dQw4w9WgXcQ"
+ },
+ {
+  "url": "https://www.youtube.com/foo/../embed/dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/foo/../embed/dQw4w9WgXcQ",
+  "reason": "dot-dot segment",
+  "key": "video:dQw4w9WgXcQ"
+ },
+ {
+  "url": "https://www.youtube.com/%2e%2e/embed/dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/%2e%2e/embed/dQw4w9WgXcQ",
+  "reason": "percent-encoded dot-dot segment above the root",
+  "key": "video:dQw4w9WgXcQ"
+ },
+ {
+  "url": "https://www.youtube.com/embed/./dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/embed/./dQw4w9WgXcQ",
+  "reason": "dot segment before the id",
+  "key": "video:dQw4w9WgXcQ"
+ },
+ {
+  "url": "https://www.youtube.com/embed/x/%2E%2e/dQw4w9WgXcQ",
+  "server_ok": true,
+  "client_ok": true,
+  "sent": "https://www.youtube.com/embed/x/%2E%2e/dQw4w9WgXcQ",
+  "reason": "mixed-case encoded dot-dot segment",
+  "key": "video:dQw4w9WgXcQ"
+ },
+ {
+  "url": "https://www.youtube.com/embed/dQw4w9WgXcQ/..",
+  "server_ok": true,
+  "client_ok": false,
+  "sent": null,
+  "reason": "dot-dot after the id leaves no id",
+  "key": null
  }
 ]
