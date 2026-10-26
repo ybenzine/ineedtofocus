@@ -5,7 +5,8 @@ import type { TimerController } from './controller.ts'
 /**
  * The sign-out hook for a finished session held only in this tab's memory (#298): sign-out
  * tries to hand it over once more and, if it still can't, counts it like any unsynced session
- * so the confirmation asks first. Nothing to clear: the record lives in the tab and goes with it.
+ * so the confirmation asks first. A confirmed sign-out drops it (`clear`): the controller outlives
+ * the sign-out, so it must not be handed to the next `start()`.
  */
 export function heldRecordHook(controller: TimerController): LocalDataHook {
   return {
@@ -16,6 +17,6 @@ export function heldRecordHook(controller: TimerController): LocalDataHook {
     trySync: async () => {
       if (controller.holdsRecord()) await withTimeout(controller.retryPending(), SAVE_TIMEOUT_MS)
     },
-    clear: async () => undefined,
+    clear: async () => controller.discardHeld(),
   }
 }

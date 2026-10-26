@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AlertPlayer, MemoryAlertVolumeStore } from './sounds/alerts.ts'
 import App from './App.tsx'
 import { AccountContext } from './auth/AccountContext.tsx'
-import { ACTIVE_TIMER_MESSAGE } from './auth/localData.ts'
+import { ACTIVE_TIMER_MESSAGE, clearLocalUserData } from './auth/localData.ts'
 import { MemoryPreferencesStore } from './setup/preferences.ts'
 import { SettingsStore } from './settings/store.ts'
 import type { SyncEngine } from './sync/index.ts'
@@ -218,11 +218,37 @@ describe('App sign-out with a finished record held only in memory (#298)', () =>
     renderOnHistory(controller, signOut)
     fireEvent.click(await screen.findByRole('button', { name: 'History' }))
     await screen.findByRole('heading', { name: 'History' })
+    // Here only this hook is registered; in the app the session store's trySync runs beside it.
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(saved).toHaveLength(1)
     expect(controller.holdsRecord()).toBe(false)
+  })
+
+  it('drops the held record on "Sign out anyway" so a later start does not save it', async () => {
+    let failing = true
+    const saved: { tag: string }[] = []
+    const controller = await heldController(async (record) => {
+      if (failing) throw new Error('IndexedDB down')
+      saved.push(record as { tag: string })
+    })
+    // The real signOut clears local data through the registered hooks.
+    const signOut = vi.fn(async () => {
+      await clearLocalUserData()
+      return null
+    })
+    renderOnHistory(controller, signOut)
+    fireEvent.click(await screen.findByRole('button', { name: 'History' }))
+    await screen.findByRole('heading', { name: 'History' })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await screen.findByRole('alertdialog', { name: 'Confirm sign out' })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out anyway' }))
+    await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(controller.holdsRecord()).toBe(false))
+    failing = false
+    await controller.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'study', goal: null })
+    expect(saved).toHaveLength(0)
   })
 })
 
