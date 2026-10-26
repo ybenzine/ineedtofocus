@@ -14,7 +14,10 @@
 // accepted send, a fresh server copy) that is applied to what is stored right now, under a Web
 // Lock (unlocked where there are none), not to this tab's older copy. So `pending` merges per
 // field: two tabs' edits to different fields both survive, and for the same field the later
-// edit wins (#129).
+// edit wins (#129). An edit is also written to the cache at once, in the task of the call and
+// without the lock, so a reload or a closing tab right after it finds it (#279). That write is
+// for reload safety only: tabs run in parallel, so another tab's locked merge can overwrite it.
+// For cross-tab safety a repair queued on the lock puts the edit back if it was overwritten.
 
 import {
   DEFAULT_SETTINGS,
@@ -165,7 +168,10 @@ export class SettingsStore {
    * written since) under the lock. What other tabs have pending is taken into this tab's state
    * once no write of ours is outstanding.
    */
-  #commit(change: (state: SettingsState) => Partial<SettingsState>): void {
+  #commit(
+    change: (state: SettingsState) => Partial<SettingsState>,
+    { immediate = false }: { immediate?: boolean } = {},
+  ): void {
     if (!this.#live()) return
     this.#state = { ...this.#state, ...change(this.#state) }
     this.#notify()
@@ -184,7 +190,9 @@ export class SettingsStore {
       }
     }
     const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
-    if (!locks) {
+    // An edit is stored in this task so a reload or close right after it finds it (#279). It is
+    // not safe against a parallel tab's locked merge; `#repairEdit` covers that.
+    if (!locks || immediate) {
       merge()
       return
     }
@@ -280,11 +288,67 @@ export class SettingsStore {
     }
     if (Object.keys(changed).length === 0) return
     this.#revision++
-    this.#commit((state) => ({
-      values: { ...state.values, ...changed },
-      pending: { ...state.pending, ...changed },
-    }))
+    const prior = (this.#readStored() ?? this.#state).values
+    this.#commit(
+      (state) => ({
+        values: { ...state.values, ...changed },
+        pending: { ...state.pending, ...changed },
+      }),
+      { immediate: true },
+    )
+    this.#repairEdit(changed, prior)
     void this.flush()
+  }
+
+  /**
+   * Under the lock, puts back an edit that another tab's locked merge overwrote between our
+   * immediate write and now (tabs run in parallel, so it can). A field is repaired only if the
+   * cache shows it was overwritten: nothing pending for it and still the value from before the
+   * edit. A newer edit elsewhere (pending, or another value) and an accepted send of this edit
+   * (value already the edit) are left alone, so the later edit still wins and nothing stale is
+   * resent. A send waits for the repair like for any queued write.
+   */
+  #repairEdit(changed: Record<string, unknown>, prior: Settings): void {
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
+    if (!locks) return
+    this.#writing++
+    let started = false
+    const repair = () => {
+      started = true
+      try {
+        if (!this.#live()) return
+        const base = this.#readStored() ?? this.#state
+        const lost: Record<string, unknown> = {}
+        for (const [key, value] of Object.entries(changed)) {
+          const k = key as keyof Settings
+          if (
+            !(key in base.pending) &&
+            sameValue(base.values[k], prior[k]) &&
+            !sameValue(value, prior[k])
+          )
+            lost[key] = value
+        }
+        if (Object.keys(lost).length === 0) {
+          if (this.#writing === 1) this.#adopt(base)
+          return
+        }
+        const merged: SettingsState = {
+          ...base,
+          values: { ...base.values, ...lost },
+          pending: { ...base.pending, ...lost },
+          stalled: this.#state.stalled,
+        }
+        this.#write(merged)
+        if (this.#writing === 1) this.#adopt(merged)
+      } finally {
+        this.#writing--
+      }
+    }
+    this.#lastWrite = locks
+      .request(SETTINGS_LOCK, async () => repair())
+      .catch(() => {
+        if (!started) repair()
+      })
   }
 
   /** Sends pending edits. Never throws; what fails stays pending and is retried. */

@@ -158,7 +158,7 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
     expect(stored().pending).toEqual({})
   })
 
-  it('merges under a Web Lock where there is one', async () => {
+  it('merges an accepted send under a Web Lock where there is one', async () => {
     const held = deferredLocks()
     const { server, api } = fakeServer()
     const a = openTab(api)
@@ -170,10 +170,10 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
     b.update({ background_volume: 70 })
     await b.flush() // the send fails: offline
     expect(stored().pending).toEqual({ week_start_day: 3, background_volume: 70 })
-    expect(held).toContain(SETTINGS_LOCK)
     server.online = true
     await b.flush()
     expect(server.value).toMatchObject({ week_start_day: 3, background_volume: 70 })
+    expect(held).toContain(SETTINGS_LOCK) // the accepted send is applied under the lock
   })
 
   it('sends the merged cache, not its own older copy, when the lock grants later', async () => {
@@ -197,6 +197,34 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
     expect(patches.at(-1)).toEqual({ background_volume: 70 })
     expect(server.value).toMatchObject({ week_start_day: 5, background_volume: 70 })
     expect(b.values.week_start_day).toBe(5)
+  })
+
+  it('has the edit in the cache the moment update() returns, even when the lock grants later (#279)', async () => {
+    deferredLocks()
+    const { api } = fakeServer()
+    const a = openTab(api)
+    a.update({ theme: 'dark' })
+    // Read synchronously: a reload right now must still find the theme (theme-init.js reads it).
+    expect(stored().values.theme).toBe('dark')
+    expect(stored().pending).toEqual({ theme: 'dark' })
+    await a.flush() // let the send finish before the cache is cleared
+  })
+
+  it("keeps another tab's pending edit and the later edit per field with the synchronous write (#279)", async () => {
+    deferredLocks()
+    const { server, api } = fakeServer()
+    server.online = false
+    const a = openTab(api)
+    const b = openTab(api)
+    a.update({ week_start_day: 3 })
+    b.update({ background_volume: 70 }) // b never saw a's edit
+    expect(stored().pending).toEqual({ week_start_day: 3, background_volume: 70 })
+    b.update({ week_start_day: 5 })
+    expect(stored().pending).toEqual({ week_start_day: 5, background_volume: 70 })
+    await Promise.all([a.flush(), b.flush()]) // the sends fail: offline
+    server.online = true
+    await a.flush()
+    expect(server.value).toMatchObject({ week_start_day: 5, background_volume: 70 })
   })
 
   it('still merges, and keeps counting, when the lock request is refused', async () => {
@@ -273,5 +301,111 @@ describe('countUnsynced and trySync', () => {
     vi.mocked(api.patch).mockClear()
     await store.trySync()
     expect(api.patch).not.toHaveBeenCalled()
+  })
+})
+
+describe("an edit survives a parallel tab's locked merge (#279)", () => {
+  /** Tab B's storage view: once armed, A's `update()` lands between B's read and B's write. */
+  function racingStorage(onRead: () => void) {
+    const state = { armed: false }
+    const view = {
+      getItem: (k: string) => {
+        const v = localStorage.getItem(k)
+        if (state.armed && k === SETTINGS_KEY) {
+          state.armed = false
+          onRead()
+        }
+        return v
+      },
+      setItem: (k: string, v: string) => localStorage.setItem(k, v),
+      removeItem: (k: string) => localStorage.removeItem(k),
+    } as unknown as Storage
+    return { state, view }
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 30))
+
+  it("keeps A's edit in the cache when B's accepted send overwrites it", async () => {
+    deferredLocks()
+    const { server, api } = fakeServer()
+    const a = new SettingsStore({
+      api: { ...api, patch: vi.fn(() => new Promise<Settings>(() => undefined)) },
+      storage: localStorage,
+      owner: 'u1',
+      retryBaseMs: 3_600_000,
+    })
+    const race = racingStorage(() => a.update({ week_start_day: 5 }))
+    const b = new SettingsStore({
+      api: {
+        ...api,
+        patch: vi.fn(async (p: SettingsPatch) => {
+          const r = await api.patch(p)
+          race.state.armed = true
+          return r
+        }),
+      },
+      storage: race.view,
+      owner: 'u1',
+      retryBaseMs: 3_600_000,
+    })
+    b.update({ background_volume: 70 })
+    await b.flush()
+    await settle()
+    expect(stored().pending).toHaveProperty('week_start_day', 5)
+    expect(stored().values.week_start_day).toBe(5)
+    expect(server.value.background_volume).toBe(70)
+  })
+
+  it("sends A's edit when A has a send in flight and B overwrites the edit", async () => {
+    deferredLocks()
+    const { server, api } = fakeServer()
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const aPatch = vi.fn(async (p: SettingsPatch) => {
+      if (aPatch.mock.calls.length === 1) await gate
+      return api.patch(p)
+    })
+    const a = new SettingsStore({
+      api: { get: api.get, patch: aPatch },
+      storage: localStorage,
+      owner: 'u1',
+      retryBaseMs: 3_600_000,
+    })
+    a.update({ alert_volume: 20 }) // A's send is in flight
+    await settle()
+    const race = racingStorage(() => a.update({ week_start_day: 5 }))
+    const b = new SettingsStore({
+      api: {
+        ...api,
+        patch: vi.fn(async (p: SettingsPatch) => {
+          const r = await api.patch(p)
+          race.state.armed = true
+          return r
+        }),
+      },
+      storage: race.view,
+      owner: 'u1',
+      retryBaseMs: 3_600_000,
+    })
+    b.update({ background_volume: 70 })
+    await b.flush()
+    await settle()
+    release()
+    await a.flush()
+    await settle()
+    expect(server.value.week_start_day).toBe(5)
+    expect(a.values.week_start_day).toBe(5)
+  })
+
+  it('does not undo a newer edit of the same field in another tab', async () => {
+    deferredLocks()
+    const { server, api } = fakeServer()
+    server.online = false
+    const a = openTab(api)
+    const b = openTab(api)
+    a.update({ week_start_day: 3 })
+    b.update({ week_start_day: 5 }) // later: pending, so A's repair leaves it alone
+    await settle()
+    expect(stored().pending).toEqual({ week_start_day: 5 })
+    expect(stored().values.week_start_day).toBe(5)
   })
 })
