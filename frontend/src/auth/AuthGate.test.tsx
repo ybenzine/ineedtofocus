@@ -142,6 +142,26 @@ describe('AuthGate', () => {
     expect(await screen.findByText('the timer app')).toBeInTheDocument()
   })
 
+  it('keeps the remembered user when the /me body read times out', async () => {
+    localStorage.setItem(USER_KEY, JSON.stringify(user))
+    const stalled = {
+      status: 200,
+      ok: true,
+      json: () => Promise.reject(new DOMException('signal timed out', 'TimeoutError')),
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stalled))
+    renderGate(makeApi({ me: httpAuthApi.me }))
+    expect(await screen.findByText('the timer app')).toBeInTheDocument()
+    expect(localStorage.getItem(USER_KEY)).not.toBeNull()
+  })
+
+  it('signs out on a real 401 from /me', async () => {
+    localStorage.setItem(USER_KEY, JSON.stringify(user))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 401 })))
+    renderGate(makeApi({ me: httpAuthApi.me }))
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+  })
+
   it('shows sign-in when offline with no remembered user', async () => {
     renderGate(makeApi({ me: vi.fn().mockRejectedValue(offline) }))
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()

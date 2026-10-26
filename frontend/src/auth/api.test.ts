@@ -10,6 +10,15 @@ function reply(status: number, body: unknown, headers: Record<string, string> = 
   )
 }
 
+/** A 200 whose body read rejects, as when the request signal fires after the headers. */
+function unreadable(name: string) {
+  return {
+    status: 200,
+    ok: true,
+    json: () => Promise.reject(new DOMException('signal timed out', name)),
+  }
+}
+
 async function failure(promise: Promise<unknown>): Promise<AuthError> {
   try {
     await promise
@@ -34,6 +43,29 @@ describe('httpAuthApi', () => {
     reply(401, { error: { code: 'unauthorized', message: 'x' } })
     expect(await httpAuthApi.me()).toBeNull()
   })
+
+  it.each(['TimeoutError', 'AbortError'])(
+    'reports a %s while reading the /me body as a network error',
+    async (name) => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(unreadable(name)))
+      expect((await failure(httpAuthApi.me())).kind).toBe('network')
+    },
+  )
+
+  it('does not treat a 403 from /me as signed out', async () => {
+    reply(403, { error: { code: 'forbidden', message: 'x' } })
+    expect((await failure(httpAuthApi.me())).kind).toBe('other')
+  })
+
+  it.each(['signIn', 'signUp'] as const)(
+    'shows the unreachable message when a 2xx %s body cannot be read',
+    async (method) => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(unreadable('TimeoutError')))
+      const error = await failure(httpAuthApi[method]('a@b.co', 'password1'))
+      expect(error.kind).toBe('network')
+      expect(error.message).toMatch(/^Can't reach the server/)
+    },
+  )
 
   it('maps 401 to one generic message', async () => {
     reply(401, { error: { code: 'invalid_credentials', message: 'x' } })
