@@ -6,6 +6,7 @@ Field names are snake_case; the frontend's `SessionRecord` maps one to one (see
 """
 
 import logging
+import os
 import re
 import uuid
 from collections import Counter
@@ -314,6 +315,14 @@ def _injected_fault(request: Request) -> None:
     maybe_fail_save(request.app.state.settings.fault_save_error_percent)
 
 
+def _broken_build_gate() -> None:
+    """Fail every save in dev only: the app's `OTEL_RESOURCE_ATTRIBUTES` names the
+    environment (`infra/compose.prod.yml`). Before anything is written."""
+    attributes = os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "").split(",")
+    if "deployment.environment.name=dev" in (a.strip() for a in attributes):
+        raise RuntimeError("deliberately broken build (#317 on-call drill)")
+
+
 @router.post("", status_code=201, responses={**_ERRORS, 200: {"model": SessionOut}})
 async def save_session(
     body: SessionIn, user: CurrentUser, db: DbSession, request: Request, response: Response
@@ -322,6 +331,7 @@ async def save_session(
     the stored session and changes nothing."""
     with observe(SESSION_SAVES, SESSION_SAVE_DURATION, {"kind": "single"}):
         _injected_fault(request)
+        _broken_build_gate()
         created, rows = await _save(db, user.id, [body])
         if body.id not in rows:
             raise HTTPException(409, "A session id is already in use")
@@ -366,6 +376,7 @@ async def sync_sessions(
         weight=len(body.sessions),
     ):
         _injected_fault(request)
+        _broken_build_gate()
         results: list[SyncItemResult | None] = [None] * len(body.sessions)
         valid: list[tuple[int, SessionIn]] = []
         for index, raw in enumerate(body.sessions):
