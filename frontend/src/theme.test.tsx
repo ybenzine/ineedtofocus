@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react'
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import RangeInput from './RangeInput.tsx'
 import { USER_KEY } from './auth/localData.ts'
@@ -8,6 +9,8 @@ import { SETTINGS_KEY } from './settings/store.ts'
 import { applyTheme } from './theme.ts'
 
 const root = document.documentElement
+// Resolved from this file, not the cwd, so it runs from frontend/ and from the repo root.
+const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 beforeEach(() => {
   document.head.innerHTML = '<meta name="theme-color" content="#000000">'
@@ -36,7 +39,7 @@ describe('applyTheme', () => {
 })
 
 describe('theme-init.js (runs before first paint)', () => {
-  const script = readFileSync(resolve(process.cwd(), 'public/theme-init.js'), 'utf8')
+  const script = readFileSync(resolve(projectRoot, 'public/theme-init.js'), 'utf8')
   const run = () => new Function(script)()
 
   const signedInAs = (id: string) => localStorage.setItem(USER_KEY, JSON.stringify({ id }))
@@ -81,7 +84,7 @@ describe('theme-init.js (runs before first paint)', () => {
   })
 
   it('is loaded by index.html in <head>, as a blocking script before the app bundle', () => {
-    const html = readFileSync(resolve(process.cwd(), 'index.html'), 'utf8')
+    const html = readFileSync(resolve(projectRoot, 'index.html'), 'utf8')
     const head = html.slice(html.indexOf('<head>'), html.indexOf('</head>'))
     const init = head.search(/<script src="\/theme-init\.js"><\/script>/)
     expect(init).toBeGreaterThan(-1) // in <head>, not async, defer or a module
