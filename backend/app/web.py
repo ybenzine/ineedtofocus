@@ -15,7 +15,7 @@ _HASHED_ASSET = re.compile(r"^assets/.+-[A-Za-z0-9_-]{8,}\.[A-Za-z0-9.]+$")
 IMMUTABLE = "public, max-age=31536000, immutable"
 # `no-cache` lets the browser store the file but makes it revalidate on every use; an unchanged
 # file is answered 304 from the ETag below. It covers the HTML shell, the service worker,
-# registerSW.js, workbox-*.js, theme-init.js and the manifest (a stale copy would pin users to an
+# workbox-*.js, theme-init.js and the manifest (a stale copy would pin users to an
 # old release), and every other unhashed file (icons, sounds, favicon): the service worker
 # precaches those, so revalidating them costs a 304 at most.
 NO_CACHE = "no-cache"
