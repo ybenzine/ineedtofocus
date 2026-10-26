@@ -15,6 +15,7 @@
 #   resolved through symlinks, not in .git and not a path check-fix refuses; no directory.
 # Then git runs with a clean environment (no caller GIT_* or secrets, no system or global
 # config, literal pathspecs) and no hooks: `git add -- <files>`, `git commit -m <message>`.
+# The author is the checkout's own `user.name` and `user.email`, which the respond job sets.
 set -euo pipefail
 
 [[ $# -ge 2 ]] || { echo "usage: $0 \"<message>\" <file>..." >&2; exit 2; }

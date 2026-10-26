@@ -796,6 +796,10 @@ def test_the_pinned_cli_allows_each_session_exactly_its_tools(
         "GIT_CONFIG_NOSYSTEM": "1",
     }
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=work, env=env, check=True)
+    # The identity in the checkout's own config, as the respond job's "Write the prompt"
+    # step sets it: scripts/oncall-commit.sh reads no global config.
+    for key, value in (("user.name", "oncall"), ("user.email", "oncall@example.invalid")):
+        subprocess.run(["git", "config", key, value], cwd=work, env=env, check=True)
     subprocess.run(["git", "add", "."], cwd=work, env=env, check=True)
     subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=work, env=env, check=True)
     table = probes(session, work, out)
