@@ -26,8 +26,10 @@ Both are CC0 recordings from Freesound that Yacine chose (#254). CC0 needs no at
 - **Level** (`ffmpeg -i x.mp3 -af ebur128=peak=true -f null -`): chime -16.4 LUFS integrated, true
   peak -4.2 dBFS; bell -16.3 LUFS, true peak -4.1 dBFS. Matched within 0.1 LU, and 5.5 LU above the
   rain loop (-21.9 LUFS), so they sit above it at the default volumes (alert 80, background 50).
-- **Listening check:** Yacine's listening check: pending on dev. He may ask for different trim
-  lengths (the constants at the top of the script).
+- **Listening check:** Yacine listened on dev on 2026-10-26, on a laptop and on an iPhone (Safari
+  and Chrome): OK, no trim changes (#254). On an iPhone the sounds are silent while the phone is in
+  silent mode, by design ([Decision log](product_decisions.md#8-decision-log), 2026-10-23, "Do
+  alerts follow the iOS silent switch?", #16, #17).
 
 They live in `public/` so the service worker (#19) can precache `sounds/chime.mp3` and
 `sounds/bell.mp3`; the app loads them from `${import.meta.env.BASE_URL}sounds/…`. The Settings
