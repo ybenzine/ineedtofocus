@@ -113,7 +113,7 @@ describe('archiving on this device only', () => {
     await store.archiveOnDevice(ME, record.id)
     await store.setArchived(ME, record.id, null)
     expect((await store.get(record.id))?.archivedAt).not.toBeNull()
-    await store.forget(ME, [record.id])
+    await store.markGone(ME, [record.id], Date.now() + 1000)
     expect(await store.get(record.id)).toBeDefined()
   })
 

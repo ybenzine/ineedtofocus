@@ -129,13 +129,6 @@ export interface SessionStore {
    */
   removeArchived(ownerId: string, alsoIds?: readonly string[]): Promise<void>
   /**
-   * Forgets the owner's synced sessions in `ids`: the server no longer has them (deleted on
-   * another device). Never touches a session the server hasn't accepted, or another account's,
-   * nor one with a pending edit (an edit is never silently discarded: if the session really is
-   * gone, the edit's 404 makes it `rejected` and the next call removes it).
-   */
-  forget(ownerId: string, ids: readonly string[]): Promise<void>
-  /**
    * `ids` are the owner's synced sessions that a load pair (History answer and Archive list) which
    * started at `loadStartedAt` (ms) found in neither (#227). One not marked yet is marked
    * `goneOnServer` (hidden, kept). One marked before `loadStartedAt` is deleted: this pair
@@ -300,20 +293,6 @@ export class IndexedDbSessionStore implements SessionStore {
         )
         .map((entry) => entry.id)
       await sessions.bulkDelete(ids)
-    })
-  }
-
-  async forget(ownerId: string, ids: readonly string[]): Promise<void> {
-    const wanted = new Set(ids)
-    const sessions = this.#db.sessions
-    await this.#db.transaction('rw', sessions, async () => {
-      const found = (await this.#owned(ownerId))
-        .filter(
-          (entry) =>
-            entry.syncState === 'synced' && entry.editState !== 'pending' && wanted.has(entry.id),
-        )
-        .map((entry) => entry.id)
-      await sessions.bulkDelete(found)
     })
   }
 
