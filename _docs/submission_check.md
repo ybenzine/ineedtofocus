@@ -56,7 +56,7 @@ Prod deploys (`deploy-prod.yml`, one `workflow_dispatch` each, all run by `ybenz
 | [40216077765](https://github.com/ybenzine/ineedtofocus/actions/runs/40216077765) | `4c53bef` | success | approved by `ybenzine` |
 | [40157949236](https://github.com/ybenzine/ineedtofocus/actions/runs/40157949236) | `3933745` | success | approved by `ybenzine` |
 
-**Pending on Yacine:** main has moved since `d6bc665` (README #320, observability docs #322 and this check). Yacine runs one final prod deploy of main after this PR merges and approves it in the `production` environment; the AC is done once that run is green and approved. Agents don't start or approve it.
+**Pending on Yacine:** main has moved since `d6bc665` (README #320, observability docs #322, the #317 drill's deliberately broken build #318 and its revert #321, which net out to a docs-only change, and this check). Yacine runs one final prod deploy of main after this PR merges and approves it in the `production` environment; the AC is done once that run is green and approved. Agents don't start or approve it.
 
 ## 3. Board shows every closed issue linked to its PR
 
@@ -67,14 +67,14 @@ Prod deploys (`deploy-prod.yml`, one `workflow_dispatch` each, all run by `ybenz
 | Issue | Why there is no closing PR |
 |---|---|
 | #26 DNS in Route 53 | `owner:human` task, done by Yacine |
-| #231, #319 Incident: Session saves failing (dev) | On-call incidents, closed by the on-call workflow on resolve (the #35 and #317 drills) |
-| #163, #182 Verify YouTube playback, wrap and non-embeddable video on dev | QA verification tasks; the evidence is comments on the issues, and the code they check landed through other PRs (#203, #205, #206, #209) |
+| #231, #319 Incident: Session saves failing (dev) | On-call incidents. #319 was closed by the on-call workflow (`github-actions[bot]`, its incident summary at 14:59:54 UTC) on resolve. #231 was closed by hand: the daily cap blocked its resolved run, so the product manager agent closed it (comment "closing incident #231 by hand", 2026-10-26 06:28:34 UTC) |
+| #163, #182 Verify YouTube playback, wrap and non-embeddable video on dev | QA verification tasks, closed by the product manager agent's acceptance comments, not by a PR. #163: accepted 2026-10-25 06:39 UTC on QA's real-Chrome run on dev and Yacine's manual audio check. #182: accepted 17:46 UTC on QA's run (AC8.5 passed; AC8.4 taken as met through the #203 run). #182's run found the gap filed as #203, fixed by PR #206 (`Closes #203`) |
 | #303 Flaky e2e: sync.spec.ts | Closed after the fix PR #301 merged (referenced, not a `Closes` line) |
-| #147, #148, #150 Bug: tap targets and focus ring | Closed after the fix PRs #225 and #229 merged (referenced, not a `Closes` line), then accepted by the product manager |
+| #147, #148, #150 Bug: tap targets and focus ring | Closed 2026-10-25 22:13 UTC by the product manager agent, each with "fixed by #225" (the Dusk theme PR, merged 22:06 UTC; the comment names it rather than a `Closes` line) |
 | #166 Bug: deploy fails on a fresh host | Closed as not planned; the fix #171 merged and is referenced |
 | #71 board-status.sh unknown status | Closed as not planned |
 
-Agents' comments are visible on the issues: each carries the start, PR-open and done comments from the templates in [process.md](process.md).
+Issues worked by agents carry the start, PR-open and done comments from the templates in [process.md](process.md), for example #10 (start, PR open #87, done, QA verified, accepted). Exceptions: #52 has no comments, #26 is an `owner:human` task, #293 has no done comment and #312 has no PR-open comment.
 
 ## 4. Observability and on-call drill evidence
 
@@ -85,8 +85,8 @@ Agents' comments are visible on the issues: each carries the start, PR-open and 
 - Alerts: [Alerts](observability.md#alerts-user-impact-not-resources) and [alert routing](observability.md#alert-routing-34).
 - Escalation drill (#35): incident [#231](https://github.com/ybenzine/ineedtofocus/issues/231), [firing run](https://github.com/ybenzine/ineedtofocus/actions/runs/40276987971), [resolved run](https://github.com/ybenzine/ineedtofocus/actions/runs/40278298276), [write-up](https://github.com/ybenzine/ineedtofocus/issues/35#issuecomment-6409695167).
 - Fix drill (#317): section [On-call drill: rollback of a bad deploy (#317)](observability.md#on-call-drill-rollback-of-a-bad-deploy-317) (runs, timeline and incident [#319](https://github.com/ybenzine/ineedtofocus/issues/319)) and the [evidence comment on #317](https://github.com/ybenzine/ineedtofocus/issues/317#issuecomment-6420041438), which exists.
-- The README links all of this from its [links block](../README.md#on-call-drills) and the grading table.
+- The README links all of this from its [On-call drills section](../README.md#on-call-drills), its links block and the grading table.
 
 ## 5. Submitted before 23:00 UTC
 
-**Pending on Yacine.** Submission is his action, due 2026-10-26 23:00 UTC, and follows the final prod deploy in section 2.
+**Pending on Yacine.** AC2 and AC5 are finished only after the merge of this PR. Submission is his action, due 2026-10-26 23:00 UTC, and follows the final prod deploy in section 2.
