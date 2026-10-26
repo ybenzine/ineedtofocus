@@ -81,6 +81,17 @@ function renderGate(api: AuthApi, controller = makeController().controller) {
   )
 }
 
+/**
+ * The app is showing for a signed-in user and AuthGate's passive effects have run. The gate's
+ * 401 handler reads the user from a ref that an effect updates, and React runs passive effects
+ * after the commit that `findByText` can already have seen; a 401 raised in between is ignored
+ * as "signed out", so the tests below wait for the effects to flush first.
+ */
+async function signedIn() {
+  await screen.findByText('the timer app')
+  await act(async () => undefined)
+}
+
 function fill(email: string, password: string) {
   fireEvent.change(screen.getByLabelText('Email'), { target: { value: email } })
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: password } })
@@ -702,7 +713,7 @@ describe('local data belongs to one user', () => {
   it('a 401 from sync re-checks the sign-in: expired shows sign-in and keeps the data', async () => {
     const me = vi.fn().mockResolvedValueOnce(user).mockResolvedValue(null)
     renderGate(makeApi({ me }))
-    await screen.findByText('the timer app')
+    await signedIn()
     seedUserData()
     act(() => {
       notifySessionExpired()
@@ -717,7 +728,7 @@ describe('local data belongs to one user', () => {
   it('a 401 from sync while the server is unreachable leaves the user signed in', async () => {
     const me = vi.fn().mockResolvedValueOnce(user).mockRejectedValue(offline)
     renderGate(makeApi({ me }))
-    await screen.findByText('the timer app')
+    await signedIn()
     act(() => {
       notifySessionExpired()
     })
