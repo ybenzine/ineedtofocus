@@ -8,6 +8,7 @@
 // "Idle" is checked again right before acting, after the flush.
 
 import { ACTIVE_SESSION_KEY, parseStoredTimer } from '../timer/store.ts'
+import { holdsMemoryOnlyData } from './idle.ts'
 
 export const UPDATE_CHECK_MS = 60 * 60 * 1000
 /** While an update is waiting, how often idleness is looked at again (a dialog closed, a tab ended). */
@@ -153,7 +154,7 @@ export class AutoUpdater {
 
   /** This tab shows nothing that a reload would cost. */
   #localIdle(): boolean {
-    return !this.#o.isViewBusy() && !hasOpenEdit()
+    return !this.#o.isViewBusy() && !hasOpenEdit() && !holdsMemoryOnlyData()
   }
 
   #guarded(): boolean {

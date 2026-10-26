@@ -1,10 +1,14 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App.tsx'
 import { hasOpenEdit } from './update/autoUpdate.ts'
-import { isViewBusy } from './update/idle.ts'
+import { holdsMemoryOnlyData, isViewBusy } from './update/idle.ts'
 import { MemoryPreferencesStore } from './setup/preferences.ts'
-import { MemoryActiveSessionStore, TimerController } from './timer/index.ts'
+import {
+  MemoryActiveSessionStore,
+  TimerController,
+  type ActiveSessionStore,
+} from './timer/index.ts'
 
 function renderApp() {
   const controller = new TimerController({
@@ -54,5 +58,96 @@ describe('App tells the updater when it is idle', () => {
     expect(hasOpenEdit()).toBe(true)
     fireEvent.change(minutes, { target: { value: '25' } })
     expect(hasOpenEdit()).toBe(false)
+  })
+})
+
+// App registers `timer.hasUnsaved() || timer.holdsRecord()` with the updater (#245, #286): a tab
+// holding either must not be reloaded, and must stop holding once the data is on the device.
+describe('App tells the updater when the tab holds data only in memory', () => {
+  afterEach(() => vi.useRealTimers())
+
+  /** A store whose writes throw while `state.failing` is set. */
+  function failingStore() {
+    const inner = new MemoryActiveSessionStore()
+    const state = { failing: true }
+    const store: ActiveSessionStore = {
+      load: () => inner.load(),
+      clear: () => inner.clear(),
+      save(value) {
+        if (state.failing) throw new Error('QuotaExceededError')
+        inner.save(value)
+      },
+    }
+    return { store, state }
+  }
+
+  it('a timer that exists only in memory holds the update until it reaches the device', async () => {
+    const { store } = failingStore()
+    const controller = new TimerController({ store, saveRecord: () => undefined })
+    const { unmount } = render(
+      <App controller={controller} preferences={new MemoryPreferencesStore()} />,
+    )
+    await screen.findByRole('button', { name: 'Start' })
+    expect(holdsMemoryOnlyData()).toBe(false)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    expect(controller.hasUnsaved()).toBe(true)
+    expect(controller.holdsRecord()).toBe(false)
+    expect(holdsMemoryOnlyData()).toBe(true)
+
+    // Unmounting unregisters the holder, even while the timer is still memory-only.
+    unmount()
+    expect(controller.hasUnsaved()).toBe(true)
+    expect(holdsMemoryOnlyData()).toBe(false)
+  })
+
+  it('a memory-only timer lets go once the next tick writes it', async () => {
+    const { store, state } = failingStore()
+    const controller = new TimerController({ store, saveRecord: () => undefined })
+    render(<App controller={controller} preferences={new MemoryPreferencesStore()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    expect(holdsMemoryOnlyData()).toBe(true)
+
+    // The next tick: TimerScreen's TICK_MS interval retries the write (#refresh/#writeUnsaved).
+    state.failing = false
+    await waitFor(() => expect(holdsMemoryOnlyData()).toBe(false), { timeout: 3000 })
+  })
+
+  it('a finished record held only in memory holds the update until it is handed over', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const { store, state } = failingStore()
+    let failSave = true
+    const saved: string[] = []
+    const controller = new TimerController({
+      store,
+      saveRecord: (record) => {
+        if (failSave) throw new Error('IndexedDB unavailable')
+        saved.push(record.id)
+      },
+    })
+    render(
+      <App
+        controller={controller}
+        preferences={new MemoryPreferencesStore()}
+        pendingRetryMs={20}
+      />,
+    )
+    await screen.findByRole('button', { name: 'Start' })
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    vi.setSystemTime(Date.now() + 5 * 60_000)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    await waitFor(() => expect(controller.holdsRecord()).toBe(true))
+    expect(controller.hasUnsaved()).toBe(false) // only the record is held, not the timer
+    expect(holdsMemoryOnlyData()).toBe(true)
+
+    failSave = false
+    state.failing = false
+    await waitFor(() => expect(saved).toHaveLength(1), { timeout: 3000 })
+    await waitFor(() => expect(holdsMemoryOnlyData()).toBe(false))
+    expect(controller.holdsRecord()).toBe(false)
   })
 })

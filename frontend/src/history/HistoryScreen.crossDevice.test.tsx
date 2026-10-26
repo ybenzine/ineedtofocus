@@ -232,12 +232,15 @@ describe('a session restored on another device (#228)', () => {
       release = resolve
     })
     let hold = false
+    // How many Archive list requests are waiting on `held`.
+    let waiting = 0
     const archiveApi = {
       archive: (id: string) => real.archive(id),
       restore: (id: string) => real.restore(id),
       // An older answer: it still lists the session as archived.
       list: async () => {
         if (!hold) return real.list()
+        waiting += 1
         await held
         return {
           kind: 'ok' as const,
@@ -266,7 +269,11 @@ describe('a session restored on another device (#228)', () => {
     const archive = screen.getByRole('button', { name: /^Archive/ })
     hold = true
     fireEvent.click(archive)
-    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+    const undo = await screen.findByRole('button', { name: 'Undo' })
+    // Undo must run while the reconcile is in flight. Clicked sooner, its reload would replace
+    // the archive's reload before that one answered, and no reconcile would ever start.
+    await waitFor(() => expect(waiting).toBe(1))
+    fireEvent.click(undo)
     await waitFor(() => expect(screen.queryByText(/Session archived/)).not.toBeInTheDocument())
     await waitFor(async () => expect((await store.get(record.id))?.archivedAt).toBeNull())
     // Let the reload that follows Undo finish first, so it cannot repair a stale mark.

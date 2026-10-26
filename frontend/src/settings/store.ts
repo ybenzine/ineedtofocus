@@ -288,7 +288,8 @@ export class SettingsStore {
     }
     if (Object.keys(changed).length === 0) return
     this.#revision++
-    const prior = (this.#readStored() ?? this.#state).values
+    const before = this.#readStored() ?? this.#state
+    const prior = { values: before.values, pending: before.pending }
     this.#commit(
       (state) => ({
         values: { ...state.values, ...changed },
@@ -302,13 +303,18 @@ export class SettingsStore {
 
   /**
    * Under the lock, puts back an edit that another tab's locked merge overwrote between our
-   * immediate write and now (tabs run in parallel, so it can). A field is repaired only if the
-   * cache shows it was overwritten: nothing pending for it and still the value from before the
-   * edit. A newer edit elsewhere (pending, or another value) and an accepted send of this edit
-   * (value already the edit) are left alone, so the later edit still wins and nothing stale is
-   * resent. A send waits for the repair like for any queued write.
+   * immediate write and now (tabs run in parallel, so it can). `prior` is the field's stored
+   * value and pending entry just before the edit; a field is repaired only if the cache shows the
+   * same value and the same pending entry (or none, if a send of it was accepted meanwhile), i.e.
+   * the edit was overwritten. A newer edit elsewhere (another value or pending entry) and an
+   * accepted send of this edit (value already the edit) are left alone, so the later edit still wins and nothing stale is resent. Two edits of one field by
+   * this tab are repaired in order, each restoring the one before it, so the newest wins. A send
+   * waits for the repair like for any queued write.
    */
-  #repairEdit(changed: Record<string, unknown>, prior: Settings): void {
+  #repairEdit(
+    changed: Record<string, unknown>,
+    prior: { values: Settings; pending: SettingsState['pending'] },
+  ): void {
     const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
     if (!locks) return
     this.#writing++
@@ -321,12 +327,12 @@ export class SettingsStore {
         const lost: Record<string, unknown> = {}
         for (const [key, value] of Object.entries(changed)) {
           const k = key as keyof Settings
-          if (
-            !(key in base.pending) &&
-            sameValue(base.values[k], prior[k]) &&
-            !sameValue(value, prior[k])
-          )
-            lost[key] = value
+          const hadPending = key in prior.pending
+          const unchanged =
+            sameValue(base.values[k], prior.values[k]) &&
+            (!(key in base.pending) || (hadPending && sameValue(base.pending[k], prior.pending[k])))
+          const landed = sameValue(base.values[k], value) && sameValue(base.pending[k], value)
+          if (unchanged && !landed) lost[key] = value
         }
         if (Object.keys(lost).length === 0) {
           if (this.#writing === 1) this.#adopt(base)

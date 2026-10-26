@@ -221,6 +221,14 @@ export class TimerController {
     return this.#unsaved !== null
   }
 
+  /**
+   * True while a finished session's record exists only in this tab's memory: neither the
+   * `pendingRecord` write nor `saveRecord` has landed (#286). A reload would lose it.
+   */
+  holdsRecord(): boolean {
+    return this.#held !== null
+  }
+
   /** Hands a finished session that couldn't be saved earlier to `saveRecord` again. */
   async retryPending(): Promise<boolean> {
     const stored = this.#store.load()
