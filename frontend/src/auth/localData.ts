@@ -116,10 +116,27 @@ export function unsyncedWarning({ sessions, edits, settings }: UnsyncedCount): s
   return parts.join(' ')
 }
 
-/** A running or paused session (not a finished one waiting to be handed over). */
+const memoryTimerProbes = new Set<() => boolean>()
+
+/**
+ * Registers a check for a timer that exists only in this tab's memory (its store write failed,
+ * #245), which `hasActiveTimer` can't read from localStorage. Returns the unregister function.
+ * Other tabs can't see such a timer, so a sign-out there isn't blocked by it.
+ */
+export function registerMemoryTimerProbe(probe: () => boolean): () => void {
+  memoryTimerProbes.add(probe)
+  return () => memoryTimerProbes.delete(probe)
+}
+
+/**
+ * A running or paused session (not a finished one waiting to be handed over), whether it is
+ * stored on the device or only in this tab's memory.
+ */
 export function hasActiveTimer(): boolean {
   const stored = parseStoredTimer(read(ACTIVE_SESSION_KEY))
-  return stored !== null && stored.pendingRecord === null
+  if (stored !== null && stored.pendingRecord === null) return true
+  for (const probe of memoryTimerProbes) if (probe()) return true
+  return false
 }
 
 /** A finished session still waiting for the session store, plus what registered hooks report. */

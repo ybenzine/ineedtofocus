@@ -503,6 +503,16 @@ describe('a failed write to the device store is retried', () => {
     return { store, state }
   }
 
+  it('hasUnsaved() is true only while the timer exists only in memory (#245)', async () => {
+    const { store, state } = flaky()
+    const controller = new TimerController({ store, saveRecord: () => undefined })
+    state.failures = 1
+    await controller.start(startOptions(countdown(25)))
+    expect(controller.hasUnsaved()).toBe(true)
+    await controller.tick()
+    expect(controller.hasUnsaved()).toBe(false)
+  })
+
   it('catches up on the next tick after a phase change, and a reload sees it', async () => {
     const { store, state } = flaky()
     const { controller, make } = setup(store)

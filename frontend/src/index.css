@@ -664,6 +664,18 @@ main.focus-screen {
   text-transform: capitalize;
 }
 
+/* The timer screen is always dark; theme tokens only. */
+.timer-unsaved {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--control-border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.875rem;
+  text-align: center;
+}
+
 .timer-goal {
   color: var(--muted);
 }

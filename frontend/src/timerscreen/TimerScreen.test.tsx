@@ -10,6 +10,7 @@ import {
   TimerController,
   type SessionRecord,
   type TimerConfig,
+  type ActiveSessionStore,
   type TimerUpdate,
 } from '../timer/index.ts'
 import SessionSummary from './SessionSummary.tsx'
@@ -404,5 +405,46 @@ describe('keyboard focus on screen changes (#151)', () => {
       />,
     )
     expect(screen.getByRole('heading', { name: 'Session not saved' })).toHaveFocus()
+  })
+})
+
+describe('a timer that runs only in memory (#245)', () => {
+  it('says so in a status note and clears it once the write lands', async () => {
+    const inner = new MemoryActiveSessionStore()
+    let failing = true
+    const store: ActiveSessionStore = {
+      load: () => inner.load(),
+      clear: () => inner.clear(),
+      save(value) {
+        if (failing) throw new Error('QuotaExceededError')
+        inner.save(value)
+      },
+    }
+    const controller = new TimerController({ store, saveRecord: () => undefined })
+    const update = await controller.start({
+      config: { mode: 'countdown', minutes: 25 },
+      tag: 'study',
+      goal: null,
+    })
+    expect(update.unsaved).toBe(true)
+    render(
+      <SettingsContext.Provider value={settings}>
+        <TimerScreen controller={controller} audio="rain" onEnded={vi.fn()} />
+      </SettingsContext.Provider>,
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(
+      "This session isn't saved on this device yet. Keep this tab open.",
+    )
+    await advance(1_000)
+    expect(screen.getByRole('status')).toBeInTheDocument()
+
+    failing = false
+    await advance(1_000)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+  })
+
+  it('shows no note when the timer is stored', async () => {
+    await mount({ mode: 'countdown', minutes: 25 })
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 })

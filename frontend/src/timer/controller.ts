@@ -213,6 +213,14 @@ export class TimerController {
     return this.#finish(session, stopSession(session, now), events)
   }
 
+  /**
+   * True while the running session, or its latest change, exists only in this tab's memory
+   * (the last write to the device failed). Reads nothing from the store.
+   */
+  hasUnsaved(): boolean {
+    return this.#unsaved !== null
+  }
+
   /** Hands a finished session that couldn't be saved earlier to `saveRecord` again. */
   async retryPending(): Promise<boolean> {
     const stored = this.#store.load()
