@@ -9,6 +9,7 @@ Built for the AI Dev Tools Zoomcamp project: one app taken from spec to producti
 - **Task board:** https://github.com/users/ybenzine/projects/2
 - **Product decisions and acceptance criteria:** [_docs/product_decisions.md](_docs/product_decisions.md)
 - **Tech stack and delivery plan:** [_docs/tech_stack.md](_docs/tech_stack.md)
+- **On-call agent drill (evidence):** the end-to-end drill on dev (injected save fault, alert, [oncall run](https://github.com/ybenzine/ineedtofocus/actions/runs/40276987971), [incident #231](https://github.com/ybenzine/ineedtofocus/issues/231), [resolved run](https://github.com/ybenzine/ineedtofocus/actions/runs/40278298276)) is written up in [issue #35](https://github.com/ybenzine/ineedtofocus/issues/35#issuecomment-6409695167)
 - **Backlog source:** [_docs/backlog/backlog.yaml](_docs/backlog/backlog.yaml), published to GitHub Issues with [scripts/create_backlog.py](scripts/create_backlog.py)
 
 ## Run it locally
