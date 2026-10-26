@@ -157,6 +157,63 @@ describe('Discard change (AC11.1, AC13.5)', () => {
   })
 })
 
+describe('Discard change: edge cases (#253)', () => {
+  it('works offline: nothing is sent and the row shows the synced tag and goal', async () => {
+    await sessionWithRefusedEdit()
+    history.offline = true
+    server.mode = 'offline'
+    renderHistory()
+    await screen.findByText('Refused goal')
+    server.requests.length = 0
+
+    fireEvent.click(screen.getByRole('button', { name: /^Discard change to session/ }))
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Discard change' }),
+    )
+
+    expect(await screen.findByText('Synced goal')).toBeInTheDocument()
+    expect(screen.queryByText('Refused goal')).not.toBeInTheDocument()
+    expect(server.requests).toEqual([])
+    expect(server.editRequests).toHaveLength(0)
+  })
+
+  it('when the discard fails, says so and puts focus back on the Discard button', async () => {
+    const record = await sessionWithRefusedEdit()
+    vi.spyOn(store, 'discardEdit').mockRejectedValue(new Error('disk full'))
+    renderHistory()
+    await screen.findByText('Refused goal')
+
+    fireEvent.click(screen.getByRole('button', { name: /^Discard change to session/ }))
+    fireEvent.click(
+      within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Discard change' }),
+    )
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t discard the change')
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^Discard change to session/ })).toHaveFocus(),
+    )
+    expect(screen.getByText('Refused goal')).toBeInTheDocument()
+    expect((await store.get(record.id))?.editState).toBe('rejected')
+  })
+
+  it('keeps the row’s Edit button inert while the confirmation is open', async () => {
+    await sessionWithRefusedEdit()
+    renderHistory()
+    await screen.findByText('Refused goal')
+    const edit = screen.getByRole('button', { name: /^Edit session/ })
+    expect(edit).toBeEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Discard change to session/ }))
+    expect(screen.getByRole('button', { name: /^Edit session/ })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: /^Edit session/ }))
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+
+    fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('button', { name: /^Edit session/ })).toBeEnabled()
+  })
+})
+
 describe('Archive on this device only (AC11.2, AC11.4, AC11.5)', () => {
   it('is offered for a rejected session instead of the usual Archive', async () => {
     await rejectedSession()
@@ -211,6 +268,55 @@ describe('Archive on this device only (AC11.2, AC11.4, AC11.5)', () => {
     expect(stored?.archivedAt).not.toBeNull()
     expect(stored?.syncState).toBe('rejected')
     expect(server.requests.filter((r) => /\/(archive|restore)$/.test(r))).toEqual([])
+  })
+})
+
+describe('a late Undo reply (#253)', () => {
+  it('does not clear the message of a newer device-only archive', async () => {
+    const synced = makeRecord({ startedAt: '2026-10-21T09:00:00Z', goal: 'On the server' })
+    const result = await new HttpSessionsApi({ fetch: server.fetch }).sync([synced])
+    if (result.kind !== 'ok') throw new Error('setup failed')
+    await store.save(synced, 'me')
+    await store.markSynced(synced.id, result.value[0].session)
+    await rejectedSession()
+
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const slowRestore: typeof fetch = async (input, init) => {
+      const response = await server.fetch(input, init)
+      if (String(input).endsWith('/restore')) await gate
+      return response
+    }
+    render(
+      <HistoryScreen
+        api={history}
+        timeZone="UTC"
+        now={() => NOW}
+        ownerId="me"
+        sessions={store}
+        sync={engine}
+        sessionsApi={new HttpSessionsApi({ fetch: server.fetch })}
+        archiveApi={new HttpArchiveApi({ fetch: slowRestore })}
+      />,
+    )
+    await screen.findByText('On the server')
+
+    fireEvent.click(screen.getByRole('button', { name: /^Archive session from .*[AP]M$/ }))
+    expect(await screen.findByText('Session archived.')).toBeInTheDocument()
+    // Undo is sent, but its reply is held back.
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await waitFor(() => expect(server.requests.some((r) => r.endsWith('/restore'))).toBe(true))
+
+    fireEvent.click(await screen.findByRole('button', { name: /on this device only$/ }))
+    expect(await screen.findByText('Session archived on this device only.')).toBeInTheDocument()
+
+    release()
+    await waitFor(() => expect(server.sessions.get(synced.id)?.archivedAt).toBeNull())
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.getByText('Session archived on this device only.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument()
   })
 })
 
@@ -277,6 +383,64 @@ describe('the Archive screen with a device-only session', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete 1 session' }))
     expect(await screen.findByText('Deleted 1 archived session.')).toBeInTheDocument()
     await waitFor(async () => expect(await store.get(record.id)).toBeUndefined())
+  })
+
+  it('Delete all keeps device-only sessions when the server delete fails', async () => {
+    const record = await rejectedSession()
+    await store.archiveOnDevice('me', record.id)
+    renderArchive()
+    await screen.findByText('Wrong clock')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete all archived sessions' }))
+    server.mode = 'down'
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 1 session' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn’t delete/)
+    expect(screen.getByText('Wrong clock')).toBeInTheDocument()
+    expect((await store.get(record.id))?.archivedAt).not.toBeNull()
+  })
+
+  it('Delete all says so when the device-side delete fails, and keeps those rows listed', async () => {
+    const record = await rejectedSession()
+    await store.archiveOnDevice('me', record.id)
+    const onServer = makeRecord({ goal: 'Server archived' })
+    await new HttpSessionsApi({ fetch: server.fetch }).sync([onServer])
+    server.archive(onServer.id)
+    vi.spyOn(store, 'removeArchived').mockRejectedValue(new Error('disk full'))
+    renderArchive()
+    await screen.findByText('Wrong clock')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete all archived sessions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 2 sessions' }))
+
+    // Only the server's session is reported deleted.
+    expect(await screen.findByText('Deleted 1 archived session.')).toBeInTheDocument()
+    expect(screen.getByRole('alert')).toHaveTextContent(/only on this device/)
+    expect(screen.getByText('Wrong clock')).toBeInTheDocument()
+    expect(screen.queryByText('Server archived')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Delete all archived sessions' })).toHaveFocus()
+    expect((await store.get(record.id))?.archivedAt).not.toBeNull()
+  })
+
+  it('lists server and device-only rows in one list, newest archived first', async () => {
+    store.close()
+    let clock = Date.UTC(2026, 9, 24, 12)
+    store = new IndexedDbSessionStore({ name: freshDbName(), now: () => clock })
+    const newer = await rejectedSession('Device newer')
+    await store.archiveOnDevice('me', newer.id)
+    clock = Date.UTC(2026, 9, 22, 12)
+    const older = makeRecord({ startedAt: '2026-10-21T11:00:00Z', goal: 'Device older' })
+    await store.save(older, 'me')
+    await store.markRejected(older.id, null)
+    await store.archiveOnDevice('me', older.id)
+    const onServer = makeRecord({ goal: 'Server archived' })
+    await new HttpSessionsApi({ fetch: server.fetch }).sync([onServer])
+    server.archive(onServer.id) // archived 2026-10-23, between the two
+
+    renderArchive()
+    await screen.findByText('Server archived')
+    await screen.findByText('Device older')
+    const goals = screen
+      .getAllByRole('listitem')
+      .map((item) => /Device newer|Server archived|Device older/.exec(item.textContent ?? '')?.[0])
+    expect(goals).toEqual(['Device newer', 'Server archived', 'Device older'])
   })
 
   it('is still shown, and restorable, when the server’s list cannot be loaded', async () => {
