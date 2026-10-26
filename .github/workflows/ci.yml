@@ -7,7 +7,7 @@
 # Each job goes through the same `make` targets as local work (Makefile). Test jobs write
 # JUnit XML to reports/ and upload it as a workflow artifact, even when tests fail.
 #
-# Three more jobs, not required checks:
+# Four more jobs, not required checks:
 #   image       (#27) builds the app image, validates the production configs and
 #               smoke-tests the production stack (Caddy + prod + dev) on it. Every PR and
 #               push. No credentials.
@@ -27,7 +27,13 @@
 #               Skips with a notice while that environment's secrets aren't set. If the
 #               new release fails its checks after starting, the server starts the
 #               previous one again and the job fails (#30). Rolling dev back by hand is
-#               .github/workflows/rollback.yml.
+#               .github/workflows/rollback.yml. Deploys only go forward (#257): a commit
+#               older than the one dev runs (an ancestor of it) skips green with a notice,
+#               so a run whose CI finished late can't put an older commit on dev.
+#   dev-deployment  (#257) creates the `dev` GitHub deployment, only after deploy-dev
+#               deployed this commit and its smoke tests passed. deploy-dev itself runs
+#               with `deployment: false`, so a skipped deploy never shows as a successful
+#               one: deploy-prod's plan reads dev's deployments as "what dev ran".
 
 name: CI
 
@@ -369,10 +375,16 @@ jobs:
     timeout-minutes: 30
     # The dev deploy key and the server's host key are secrets of this environment only
     # (deployment branches: main). The key can only run focus-ci's dev profile.
+    # `deployment: false` (#257): GitHub would mark this job's deployment a success
+    # whenever the job is green, a skip included. dev-deployment below creates it, only
+    # for a commit this job deployed and smoke-tested.
     environment:
       name: dev
-      url: https://dev.ineedtofoc.us
+      deployment: false
     # One dev deploy at a time; a newer commit's deploy waits, it doesn't cancel this one.
+    # The order check below relies on it: only a job of this group moves dev forward, so
+    # what it reads from dev still holds when it deploys. cancel-in-progress wouldn't fix
+    # #257: jobs reach the group in the order their CI finishes, not in commit order.
     # Deploys of different environments are serialized on the server by flock on
     # /opt/focus/deploy.lock, not by sharing this group: GitHub cancels a *pending* job
     # when another one joins its group, which would drop a queued prod rollback.
@@ -382,6 +394,10 @@ jobs:
     permissions:
       contents: read
       attestations: read # gh attestation verify (#128)
+    outputs:
+      # true only when the order check let this commit through (#257); dev-deployment
+      # also needs the job to have passed.
+      deployed: ${{ steps.order.outputs.deploy }}
     env:
       DEPLOY_HOST: 159.223.188.176
       DEV_URL: https://dev.ineedtofoc.us
@@ -444,6 +460,7 @@ jobs:
         if: steps.config.outputs.configured == 'true'
         with:
           persist-credentials: false
+          fetch-depth: 0 # main's history, for the order check (#257)
       - name: Set up the deploy key
         if: steps.config.outputs.configured == 'true'
         env:
@@ -470,13 +487,48 @@ jobs:
             ServerAliveCountMax 4
           EOF
           echo "SSH_CONFIG=$dir/config" >> "$GITHUB_ENV"
+      # Deploys only go forward (#257). Merges that land close together finish CI in any
+      # order, so an older commit's job can reach this group after a newer one deployed.
+      # This commit is older when it's an ancestor of the commit dev runs (main is
+      # linear): skip green with a notice, and dev keeps the newer one. The same commit
+      # (a re-run) or a newer one deploys. Going back is rollback.yml, which has no such
+      # check. A revert commit on main is newer, so it deploys.
+      - name: Check this commit isn't older than the one dev runs
+        id: order
+        if: steps.config.outputs.configured == 'true'
+        run: |
+          die() { echo "::error title=$1::$2 Nothing was deployed."; exit 1; }
+          # No record yet prints nothing on stdout (and a line on stderr): a first deploy.
+          ssh -F "$SSH_CONFIG" focus-dev status > "$RUNNER_TEMP/current" ||
+            die "Dev's release unknown" "couldn't read dev's release record (ssh status failed)."
+          current=$(sed -n 's/^tag=//p' "$RUNNER_TEMP/current")
+          if [[ -z $current || $current == "$TAG" ]]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ $current =~ ^[0-9a-f]{40}$ ]] ||
+            die "Dev's release unknown" "dev's release record has a malformed tag."
+          git cat-file -e "$current^{commit}" 2> /dev/null ||
+            die "Deploy order unknown" "dev runs $current, which isn't in main's history here, so there's no telling whether $TAG is newer."
+          older=0
+          git merge-base --is-ancestor "$TAG" "$current" || older=$?
+          case $older in
+            0)
+              echo "deploy=false" >> "$GITHUB_OUTPUT"
+              msg="Not deployed: dev runs $current, which is newer (this commit, $TAG, is an ancestor of it). This run's CI finished after that commit's deploy, and a deploy never puts an older commit on dev (#257). To go back on purpose, use the rollback workflow."
+              echo "::notice title=Dev deploy skipped::$msg"
+              printf '### Deploy to dev: skipped, dev runs a newer commit\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            1) echo "deploy=true" >> "$GITHUB_OUTPUT" ;;
+            *) die "Deploy order unknown" "git merge-base --is-ancestor $TAG $current failed (exit $older)." ;;
+          esac
       - name: Deploy over SSH (pull by digest, migrate, start, check, record)
         id: deploy
-        if: steps.config.outputs.configured == 'true'
+        if: steps.config.outputs.configured == 'true' && steps.order.outputs.deploy == 'true'
         run: ssh -F "$SSH_CONFIG" focus-dev "deploy $TAG $DIGEST"
       - name: Read the server's release record
         id: record
-        if: steps.config.outputs.configured == 'true'
+        if: steps.config.outputs.configured == 'true' && steps.order.outputs.deploy == 'true'
         run: |
           ssh -F "$SSH_CONFIG" focus-dev status > "$RUNNER_TEMP/release"
           cat "$RUNNER_TEMP/release"
@@ -488,10 +540,12 @@ jobs:
           done
       - name: Smoke-test https://dev.ineedtofoc.us
         id: smoke
-        if: steps.config.outputs.configured == 'true'
+        if: steps.config.outputs.configured == 'true' && steps.order.outputs.deploy == 'true'
         run: python3 scripts/smoke_deploy.py "$DEV_URL" --summary "$RUNNER_TEMP/smoke.md"
+      # Not after a skip for order (that step wrote its own summary); after a failed
+      # provenance or order check it still runs and says nothing was deployed.
       - name: Summary
-        if: ${{ !cancelled() && steps.config.outputs.configured == 'true' }}
+        if: ${{ !cancelled() && steps.config.outputs.configured == 'true' && steps.order.outputs.deploy != 'false' }}
         env:
           DEPLOYED_AT: ${{ steps.record.outputs.deployed_at }}
           INFRA_REVISION: ${{ steps.record.outputs.infra_revision }}
@@ -527,3 +581,24 @@ jobs:
       - name: Remove the deploy key
         if: always()
         run: rm -rf "$RUNNER_TEMP/deploy-ssh"
+
+  dev-deployment:
+    name: Record the dev deployment
+    # The `dev` GitHub deployment of this commit (#257), created only once deploy-dev
+    # deployed it and passed its smoke tests: never for a skip (not set up, or an older
+    # commit than dev runs) or a failure. deploy-prod's plan reads these as what dev ran
+    # ("dev's newest successful deployment", "a dev deployment of it succeeded").
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy-dev.outputs.deployed == 'true'
+    needs: deploy-dev
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment:
+      name: dev
+      url: https://dev.ineedtofoc.us
+    permissions: {}
+    steps:
+      # No checkout, no secret: the deployment is what this job is for.
+      - name: Record
+        env:
+          TAG: ${{ github.sha }}
+        run: echo "dev runs $TAG, deployed and smoke-tested by Deploy to dev"
