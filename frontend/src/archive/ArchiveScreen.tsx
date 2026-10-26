@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { notifySessionExpired, signedInUserId } from '../auth/localData.ts'
 import { deviceTimeZone } from '../history/api.ts'
 import { formatDate, formatTime } from '../history/model.ts'
-import { markArchivedOnDevice } from '../sync/reconcile.ts'
+import { markArchivedOnDevice, reconcileArchivedGone } from '../sync/reconcile.ts'
 import type { SessionStore } from '../sync/sessionStore.ts'
 import { formatDuration } from '../timerscreen/format.ts'
 import { HttpArchiveApi, type ArchiveApi, type ArchivedSession } from './api.ts'
@@ -57,15 +57,19 @@ export default function ArchiveScreen({
     let cancelled = false
     void (async () => {
       setLoad({ kind: 'loading' })
+      const loadStartedAt = Date.now()
       const result = await api.list()
       if (cancelled) return
       if (result.kind === 'ok') {
         setLoad({ kind: 'ready', sessions: result.value })
         // Archived on another device: the device copy follows.
         if (owner !== null && store) {
-          void markArchivedOnDevice(store, owner, result.value, (id) =>
-            restored.current.has(id),
-          ).catch(() => undefined)
+          const isSkipped = (id: string) => restored.current.has(id)
+          void markArchivedOnDevice(store, owner, result.value, isSkipped)
+            // Archived here but no longer listed (deleted elsewhere): mark, then delete on a
+            // later load (#263).
+            .then(() => reconcileArchivedGone(store, owner, result.value, isSkipped, loadStartedAt))
+            .catch(() => undefined)
         }
       } else {
         if (result.kind === 'unauthorized') notifySessionExpired()

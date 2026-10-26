@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { clearArchivedOnDevice, markArchivedOnDevice, reconcileMissing } from './reconcile.ts'
+import {
+  clearArchivedOnDevice,
+  markArchivedOnDevice,
+  reconcileArchivedGone,
+  reconcileMissing,
+} from './reconcile.ts'
 import type { SessionStore } from './sessionStore.ts'
 
 describe('markArchivedOnDevice', () => {
@@ -47,5 +52,30 @@ describe('reconcileMissing racing with Undo on this screen', () => {
     await reconcile
     expect(setArchived).not.toHaveBeenCalled()
     expect(markGone).toHaveBeenCalledWith('me', [], expect.any(Number))
+  })
+})
+
+describe('reconcileArchivedGone', () => {
+  const device = (id: string, over: Record<string, unknown> = {}) => ({
+    record: { id },
+    syncState: 'synced',
+    archivedAt: '2026-10-20T10:00:00Z',
+    ...over,
+  })
+  it('#263 marks only synced archived copies the list lacks, except skipped ones', async () => {
+    const markGone = vi.fn().mockResolvedValue(undefined)
+    const list = vi
+      .fn()
+      .mockResolvedValue([
+        device('listed'),
+        device('gone'),
+        device('mine'),
+        device('rejected', { syncState: 'rejected' }),
+        device('pending', { syncState: 'pending' }),
+        device('live', { archivedAt: null }),
+      ])
+    const store = { list, markGone } as unknown as SessionStore
+    await reconcileArchivedGone(store, 'me', [{ id: 'listed' }], (id) => id === 'mine', 123)
+    expect(markGone).toHaveBeenCalledWith('me', ['gone'], 123)
   })
 })
