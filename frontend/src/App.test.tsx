@@ -194,12 +194,13 @@ describe('App sign-out with a finished record held only in memory (#298)', () =>
     renderOnHistory(controller, signOut)
     fireEvent.click(await screen.findByRole('button', { name: 'History' }))
     await screen.findByRole('heading', { name: 'History' })
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'History' })).toHaveFocus())
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     const dialog = await screen.findByRole('alertdialog', { name: 'Confirm sign out' })
     expect(dialog).toHaveTextContent(
       "1 session hasn't synced and will be deleted from this device.",
     )
-    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus())
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(signOut).not.toHaveBeenCalled()
@@ -218,6 +219,7 @@ describe('App sign-out with a finished record held only in memory (#298)', () =>
     renderOnHistory(controller, signOut)
     fireEvent.click(await screen.findByRole('button', { name: 'History' }))
     await screen.findByRole('heading', { name: 'History' })
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'History' })).toHaveFocus())
     // Here only this hook is registered; in the app the session store's trySync runs beside it.
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
@@ -241,6 +243,7 @@ describe('App sign-out with a finished record held only in memory (#298)', () =>
     renderOnHistory(controller, signOut)
     fireEvent.click(await screen.findByRole('button', { name: 'History' }))
     await screen.findByRole('heading', { name: 'History' })
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'History' })).toHaveFocus())
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     await screen.findByRole('alertdialog', { name: 'Confirm sign out' })
     fireEvent.click(screen.getByRole('button', { name: 'Sign out anyway' }))
