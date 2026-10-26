@@ -179,9 +179,9 @@ def test_concurrency(workflow: dict[Any, Any], jobs: dict[str, Any]) -> None:
 def test_sessions_have_turn_dollar_and_step_time_caps(jobs: dict[str, Any]) -> None:
     for name in SESSION_JOBS:
         (step,) = runs_claude(jobs[name])
-        m = re.search(r"oncall-claude\.sh (oncall|reviewer) (\d+) (\d+) ", step["run"])
+        m = re.search(r"oncall-claude\.sh (respond|review|follow-up) (\d+) (\d+) ", step["run"])
         assert m, step["run"]
-        assert m.group(1) == ("reviewer" if name == "review" else "oncall")
+        assert m.group(1) == name  # the job's own allow list (#232)
         assert 0 < int(m.group(2)) <= 60 and 0 < int(m.group(3)) <= 10
         # A step timeout fails the step; a job timeout would cancel it and skip the ⛔.
         assert 0 < step["timeout-minutes"] < jobs[name]["timeout-minutes"], name
@@ -211,8 +211,16 @@ def test_the_wrapper_checks_every_flag_it_passes() -> None:
     text = CLAUDE.read_text()
     (flags,) = re.findall(r"FLAGS=\(([^)]*)\)", text)
     checked = set(flags.split())
-    used = set(re.findall(r"(--[a-zA-Z-]+)", text.split("claude -p --agent", 1)[1]))
-    assert used <= checked | {"--agent"}, used - checked
+    # Every flag given to claude after the probe, comments and rule patterns aside.
+    code = "\n".join(
+        line.split(" #")[0]
+        for line in text.split("done\n", 1)[1].splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    code = re.sub(r"'[^']*'", "", code)
+    used = set(re.findall(r"(?<![\w-])(--[a-zA-Z][a-zA-Z-]*)", code))
+    assert "--agents" in used and "--allowedTools" in used, used
+    assert used <= checked, used - checked
     assert "--agent" in checked
     assert "--dangerously-skip-permissions" not in text and "bypassPermissions" not in text
     assert "--permission-mode dontAsk" in text
@@ -604,6 +612,36 @@ def test_simulated_fallback_without_the_reviewer_key(tmp_path: Path, grafana: st
     assert calls(sim, "gh issue edit 500 --add-label needs-yacine")
 
 
+def test_simulated_review_session_that_leaves_nothing_says_why(
+    tmp_path: Path, grafana: str
+) -> None:
+    """The reviewer session ends without a review (#232: it once had no Write tool), so no
+    review is posted, nothing merges, and the ⛔ Needs Yacine: carries its result."""
+    sim = simulation(tmp_path, grafana, dev_dispatch())
+    sim.write("pr.json", approved_pr(reviewDecision="REVIEW_REQUIRED"))
+    sim.session("oncall", fix_session(), nth=1)
+    sim.session("reviewer", "exit 0\n")
+    sim.write(
+        "claude-result-reviewer",
+        {
+            "type": "result",
+            "subtype": "success",
+            "num_turns": 9,
+            "permission_denials": [
+                {"tool_name": "Write", "tool_input": {"file_path": "/tmp/oncall/review.md"}}
+            ],
+        },
+    )
+    sim.session("oncall", write_files(comment_md="Not merged: no review."), nth=3)
+    jobs = sim.run()
+    assert jobs["post-review"]["outputs"]["posted"] == ""
+    assert calls(sim, "gh pr review") == [] and calls(sim, "gh pr merge") == []
+    (not_merged,) = [b for _, b in sim.comments() if "didn't merge fix PR #600" in b]
+    assert "No review was posted" in not_merged
+    assert "Claude Code: ended with success, after 9 turns; 1 tool calls refused, " in not_merged
+    assert "Write(review.md) x1." in not_merged
+
+
 def test_simulated_patch_fallback_without_the_oncall_app(tmp_path: Path, grafana: str) -> None:
     secrets = {k: v for k, v in SECRETS.items() if k != "ONCALL_APP_KEY"}
     sim = simulation(tmp_path, grafana, dev_dispatch(), secrets)
@@ -702,11 +740,39 @@ def test_simulated_session_that_doesnt_finish(tmp_path: Path, grafana: str) -> N
     sim = simulation(tmp_path, grafana, dispatch())
     sim.write("issues.json", [incident_issue(77)])
     sim.write("claude-exit-oncall", "1")  # e.g. the turn cap: no files
+    # Refused tools, as in run 40240380314 (#232): the comment says which, safely.
+    refused = [
+        {
+            "tool_name": "Bash",
+            "tool_input": {"command": "python3 scripts/oncall_grafana.py journey dev"},
+        },
+        {"tool_name": "Write", "tool_input": {"file_path": "/tmp/oncall/decision.json"}},
+    ]
+    sim.write(
+        "claude-result-oncall",
+        {
+            "type": "result",
+            "subtype": "error_max_turns",
+            "is_error": True,
+            "num_turns": 61,
+            "total_cost_usd": 2.5,
+            "result": "@someone see #1",
+            "permission_denials": refused,
+        },
+    )
     jobs = sim.run()
     assert jobs["respond"]["result"] == "failure"
+    assert jobs["respond"]["outputs"]["session"].startswith("ended with error_max_turns")
+    assert "### Claude Code session: respond" in (jobs["respond"]["dir"] / "summary.md").read_text()
     assert jobs["act"]["result"] == "success"
     ((_, body),) = sim.comments()
     assert "the agent wrote no decision.json" in body and body.startswith("⛔ Needs Yacine:")
+    assert (
+        "Claude Code: ended with error_max_turns (an error), after 61 turns, for $2.50; 2 tool "
+        "calls refused, Bash(python3) x1, "
+        "Write(decision.json) x1."
+    ) in body
+    assert "@someone" not in body
 
 
 def test_simulated_follow_up_that_doesnt_finish(tmp_path: Path, grafana: str) -> None:
@@ -725,6 +791,7 @@ def test_simulated_follow_up_that_doesnt_finish(tmp_path: Path, grafana: str) ->
     jobs = sim.run()
     assert jobs["report"]["result"] == "success"
     assert "the follow-up session didn't finish its report" in sim.comments()[-1][1]
+    assert "Claude Code: ended with success, after 3 turns" in sim.comments()[-1][1]
 
 
 def test_simulated_invalid_dispatch_never_reaches_an_agent(tmp_path: Path, grafana: str) -> None:

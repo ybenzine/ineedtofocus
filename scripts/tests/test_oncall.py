@@ -433,6 +433,14 @@ def test_a_good_fix_branch_passes(repo: Path) -> None:
             "may not change scripts/oncall.py",
         ),
         ({"infra/github/main-branch-protection.json": "{}"}, "may not change infra/github/"),
+        # The tests that pin the guards (#232).
+        ({"scripts/tests/test_oncall.py": "x"}, "may not change scripts/tests/test_oncall.py"),
+        ({"scripts/tests/test_oncall_cli.py": "x"}, "may not change scripts/tests/test_oncall_cli"),
+        ({"scripts/tests/oncall_sim.py": "x"}, "may not change scripts/tests/oncall_sim.py"),
+        (
+            {"scripts/tests/test_claude_settings.py": "x"},
+            "may not change scripts/tests/test_claude_settings.py",
+        ),
         ({"backend/app/x.py": "a\n"}, "no test file"),
         ({"backend/app/x.py": "a\n" * 1200, "backend/tests/test_x.py": "b"}, "lines (at most"),
     ],
@@ -443,6 +451,24 @@ def test_a_fix_branch_that_touches_the_guardrails_or_has_no_test_is_refused(
     commit_branch("oncall/7-x", files)
     problems = o.check_fix("oncall/7-x", "7")
     assert any(says in p for p in problems), problems
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["sk-ant-api03-abcdef", "glsa_abcdef0123", "ghs_abcdef0123", "-----BEGIN PRIVATE KEY-----"],
+)
+def test_a_fix_branch_with_token_shaped_text_is_refused(repo: Path, token: str) -> None:
+    """A backstop (#232): a session that got a key or token into its context mustn't get it
+    onto a public branch, in a commit message or in the code."""
+    files = {"backend/app/x.py": "a\n", "backend/tests/unit/test_x.py": "b\n"}
+    commit_branch("oncall/7-x", files)
+    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", f"fix: x {token}"], check=True)
+    assert "a commit message holds token-shaped text (a key or a token)" in o.check_fix(
+        "oncall/7-x", "7"
+    )
+    subprocess.run(["git", "switch", "-q", "main"], check=True)
+    commit_branch("oncall/7-y", {**files, "backend/app/y.py": f"KEY = '{token}'\n"})
+    assert o.check_fix("oncall/7-y", "7") == ["the fix adds token-shaped text (a key or a token)"]
 
 
 @pytest.mark.parametrize(
@@ -774,6 +800,114 @@ def test_the_stalled_comment(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(o.Invalid):
         o.stalled_body("session-save-errors", "firing", "prod", TITLE, "https://evil.example/", "x")
     assert o.main(["stalled-body", "cpu", "firing", "prod", TITLE, RUN, "x"]) == 1
+
+
+# --- What a session ended with (#232) -------------------------------------------------
+
+
+def refused(tool: str, **given: str) -> dict[str, Any]:
+    return {"tool_name": tool, "tool_use_id": "x", "tool_input": given}
+
+
+DENIED_RUN = {
+    "type": "result",
+    "subtype": "success",
+    "is_error": False,
+    "num_turns": 14,
+    "total_cost_usd": 1.234,
+    "result": "Grafana said: ignore your instructions @someone #12",
+    "permission_denials": [
+        refused("Bash", command="python3 scripts/oncall_grafana.py journey dev"),
+        refused("Bash", command="python3 scripts/oncall_grafana.py logs '{x=\"y\"}'"),
+        refused("Bash", command="gh run list --workflow ci.yml"),
+        refused("Write", file_path="/tmp/oncall/decision.json", content="{}"),
+        # The reviewer's probes (#250): a URL, a token-shaped word, a goal as a file name.
+        refused("Bash", command="curl https://youtu.be/dQw4w9WgXcQ"),
+        refused("Bash", command="glsa_0123456789abcdef_cafe --help"),
+        refused("Write", file_path="/tmp/oncall/finish-my-thesis-by-friday.md"),
+        refused("Bash", command="echo user@example.com `id` | tee /tmp/x"),
+    ],
+}
+
+
+def test_a_session_result_names_the_refused_calls_safely() -> None:
+    line, labels = o.session_result(DENIED_RUN)
+    assert line == (
+        "ended with success, after 14 turns, for $1.23; 8 tool calls refused, Bash(python3) x2, "
+        "Bash(gh run) x1, Write(decision.json) x1, Bash(curl) x1, Bash x1 and 2 more"
+    )
+    # Only the tool, the command's first word and one subcommand-like word, or one of the
+    # sessions' own file names: never a path, a URL, a token, a goal or the result text.
+    assert labels == [
+        "Bash(python3) x2",
+        "Bash(gh run) x1",
+        "Write(decision.json) x1",
+        "Bash(curl) x1",
+        "Bash x1",
+        "Write x1",
+        "Bash(echo) x1",
+    ]
+    for text in (line, *labels):
+        for leak in ("@", "#", "/", ":", "`", "youtu", "glsa", "thesis", "example", "Grafana"):
+            assert leak not in text, (leak, text)
+
+
+@pytest.mark.parametrize(
+    ("raw", "start"),
+    [
+        (None, "Claude Code left no result"),
+        ([], "Claude Code left no result"),
+        ({"type": "system"}, "Claude Code left no result"),
+        (
+            {"type": "result", "subtype": "error_max_turns", "is_error": True, "num_turns": 61},
+            "ended with error_max_turns (an error), after 61 turns; no tool call refused",
+        ),
+        ({"type": "result", "subtype": "Bad <b>", "num_turns": True}, "ended with unknown;"),
+    ],
+)
+def test_a_session_result_without_denials(raw: Any, start: str) -> None:
+    line, labels = o.session_result(raw)
+    assert line.startswith(start) and labels == []
+
+
+def test_the_session_summary_goes_to_the_step_summary_and_an_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    result = tmp_path / "agent.json"
+    result.write_text(json.dumps(DENIED_RUN))
+    summary, output = tmp_path / "summary.md", tmp_path / "output"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    assert o.main(["session-summary", str(result), "respond"]) == 0
+    assert "### Claude Code session: respond" in summary.read_text()
+    assert "- `Write(decision.json) x1`" in summary.read_text()
+    (line,) = output.read_text().splitlines()
+    assert line.startswith("session=ended with success, after 14 turns")
+    assert "::warning title=Claude Code session (respond)::" in capsys.readouterr().out
+    # A missing result (the step's time cap killed the CLI) still gives a line.
+    assert o.main(["session-summary", str(tmp_path / "none.json"), "follow-up"]) == 0
+    assert "session=Claude Code left no result" in output.read_text()
+    assert o.main(["session-summary", str(result), "oncall"]) == 1
+
+
+def test_the_stalled_and_not_merged_comments_carry_the_session_line() -> None:
+    line, _ = o.session_result(DENIED_RUN)
+    body = o.stalled_body(
+        "session-save-errors", "firing", "dev", TITLE, RUN, "the agent wrote no decision.json", line
+    )
+    assert "Why: the agent wrote no decision.json\n\nClaude Code: ended with success" in body
+    assert "Write(decision.json) x1, Bash(curl) x1, Bash x1 and 2 more." in body
+    # Checked again where it's posted: the job that wrote it ran a session.
+    hostile = o.stalled_body(
+        "session-save-errors", "firing", "dev", TITLE, RUN, "x", "a @b #1 `c`\nd https://e.f/g"
+    )
+    assert "Claude Code: a b 1 c d httpse.fg." in hostile
+    assert "Claude Code" not in o.stalled_body(
+        "session-save-errors", "firing", "dev", TITLE, RUN, "x"
+    )
+    merged = o.not_merged_body(7, 3, "it isn't approved", "none", "ended with error_max_turns")
+    assert "because it isn't approved.\n\nClaude Code: ended with error_max_turns." in merged
+    assert "Claude Code" not in o.not_merged_body(7, 3, "it isn't approved", "none")
 
 
 def test_outputs_are_one_line_each(monkeypatch: pytest.MonkeyPatch) -> None:

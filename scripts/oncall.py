@@ -27,11 +27,17 @@ checked values in its prompt, never through what an earlier session wrote on the
     check-comment <file>                 # a session's comment: there, not empty, not huge
     check-pr <pr.json> <incident>        # the PR the reviewer reviews
     merge-check <pr.json> <incident>     # GITHUB_OUTPUT: ok, reason
-    not-merged-body <incident> <pr> <reason> <app|fallback|none>
+    not-merged-body <incident> <pr> <reason> <app|fallback|none> [<session line>]
     squash-body <incident> <pr>          # the squash commit's body: the workflow's text
     merged-body <environment> <incident> <pr> <sha>
     follow-up-prompt <out dir> --key value ...
     stalled-body <alert> <status> <environment> <incident title> <run url> <reason>
+        [<session line>]
+    commit-check <message> <path>...     # what scripts/oncall-commit.sh refuses; exit 1
+    reviewer-agent                       # the headless review's agent, as `--agents` JSON
+    session-summary <result.json> respond|review|follow-up
+        # after a session: Claude Code's result (subtype, turns, cost, refused tool calls,
+        # named safely) in the step summary; GITHUB_OUTPUT: session (one line)
     open-fix-pr <prs.json> <incident>    # prints the incident's open on-call PR, if any
 
 The prompts are the Markdown templates in scripts/oncall_prompts/. Stdlib only, plus
@@ -98,7 +104,17 @@ PROTECTED_PATHS = (
     "^scripts/grafana_dashboards\\.py$",
     "^scripts/reviewer_token\\.py",
     "^scripts/reviewer-review\\.sh$",
+    # The respond session's only way to commit (#232); `^scripts/oncall` covers it, named
+    # here so the sync test and the wrapper's denies keep it.
+    "^scripts/oncall-commit\\.sh$",
+    # The tests that pin those guards (#232): a fix mustn't loosen them with its change.
+    "^scripts/tests/test_oncall",
+    "^scripts/tests/oncall_sim\\.py$",
+    "^scripts/tests/test_claude_settings\\.py$",
 )
+# Token-shaped text a fix branch must never carry, in a commit message or an added line
+# (#232): the Claude key, a Grafana token, a GitHub token, a PEM key.
+SECRET_SHAPES = re.compile(r"sk-ant-|glsa_|gh[opsu]_[A-Za-z0-9]|github_pat_|-----BEGIN")
 VERDICTS = ("approve", "request-changes")
 RUN_URL = re.compile(rf"https://github\.com/{re.escape(d.REPOSITORY)}/actions/runs/[0-9]+")
 RUN_RESULTS = ("success", "failure", "skipped-recent", "not-run")
@@ -445,6 +461,45 @@ def _one_line(text: str) -> str:
 
 # --- The fix branch -------------------------------------------------------------------
 
+MAX_COMMIT_MESSAGE = 500
+
+
+def commit_problems(root: Path, message: str, paths: list[str]) -> list[str]:
+    """What scripts/oncall-commit.sh refuses (#232): the respond session's only way to
+    stage and commit. Its arguments come from a session that reads untrusted text, so
+    nothing in them may become a git option, reach outside the checkout or a guarded file,
+    or put a key or a closing keyword in the commit."""
+    problems = []
+    if not message.strip() or message.startswith("-") or len(message) > MAX_COMMIT_MESSAGE:
+        problems.append(f"the message must be 1 to {MAX_COMMIT_MESSAGE} characters, not '-…'")
+    if any((c < " " and c != "\n") or c == "\x7f" for c in message):
+        problems.append("the message holds a control character")
+    if CLOSING.search(message):
+        problems.append("the message has a closing keyword (Closes/Fixes/Resolves #n): use Refs")
+    if SECRET_SHAPES.search(message):
+        problems.append("the message holds token-shaped text (a key or a token)")
+    if not paths:
+        problems.append("name at least one file to commit")
+    real_root = root.resolve()
+    for given in paths:
+        shown = json.dumps(given[:80])
+        if not given or given.startswith("-") or any(c < " " or c == "\x7f" for c in given):
+            problems.append(f"{shown} isn't a plain path")
+            continue
+        path = Path(os.path.normpath(real_root / given))
+        resolved = path.resolve()
+        if any(real_root not in p.parents for p in (path, resolved)):
+            problems.append(f"{shown} is outside the checkout")
+            continue
+        names = {path.relative_to(real_root).as_posix(), resolved.relative_to(real_root).as_posix()}
+        if any(n == ".git" or n.startswith(".git/") for n in names):
+            problems.append(f"{shown} is in .git")
+        elif any(re.search(p, n) for p in PROTECTED_PATHS for n in names):
+            problems.append(f"{shown} is a file the fix may not change")
+        elif path.is_dir() or resolved.is_dir():
+            problems.append(f"{shown} is a directory: name the files")
+    return problems
+
 
 def _git(*args: str) -> str:
     return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout
@@ -485,6 +540,15 @@ def check_fix(branch: str, number: str) -> list[str]:
         problems.append(
             "a commit message has a closing keyword (Closes/Fixes/Resolves and an issue): use Refs"
         )
+    if SECRET_SHAPES.search(messages):
+        problems.append("a commit message holds token-shaped text (a key or a token)")
+    new_lines = [
+        line
+        for line in _git("diff", "--no-renames", "-U0", f"origin/main...{branch}").splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    ]
+    if any(SECRET_SHAPES.search(line) for line in new_lines):
+        problems.append("the fix adds token-shaped text (a key or a token)")
     if not any(re.search(r"(^|/)tests?/|(^|/)test_[^/]*\.py$|\.test\.tsx?$", f) for f in files):
         problems.append("the fix has no test file (a regression test comes with it)")
     return problems
@@ -505,6 +569,33 @@ def patch_body(branch: str, number: str) -> str:
 
 
 # --- Review and merge -----------------------------------------------------------------
+
+
+REVIEWER = REPO / ".claude" / "agents" / "reviewer.md"
+CI_REVIEWER = "oncall-reviewer"
+
+
+def ci_reviewer_agent(path: Path = REVIEWER) -> dict[str, Any]:
+    """The headless review's agent (#232), for `claude --agents`: the reviewer's own
+    definition (description, model, instructions) plus Write, so it can leave review.md
+    and review.json. The reviewer people run stays read-only (no Write or Edit in its
+    file); this one's Write is scoped to those two files by scripts/oncall-claude.sh."""
+    text = path.read_text()
+    if not text.startswith("---\n") or "\n---\n" not in text[4:]:
+        raise Invalid(f"{path.name} has no front matter")
+    front, body = text[4:].split("\n---\n", 1)
+    meta = dict(line.split(": ", 1) for line in front.splitlines() if ": " in line)
+    tools = [t.strip() for t in meta.get("tools", "").split(",") if t.strip()]
+    if not body.strip() or not meta.get("description") or not tools:
+        raise Invalid(f"{path.name} lacks a description, tools or instructions")
+    agent: dict[str, Any] = {
+        "description": meta["description"],
+        "prompt": body.strip(),
+        "tools": [*tools, "Write"] if "Write" not in tools else tools,
+    }
+    if meta.get("model"):
+        agent["model"] = meta["model"]
+    return {CI_REVIEWER: agent}
 
 
 def review_prompt(pr: int, incident_number: int) -> str:
@@ -581,11 +672,18 @@ NOT_MERGED_WHY = {
 }
 
 
-def not_merged_body(number: int, pr: int, reason: str, posted: str) -> str:
+def not_merged_body(number: int, pr: int, reason: str, posted: str, session: str = "") -> str:
     why = NOT_MERGED_WHY.get(
         posted, "No review was posted: the reviewer session didn't finish, or posting it failed."
     )
-    return render("not-merged", incident=number, pr=pr, reason=_one_line(reason), why=why)
+    return render(
+        "not-merged",
+        incident=number,
+        pr=pr,
+        reason=_one_line(reason),
+        why=why,
+        session=_session_note(session),
+    )
 
 
 def squash_body(number: int, pr: int) -> str:
@@ -674,7 +772,9 @@ def follow_up_prompt(values: dict[str, str]) -> str:
     )
 
 
-def stalled_body(alert: str, status: str, env: str, title: str, run_url: str, reason: str) -> str:
+def stalled_body(
+    alert: str, status: str, env: str, title: str, run_url: str, reason: str, session: str = ""
+) -> str:
     if not RUN_URL.fullmatch(run_url):
         raise Invalid("not a run of this repo")
     if alert not in d.ALERTS or env not in d.DEPLOYED or status not in d.STATUSES:
@@ -688,7 +788,106 @@ def stalled_body(alert: str, status: str, env: str, title: str, run_url: str, re
         runbook=f"{RUNBOOKS}/{alert}.md",
         run_url=run_url,
         reason=_one_line(reason) or "no reason recorded",
+        session=_session_note(session),
     )
+
+
+# --- What a session's Claude Code run ended with (#232) -------------------------------
+
+SESSIONS = ("respond", "review", "follow-up")
+# What of a refused tool call may reach a comment (#232): the tool's name, and for Bash
+# the command's first word and at most one subcommand-like word, each a lowercase word
+# (no `/`, `:`, `_`, `@`, `#`, digits first or dots). A file tool's file only when it's one
+# of the sessions' own output files. Everything else in the input stays out: a command,
+# a URL or a path can carry text the session read from Grafana or GitHub, a token, or a
+# user's goal.
+TOOL_NAME = re.compile(r"[A-Z][A-Za-z]{0,30}")
+COMMAND_WORD = re.compile(r"[a-z][a-z0-9-]{0,30}")
+OUTPUT_FILES = ("decision.json", "comment.md", "pr.md", "review.md", "review.json", "prompt.md")
+# The line as posted, checked again where it's posted: letters, digits, spaces and
+# `_ . , ; ( ) $ ' -` only.
+SAFE_LINE = re.compile(r"[^A-Za-z0-9 _.,;()$'-]")
+MAX_LABELS = 5
+
+
+def _denied_label(denial: Any) -> str:
+    """A refused tool call, named safely (see TOOL_NAME, COMMAND_WORD, OUTPUT_FILES)."""
+    if not isinstance(denial, dict):
+        return "?"
+    tool = str(denial.get("tool_name", ""))
+    if not TOOL_NAME.fullmatch(tool):
+        return "?"
+    given = denial.get("tool_input")
+    given = given if isinstance(given, dict) else {}
+    if tool == "Bash":
+        words = []
+        for word in str(given.get("command", "")).split()[:2]:
+            if not COMMAND_WORD.fullmatch(word):
+                break
+            words.append(word)
+        return f"Bash({' '.join(words)})" if words else "Bash"
+    name = Path(str(given.get("file_path", ""))).name
+    return f"{tool}({name})" if name in OUTPUT_FILES else tool
+
+
+def session_result(raw: Any) -> tuple[str, list[str]]:
+    """Claude Code's `--output-format json` result, as one safe line and the refused calls:
+    the result's subtype, turns, cost, and each refused tool call's label with its count."""
+    if not isinstance(raw, dict) or raw.get("type", "result") != "result":
+        return "Claude Code left no result (the step's time cap, or the CLI failed)", []
+    subtype = str(raw.get("subtype", ""))
+    subtype = subtype if re.fullmatch(r"[a-z_]{1,40}", subtype) else "unknown"
+    parts = [f"ended with {subtype}" + (" (an error)" if raw.get("is_error") is True else "")]
+    turns, cost = raw.get("num_turns"), raw.get("total_cost_usd")
+    if isinstance(turns, int) and not isinstance(turns, bool):
+        parts.append(f"after {turns} turns")
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+        parts.append(f"for ${cost:.2f}")
+    denials = raw.get("permission_denials")
+    denials = denials if isinstance(denials, list) else []
+    counts: dict[str, int] = {}
+    for denial in denials:
+        label = _denied_label(denial)
+        counts[label] = counts.get(label, 0) + 1
+    labels = [f"{label} x{n}" for label, n in sorted(counts.items(), key=lambda kv: -kv[1])]
+    line = ", ".join(parts)
+    if denials:
+        shown = ", ".join(labels[:MAX_LABELS])
+        more = f" and {len(labels) - MAX_LABELS} more" if len(labels) > MAX_LABELS else ""
+        line += f"; {len(denials)} tool calls refused, {shown}{more}"
+    else:
+        line += "; no tool call refused"
+    return line, labels
+
+
+def session_summary(result_path: str, session: str) -> int:
+    """After a session: its result in the step summary and the job's `session` output, for
+    the ⛔ Needs Yacine: comment when the session leaves nothing usable."""
+    if session not in SESSIONS:
+        raise Invalid(f"unknown session {session!r}")
+    try:
+        raw: Any = json.loads(Path(result_path).read_text())
+    except (OSError, json.JSONDecodeError):
+        raw = None
+    line, labels = session_result(raw)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        rows = "".join(f"- `{label}`\n" for label in labels)
+        intro = "Refused tool calls (the session's allow list is in scripts/oncall-claude.sh):"
+        refused = f"\n{intro}\n\n{rows}" if rows else ""
+        with open(summary, "a") as f:
+            f.write(f"### Claude Code session: {session}\n\n{line}\n{refused}\n")
+    level = "warning" if labels or "error" in line or "no result" in line else "notice"
+    print(f"::{level} title=Claude Code session ({session})::{json.dumps(line)}")
+    _write_outputs({"session": line})
+    return 0
+
+
+def _session_note(session: str) -> str:
+    """The session's line in a comment: checked again here, on the fresh checkout, since
+    the job that wrote it ran a session."""
+    text = _one_line(SAFE_LINE.sub("", _one_line(session)))
+    return f"\n\nClaude Code: {text}." if text else ""
 
 
 # --- CLI ------------------------------------------------------------------------------
@@ -756,9 +955,9 @@ def main(argv: list[str]) -> int:
             for p in problems:
                 print(f"::error title=Not the on-call fix PR::{json.dumps(p)}")
             return 1 if problems else 0
-        if command == "not-merged-body" and len(args) == 4:
+        if command == "not-merged-body" and len(args) in (4, 5):
             number, pr = _number(args[0], "incident"), _number(args[1], "pr")
-            print(not_merged_body(number, pr, args[2], args[3]), end="")
+            print(not_merged_body(number, pr, *args[2:]), end="")
             return 0
         if command == "squash-body" and len(args) == 2:
             print(squash_body(_number(args[0], "incident"), _number(args[1], "pr")), end="")
@@ -773,8 +972,18 @@ def main(argv: list[str]) -> int:
             return 0
         if command == "follow-up-prompt" and args:
             return _write(args[0], "follow-up-prompt.md", follow_up_prompt(_options(args[1:])))
-        if command == "stalled-body" and len(args) == 6:
+        if command == "stalled-body" and len(args) in (6, 7):
             print(stalled_body(*args), end="")
+            return 0
+        if command == "session-summary" and len(args) == 2:
+            return session_summary(args[0], args[1])
+        if command == "commit-check" and args:
+            problems = commit_problems(Path.cwd(), args[0], args[1:])
+            for p in problems:
+                print(f"refused: {p}", file=sys.stderr)
+            return 1 if problems else 0
+        if command == "reviewer-agent" and not args:
+            print(json.dumps(ci_reviewer_agent()))
             return 0
         if command == "open-fix-pr" and len(args) == 2:
             found = open_fix_pr(json.loads(Path(args[0]).read_text()), _number(args[1], "incident"))
