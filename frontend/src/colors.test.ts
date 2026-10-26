@@ -4,10 +4,11 @@
 // literal lives outside the token blocks.
 import { describe, expect, it } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-// Vitest runs from frontend/ (the npm script's cwd).
-const root = process.cwd()
+// Resolved from this file, not the cwd, so it runs from frontend/ and from the repo root.
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const css = readFileSync(resolve(root, 'src/index.css'), 'utf8')
 
 function rgb(hex: string): [number, number, number] {
