@@ -43,7 +43,7 @@ Folders fill in as their issues land.
 
 ## Commands
 
-All entry points go through `make` (`make help` lists them). Needs Docker with Compose v2, [uv](https://docs.astral.sh/uv/) and Node.js ≥ 22.
+All entry points go through `make` (`make help` lists them). Needs Docker with Compose v2, [uv](https://docs.astral.sh/uv/), Node.js ≥ 22 and [jq](https://jqlang.org/) (`make test-scripts` uses it; macOS 15+ and the Ubuntu runners ship it).
 
 | Command | Does |
 |---|---|

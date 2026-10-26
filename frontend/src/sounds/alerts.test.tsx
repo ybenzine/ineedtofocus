@@ -1,4 +1,8 @@
+import { readFileSync, statSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { fireEvent, render, screen } from '@testing-library/react'
+import { MPEGDecoder } from 'mpg123-decoder'
 import { describe, expect, it, vi } from 'vitest'
 import type { TimerEvent } from '../timer/index.ts'
 import { AlertPlayer, MemoryAlertVolumeStore, soundForEvents } from './alerts.ts'
@@ -207,5 +211,51 @@ describe('SoundPreview', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview bell' }))
     await vi.waitFor(() => expect(sources).toHaveLength(1))
     expect(gain.gain.value).toBe(0.3)
+  })
+})
+
+describe('shipped alert files (AC5.1, #254)', () => {
+  const dir = resolve(dirname(fileURLToPath(import.meta.url)), '../../public/sounds')
+
+  async function decode(name: string) {
+    const path = resolve(dir, name)
+    const decoder = new MPEGDecoder()
+    await decoder.ready
+    const { channelData, sampleRate } = decoder.decode(new Uint8Array(readFileSync(path)))
+    decoder.free()
+    const samples = channelData[0]
+    let peak = 0
+    for (const s of samples) peak = Math.max(peak, Math.abs(s))
+    let tailPeak = 0
+    for (const s of samples.slice(-Math.floor(sampleRate * 0.02))) {
+      tailPeak = Math.max(tailPeak, Math.abs(s))
+    }
+    return {
+      seconds: samples.length / sampleRate,
+      mono: channelData.every((c) => c.every((s, i) => s === channelData[0][i])),
+      peak,
+      tailPeak,
+      bytes: statSync(path).size,
+    }
+  }
+
+  it('the chime is a 4-5 s mono recording that fades out, under 200 KB', async () => {
+    const chime = await decode('chime.mp3')
+    expect(chime.seconds).toBeGreaterThan(4)
+    expect(chime.seconds).toBeLessThan(5)
+    expect(chime.mono).toBe(true)
+    expect(chime.bytes).toBeLessThan(200_000)
+    expect(chime.peak).toBeLessThan(1) // no clipping
+    expect(chime.tailPeak).toBeLessThan(0.002) // ends silent, no click
+  })
+
+  it('the bell is a 2.5-3 s mono recording that fades out, under 200 KB', async () => {
+    const bell = await decode('bell.mp3')
+    expect(bell.seconds).toBeGreaterThan(2.5)
+    expect(bell.seconds).toBeLessThan(3)
+    expect(bell.mono).toBe(true)
+    expect(bell.bytes).toBeLessThan(200_000)
+    expect(bell.peak).toBeLessThan(1)
+    expect(bell.tailPeak).toBeLessThan(0.002)
   })
 })

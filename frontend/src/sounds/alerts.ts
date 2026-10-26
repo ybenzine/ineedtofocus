@@ -12,8 +12,8 @@ export type SoundName = 'chime' | 'bell'
  * Files in `public/`, so the service worker (#19) can precache them. Relative to the app's base.
  */
 export const SOUND_URLS: Record<SoundName, string> = {
-  chime: `${import.meta.env.BASE_URL}sounds/chime.wav`,
-  bell: `${import.meta.env.BASE_URL}sounds/bell.wav`,
+  chime: `${import.meta.env.BASE_URL}sounds/chime.mp3`,
+  bell: `${import.meta.env.BASE_URL}sounds/bell.mp3`,
 }
 
 export const DEFAULT_ALERT_VOLUME = 80
