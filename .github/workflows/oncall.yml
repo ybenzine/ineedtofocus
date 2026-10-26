@@ -9,9 +9,12 @@
 # checkout, check those files with scripts/oncall.py and do every write.
 #
 #   alert        #34's payload check. No secrets.
-#   incident     Finds the incident issue or opens it, locks it; the daily run cap.
+#   incident     Finds the incident issue or opens it, locks it; the daily run cap. Over
+#                the cap, a resolved alert's incident still closes: this job posts its
+#                own summary and closes it, with no session (#312).
 #   respond      The on-call agent (Claude Code, .claude/agents/oncall.md). Read-only.
-#   act          Checks the decision; posts the comment; labels; for a fix, pushes the
+#   act          Checks the decision; posts the comment with its record of the decision
+#                (action and cause, for #312's summary); labels; for a fix, pushes the
 #                branch and opens the PR as the on-call App (ONCALL_APP_KEY), or posts it
 #                as a patch with ⛔ Needs Yacine: without the key; for a resolved alert,
 #                closes the incident.
@@ -36,8 +39,11 @@
 #   to post-review, ONCALL_APP_KEY to the push, PR and merge steps.
 # - Nothing here can approve a deployment or start deploy-prod. The on-call App has no
 #   Actions or Workflows permission; only the rollback job can start a workflow.
-# - Cost: turn, dollar and step-time caps on every session; at most 4 runs per alert and
-#   environment in 24 hours.
+# - Cost: turn, dollar and step-time caps on every session; at most 4 runs with an agent
+#   session per alert and environment in 24 hours (runs where the session never started,
+#   like capped or skipped ones, don't count). Over the cap, a firing or repeat starts no
+#   session and posts the cap's ⛔ once; a resolution still closes the incident (#312).
+#   A capped run never rolls back, reviews, merges or opens a fix PR.
 #
 # One run per alert and environment at a time, never cancelled: a resolved event waits for
 # its firing run. GitHub keeps one waiting run per group, so a newer dispatch replaces one
@@ -113,15 +119,26 @@ jobs:
           persist-credentials: false
       - name: Find the incident and count today's runs
         id: plan
+        # The cap counts only runs whose agent session started (#312), so it reads each
+        # earlier run's jobs. A run whose jobs can't be read counts.
         run: |
           gh issue list --state all --label type:incident --limit 100 \
-            --json number,title,state,labels,closedAt > "$RUNNER_TEMP/issues.json"
+            --json number,title,state,labels,createdAt,closedAt > "$RUNNER_TEMP/issues.json"
           gh pr list --state open --limit 100 \
             --json number,state,headRefName,isCrossRepository > "$RUNNER_TEMP/prs.json"
           gh run list --workflow oncall.yml --event repository_dispatch --limit 100 \
             --json databaseId,displayTitle,createdAt > "$RUNNER_TEMP/runs.json"
+          jobs=$RUNNER_TEMP/run-jobs
+          mkdir -p "$jobs"
+          python3 scripts/oncall.py cap-runs "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/runs.json" \
+            "$GITHUB_RUN_ID" > "$RUNNER_TEMP/cap-runs.txt"
+          while read -r id; do
+            [[ $id =~ ^[1-9][0-9]*$ ]] || continue
+            gh run view "$id" --json jobs > "$jobs/$id.json" ||
+              { rm -f "$jobs/$id.json"; echo "::warning::couldn't read run $id's jobs: it counts"; }
+          done < "$RUNNER_TEMP/cap-runs.txt"
           python3 scripts/oncall.py incident "$GITHUB_EVENT_PATH" "$RUNNER_TEMP/issues.json" \
-            "$RUNNER_TEMP/prs.json" "$RUNNER_TEMP/runs.json" "$GITHUB_RUN_ID" "$RUNNER_TEMP"
+            "$RUNNER_TEMP/prs.json" "$RUNNER_TEMP/runs.json" "$GITHUB_RUN_ID" "$RUNNER_TEMP" "$jobs"
       - name: Open the incident issue
         id: open
         if: steps.plan.outputs.create == 'true'
@@ -143,7 +160,29 @@ jobs:
           if [[ $(gh api "repos/$GH_REPO/issues/$INCIDENT" --jq .locked) != true ]]; then
             gh issue lock "$INCIDENT"
           fi
+      - name: Close a resolved incident over the cap
+        # No session (#312): the summary is the workflow's own, from the payload's checked
+        # values, the runs and the decision the act job recorded on the incident. The
+        # incident stays open while its fix PR is.
+        if: steps.plan.outputs.close_capped == 'true'
+        env:
+          INCIDENT: ${{ steps.plan.outputs.incident }}
+          OPEN_PR: ${{ steps.plan.outputs.open_pr }}
+        run: |
+          [[ $INCIDENT =~ ^[1-9][0-9]*$ ]] || { echo "::error::no incident number"; exit 1; }
+          gh api "repos/$GH_REPO/issues/$INCIDENT/comments" --paginate \
+            --jq '.[] | {login: .user.login, body: .body}' > "$RUNNER_TEMP/comments.json"
+          python3 scripts/oncall.py capped-summary "$GITHUB_EVENT_PATH" "$INCIDENT" \
+            "$RUNNER_TEMP/issues.json" "$RUNNER_TEMP/runs.json" "$GITHUB_RUN_ID" \
+            "$RUNNER_TEMP/comments.json" "$OPEN_PR" > "$RUNNER_TEMP/summary.md"
+          gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/summary.md"
+          if [[ -n $OPEN_PR ]]; then
+            echo "::notice::incident #$INCIDENT stays open: its fix PR #$OPEN_PR is still open"
+          else
+            gh issue close "$INCIDENT" --reason completed
+          fi
       - name: Post the daily cap
+        # Its name is how a later run tells the ⛔ was posted (scripts/oncall.py CAP_STEP).
         if: steps.plan.outputs.cap_notice == 'true'
         env:
           INCIDENT: ${{ steps.open.outputs.incident || steps.plan.outputs.incident }}
@@ -217,7 +256,8 @@ jobs:
         run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
       - name: Run the on-call agent
         # A step timeout fails the step (a job timeout would cancel it): act still runs,
-        # finds no decision and posts the ⛔ Needs Yacine:.
+        # finds no decision and posts the ⛔ Needs Yacine:. This job's and step's names are
+        # how the daily cap tells a session started (scripts/oncall.py SESSION_STEP).
         timeout-minutes: 35
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -297,7 +337,7 @@ jobs:
         run: |
           python3 scripts/oncall.py decision "$RUNNER_TEMP/respond" --status "$STATUS" \
             --environment "$ALERT_ENV" --incident "$INCIDENT" --rolled-back "$ROLLED_BACK" \
-            --open-pr "$OPEN_PR"
+            --open-pr "$OPEN_PR" --run-url "$RUN_URL"
       - name: Post the update and label the incident
         env:
           ACTION: ${{ steps.decision.outputs.action }}
@@ -308,7 +348,8 @@ jobs:
               "$REASON" "$SESSION" > "$RUNNER_TEMP/stalled.md"
             gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/stalled.md"
           else
-            gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/respond/comment.md"
+            # The agent's comment, then the workflow's record of the decision (#312).
+            gh issue comment "$INCIDENT" --body-file "$RUNNER_TEMP/respond/update.md"
           fi
           case $ACTION in
             stalled | escalate) gh issue edit "$INCIDENT" --add-label needs-yacine ;;
