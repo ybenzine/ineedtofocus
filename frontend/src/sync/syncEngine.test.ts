@@ -510,6 +510,30 @@ describe('onChange (#264)', () => {
     expect(reports).toEqual([1])
   })
 
+  it('notifies once when a second caller joins and the last pass finds nothing', async () => {
+    const { store, engine } = setup()
+    const calls: number[] = []
+    engine.onChange(() => calls.push(1))
+    await store.save(makeRecord(), ALICE)
+    const [first] = await Promise.all([engine.syncNow(), engine.syncNow()])
+    expect(first.synced).toBe(0) // the loop's last pass was idle
+    expect((await store.list(ALICE))[0].syncState).toBe('synced')
+    expect(calls).toEqual([1])
+  })
+
+  it('counts a refused edit as a change', async () => {
+    const { store, engine } = setup()
+    const record = makeRecord()
+    await store.save(record, ALICE)
+    await store.markSynced(record.id, { id: record.id, tag: 'work', goal: null, archivedAt: null })
+    await store.edit(ALICE, record.id, { goal: 'x' }) // the server has no such session: 404
+    const calls: number[] = []
+    engine.onChange(() => calls.push(1))
+    await engine.syncNow()
+    expect((await store.get(record.id))?.editState).toBe('rejected')
+    expect(calls).toEqual([1])
+  })
+
   it('a throwing listener does not break the sync or the other listeners', async () => {
     const { store, engine } = setup()
     const seen: string[] = []

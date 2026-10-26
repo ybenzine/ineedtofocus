@@ -108,6 +108,8 @@ export class SyncEngine {
   readonly #onUnauthorized: () => void
   readonly #listeners = new Set<(report: SyncReport) => void>()
   #running: Promise<SyncReport> | null = null
+  /** Set by a pass when it changed the device store; read and reset by `syncNow`. */
+  #touched = false
   #again = false
   #failures = 0
   #retry: unknown = null
@@ -126,8 +128,8 @@ export class SyncEngine {
   }
 
   /**
-   * Calls `listener` once after each sync run that changed something on the device (a session
-   * synced or refused, an edit applied or dropped), so open screens can refresh what they show
+   * Calls `listener` once after each sync run in which any pass changed something on the device (a
+   * session synced or refused, an edit applied, dropped or refused), so open screens can refresh what they show
    * (AC10.9). A run that changed nothing, or a caller that joined a run already going, adds no
    * call. Returns a function that stops listening.
    */
@@ -161,13 +163,17 @@ export class SyncEngine {
       return this.#running.then(copyReport)
     }
     this.#cancelRetry()
+    // True when any pass of the loop changed something, not only the last one.
+    let changed = false
     const run = async (): Promise<SyncReport> => {
       let report: SyncReport
       // Gathered across every pass of the loop: the last pass alone could miss an earlier drop.
       const dropped: string[] = []
       do {
         this.#again = false
+        this.#touched = false
         report = await this.#exclusive(() => this.#pass())
+        if (this.#touched) changed = true
         for (const id of report.dropped) if (!dropped.includes(id)) dropped.push(id)
       } while (this.#again)
       return { ...report, dropped }
@@ -177,7 +183,7 @@ export class SyncEngine {
     })
     return this.#running.then((report) => {
       this.#afterPass(report)
-      if (report.synced + report.rejected + report.edited > 0 || report.dropped.length > 0) {
+      if (changed) {
         for (const listener of [...this.#listeners]) {
           try {
             listener(copyReport(report))
@@ -307,9 +313,11 @@ export class SyncEngine {
         if (entry === undefined || (item.id !== null && item.id !== entry.id)) continue
         if (item.status === 'rejected') {
           await this.#io(this.#store.markRejected(entry.id, item.error))
+          this.#touched = true
           report.rejected += 1
         } else {
           await this.#io(this.#store.markSynced(entry.id, item.session))
+          this.#touched = true
           report.synced += 1
         }
         settled += 1
@@ -328,11 +336,13 @@ export class SyncEngine {
       switch (result.kind) {
         case 'ok':
           await this.#io(this.#store.resolveEdit(entry.id, version, result.value))
+          this.#touched = true
           report.edited += 1
           break
         case 'conflict':
           // Archived on the server (AC11.4): the edit can never apply; the session is untouched.
           await this.#io(this.#store.dropEdit(entry.id, version))
+          this.#touched = true
           // The device copy follows, so offline History stops showing it. The real time comes
           // with the next online Archive load (History skips sessions archived here).
           await this.#io(this.#store.setArchived(owner, entry.id, new Date().toISOString()))
@@ -343,6 +353,7 @@ export class SyncEngine {
           await this.#io(
             this.#store.rejectEdit(entry.id, version, 'error' in result ? result.error : null),
           )
+          this.#touched = true
           break
         case 'unauthorized':
           return 'unauthorized'

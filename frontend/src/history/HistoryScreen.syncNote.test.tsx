@@ -143,12 +143,19 @@ describe('a sync finishing while History is open', () => {
 
   it('stops listening once History is closed', async () => {
     await store.save(makeRecord({ startedAt: '2026-10-21T10:00:00Z' }), 'me')
+    const unsubscribe = vi.fn()
+    const original = engine.onChange.bind(engine)
+    vi.spyOn(engine, 'onChange').mockImplementation((listener) => {
+      const stop = original(listener)
+      return () => {
+        unsubscribe()
+        stop()
+      }
+    })
     const view = renderHistory()
     await screen.findByText(/not saved to your account yet/)
+    expect(unsubscribe).not.toHaveBeenCalled()
     view.unmount()
-    const getsBefore = history.gets
-    await engine.syncNow()
-    await new Promise((resolve) => setTimeout(resolve, 30))
-    expect(history.gets).toBe(getsBefore)
+    expect(unsubscribe).toHaveBeenCalled()
   })
 })
