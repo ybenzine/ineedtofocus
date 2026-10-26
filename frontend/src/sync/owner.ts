@@ -67,6 +67,15 @@ export class OwnedActiveSessionStore implements ActiveSessionStore {
     this.#storage.removeItem(ACTIVE_OWNER_KEY)
   }
 
+  /**
+   * Who was signed in at the first save attempt of this session, as kept in memory even if the
+   * owner record could not be written (#245, #286). `undefined` if this store never saw the
+   * session. Unlike `ownerOf` it does not read localStorage, so it survives a failing store.
+   */
+  firstOwnerOf(sessionId: string): string | null | undefined {
+    return this.#first?.sessionId === sessionId ? this.#first.ownerId : undefined
+  }
+
   /** The owner recorded for this session: an id, `null` (nobody), or `undefined` if unknown. */
   ownerOf(sessionId: string): string | null | undefined {
     const value = readJson(this.#storage, ACTIVE_OWNER_KEY)

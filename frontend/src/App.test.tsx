@@ -227,7 +227,9 @@ describe('App', () => {
     await screen.findByRole('timer')
     store.clear()
     window.dispatchEvent(new StorageEvent('storage', { key: ACTIVE_SESSION_KEY }))
-    expect(await screen.findByText(/ended in another tab/)).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent(/ended in another tab/),
+    )
     expect(screen.getByRole('heading', { name: 'I Need To Focus' })).toBeInTheDocument()
   })
 

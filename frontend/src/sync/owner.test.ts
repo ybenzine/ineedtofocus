@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   OWNER_KEY,
   USER_KEY,
@@ -8,7 +8,7 @@ import {
   registerLocalDataHook,
   signedInUserId,
 } from '../auth/localData.ts'
-import { sessionDataHook } from '../services.ts'
+import { createAppServices, sessionDataHook } from '../services.ts'
 import { FakeSessionsServer, freshDbName, makeRecord } from '../test/fakeSessionsServer.ts'
 import {
   LocalActiveSessionStore,
@@ -265,5 +265,49 @@ describe('a session whose first write failed keeps its owner on the retry (#245)
     full = false
     active.save(state)
     expect(active.ownerOf('s1')).toBe(ALICE)
+  })
+})
+
+describe('a memory-only session that ends after a 401 (#286)', () => {
+  it('is saved under the user who started it and syncs when that user is back', async () => {
+    const server = new FakeSessionsServer()
+    vi.stubGlobal('fetch', server.fetch)
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.UTC(2026, 9, 25, 9, 0))
+    const who = { owner: ALICE as string | null }
+    const services = createAppServices(() => who.owner)
+    const device = new IndexedDbSessionStore()
+    stores.push(device)
+    try {
+      // The store is failing for the whole test: the owner record is never written.
+      const failing = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new Error('QuotaExceededError')
+      })
+      const started = await services.controller.start({
+        config: { mode: 'unlimited', reminderMinutes: null },
+        tag: 'work',
+        goal: 'Secret goal',
+      })
+      expect(started.unsaved).toBe(true)
+
+      // The sign-in expires (401): nobody is signed in when the session ends.
+      who.owner = null
+      vi.setSystemTime(Date.UTC(2026, 9, 25, 9, 10))
+      await services.controller.stop()
+      await vi.waitFor(async () => {
+        expect(await device.countUnsynced(ALICE)).toEqual({ sessions: 1, edits: 0 })
+      })
+      expect(await device.countUnsynced(null)).toEqual({ sessions: 0, edits: 0 })
+
+      // Alice is back: it syncs to her account.
+      failing.mockRestore()
+      who.owner = ALICE
+      await services.sync?.syncNow()
+      expect(server.sessions.size).toBe(1)
+    } finally {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+      await device.clearOwner(ALICE)
+    }
   })
 })

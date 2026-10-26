@@ -622,6 +622,13 @@ main.focus-screen {
   text-align: center;
 }
 
+/* The status paragraph is always mounted (a live region must exist before it speaks), so while it
+   is empty it would add a flex gap of its own; this takes it back. Not display: none, which
+   would drop the live region. */
+.timer-screen > [role='status']:empty {
+  margin-block-start: -1rem;
+}
+
 .timer-mode {
   margin: 0;
   text-transform: uppercase;

@@ -107,7 +107,10 @@ export function createAppServices(currentOwner: () => string | null = signedInUs
     saveRecord: deviceSaver({
       store: sessions,
       ownerOf: (record) => {
-        const owner = active.ownerOf(record.id)
+        // The recorded owner, else the one captured at the first save attempt (the record
+        // could not be written, #286), else whoever is signed in. Not `ownerOf()` alone:
+        // `save` and `isForeignSession` rely on it reporting a missing key.
+        const owner = active.ownerOf(record.id) ?? active.firstOwnerOf(record.id)
         return owner === undefined ? currentOwner() : owner
       },
       afterSave: () => {
