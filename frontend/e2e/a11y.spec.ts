@@ -1,18 +1,19 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 import {
-  expectNoSidewaysScroll,
   finishCountdown,
   installClock,
   newEmail,
+  openHistoryFromSummary,
   openScreen,
   signUp,
   startCountdown,
 } from './helpers'
 
-// Accessibility and responsive pass (#24): an automated axe audit of every screen, the 44 px
-// touch-target rule at 360 px, keyboard operation, and reduced motion. Tests marked `fixme`
-// reproduce open bugs (#147 to #152) and flip to normal tests when those are fixed.
+// Accessibility and responsive pass (#24): an automated axe audit of every screen and state in
+// the dark and the light theme, the 44 px touch-target rule at 360 px, no sideways scroll at 360,
+// 768 and 1280 px, keyboard operation (tab order, Enter/Space, visible focus, the inline
+// dialogs), and reduced motion.
 
 const TAP = 44
 
@@ -68,204 +69,264 @@ async function smallTargets(page: Page, ignore: string[] = []): Promise<string[]
   return found.filter((entry) => !ignore.some((name) => entry.includes(`"${name}"`)))
 }
 
-test.describe('axe audit of every screen', () => {
-  test('auth, setup, timer states, summary, History, Archive, Settings', async ({ page }) => {
-    await installClock(page)
-    // Sign-in and sign-up.
-    await page.goto('/')
-    await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
-    await expectNoSeriousViolations(page)
-    await page.getByRole('button', { name: 'Create an account' }).click()
-    await page.getByRole('button', { name: 'Create account' }).click() // empty: field errors
-    await expect(page.getByRole('alert').first()).toBeVisible()
-    await expectNoSeriousViolations(page)
-    await signUp(page, newEmail())
+/** Opens History's Discard dialog: an edit the server refused leaves a "Discard change" button. */
+async function openDiscardDialog(page: Page): Promise<void> {
+  await finishCountdown(page, { minutes: 1, tag: 'study', goal: 'Read chapter one' })
+  await openHistoryFromSummary(page)
+  await expect(page.locator('.history-row')).toHaveCount(1)
+  // The session must have reached the server, or the edit would ride along with its upload.
+  await expect(page.getByText('Not synced yet')).toHaveCount(0)
+  await page.route('**/api/sessions/*', (route) =>
+    route.request().method() === 'PATCH'
+      ? route.fulfill({ status: 422, json: { detail: 'Refused for the test' } })
+      : route.fallback(),
+  )
+  await page.getByRole('button', { name: /^Edit session/ }).click()
+  await page.getByLabel('Goal').fill('Changed goal')
+  await page.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText('Couldn’t sync')).toBeVisible()
+  await page.getByRole('button', { name: /^Discard change to session/ }).click()
+  await expect(page.getByRole('alertdialog')).toBeVisible()
+}
 
-    // Setup, with Pomodoro and each audio source open.
-    await expectNoSeriousViolations(page)
-    await page.getByRole('radio', { name: 'Pomodoro' }).check()
-    await expectNoSeriousViolations(page)
-    await page.getByRole('radio', { name: 'Unlimited' }).check()
-    await expectNoSeriousViolations(page)
-    await page.getByRole('radio', { name: 'Countdown' }).check()
-    for (const source of ['Rain', 'YouTube']) {
-      await page.getByRole('radio', { name: source }).check()
-      await expectNoSeriousViolations(page)
+const SCHEMES = ['dark', 'light'] as const
+
+for (const scheme of SCHEMES) {
+  test.describe(`axe audit of every screen, ${scheme} theme`, () => {
+    test.use({ colorScheme: scheme })
+
+    /** The theme under test is really the one showing, so a pass is not for the wrong palette. */
+    async function expectTheme(page: Page): Promise<void> {
+      await expect
+        .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+        .toBe(scheme)
     }
-    await page.getByRole('radio', { name: 'None' }).check()
 
-    // Timer running, paused, in a break (the dark screen), then the summary.
-    await page.getByRole('radio', { name: 'Pomodoro' }).check()
-    await page.getByLabel('Focus', { exact: true }).fill('5')
-    await page.getByLabel('Short break').fill('1')
-    await page.getByLabel('Focus blocks').fill('2')
-    await page.getByRole('button', { name: 'Start' }).click()
-    await expect(page.getByRole('timer', { name: 'Time' })).toBeVisible()
-    await expectNoSeriousViolations(page)
-    await page.getByRole('button', { name: 'Pause' }).click()
-    await expect(page.getByRole('button', { name: 'Resume' })).toBeVisible()
-    await expectNoSeriousViolations(page)
-    await page.getByRole('button', { name: 'Resume' }).click()
-    await page.clock.fastForward(5 * 60_000 + 2000)
-    await expect(page.getByRole('heading', { name: 'Break', exact: true })).toBeVisible()
-    await expectNoSeriousViolations(page)
-    await page.getByRole('button', { name: 'Stop' }).click()
-    await expect(page.getByRole('heading', { name: /Session/ })).toBeVisible()
-    await expectNoSeriousViolations(page)
-
-    // A completed countdown gives History something to show.
-    await page.getByRole('button', { name: 'New session' }).click()
-    await finishCountdown(page, { minutes: 1, tag: 'study', goal: 'Read chapter one' })
-    await expectNoSeriousViolations(page)
-    await page.getByRole('link', { name: 'View history' }).click()
-    await expect(page.locator('.history-row')).toHaveCount(2)
-    const views = page.getByRole('group', { name: 'View' })
-    for (const name of ['Day', 'Week', 'Month', 'All time']) {
-      await views.getByRole('button', { name }).click()
-      await expect(views.getByRole('button', { name })).toHaveAttribute('aria-pressed', 'true')
+    test('auth, setup, timer states, summary, History, Archive, Settings', async ({ page }) => {
+      await installClock(page)
+      // Sign-in and sign-up.
+      await page.goto('/')
+      await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
+      await expectTheme(page)
       await expectNoSeriousViolations(page)
-    }
-    await views.getByRole('button', { name: 'Custom' }).click()
-    await expectNoSeriousViolations(page)
-    await views.getByRole('button', { name: 'Day' }).click()
-    await page
-      .getByRole('button', { name: /^Edit session/ })
-      .first()
-      .click()
-    await expectNoSeriousViolations(page)
-    await page.getByRole('button', { name: 'Cancel' }).click()
-    await page
-      .getByRole('button', { name: /^Archive session/ })
-      .first()
-      .click()
-    await expect(page.getByText('Session archived.')).toBeVisible()
-    await expectNoSeriousViolations(page)
+      await page.getByRole('button', { name: 'Create an account' }).click()
+      await page.getByRole('button', { name: 'Create account' }).click() // empty: field errors
+      await expect(page.getByRole('alert').first()).toBeVisible()
+      await expectNoSeriousViolations(page)
+      await signUp(page, newEmail())
 
-    // Archive and its delete-all dialog.
-    await openScreen(page, 'Archive')
-    await expect(page.locator('.history-row')).toHaveCount(1)
-    await expectNoSeriousViolations(page)
-    await page.getByRole('button', { name: 'Delete all archived sessions' }).click()
-    await expect(page.getByRole('alertdialog')).toBeVisible()
-    await expectNoSeriousViolations(page)
-    await page.getByRole('button', { name: 'Cancel' }).click()
+      // Setup, with each mode and each audio source open.
+      await expectTheme(page)
+      await expectNoSeriousViolations(page)
+      await page.getByRole('radio', { name: 'Pomodoro' }).check()
+      await expectNoSeriousViolations(page)
+      await page.getByRole('radio', { name: 'Unlimited' }).check()
+      await expectNoSeriousViolations(page)
+      await page.getByRole('radio', { name: 'Countdown' }).check()
+      for (const source of ['Rain', 'YouTube']) {
+        await page.getByRole('radio', { name: source }).check()
+        await expectNoSeriousViolations(page)
+      }
+      await page.getByRole('radio', { name: 'None' }).check()
 
-    await openScreen(page, 'Settings')
-    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
-    await expectNoSeriousViolations(page)
+      // Timer running, paused, in a break (always dark), then the summary.
+      await page.getByRole('radio', { name: 'Pomodoro' }).check()
+      await page.getByLabel('Focus', { exact: true }).fill('5')
+      await page.getByLabel('Short break').fill('1')
+      await page.getByLabel('Focus blocks').fill('2')
+      await page.getByRole('button', { name: 'Start' }).click()
+      await expect(page.getByRole('timer', { name: 'Time' })).toBeVisible()
+      await expectNoSeriousViolations(page)
+      await page.getByRole('button', { name: 'Pause' }).click()
+      await expect(page.getByRole('button', { name: 'Resume' })).toBeVisible()
+      await expectNoSeriousViolations(page)
+      await page.getByRole('button', { name: 'Resume' }).click()
+      await page.clock.fastForward(5 * 60_000 + 2000)
+      await expect(page.getByRole('heading', { name: 'Break', exact: true })).toBeVisible()
+      await expectNoSeriousViolations(page)
+      await page.getByRole('button', { name: 'Stop' }).click()
+      await expect(page.getByRole('heading', { name: /Session/ })).toBeVisible()
+      await expectNoSeriousViolations(page)
+
+      // A completed countdown gives History something to show.
+      await page.getByRole('button', { name: 'New session' }).click()
+      await finishCountdown(page, { minutes: 1, tag: 'study', goal: 'Read chapter one' })
+      await expectNoSeriousViolations(page)
+      await openHistoryFromSummary(page)
+      await expectTheme(page)
+      await expect(page.locator('.history-row')).toHaveCount(2)
+      const views = page.getByRole('group', { name: 'View' })
+      for (const name of ['Day', 'Week', 'Month', 'All time']) {
+        await views.getByRole('button', { name }).click()
+        await expect(views.getByRole('button', { name })).toHaveAttribute('aria-pressed', 'true')
+        await expectNoSeriousViolations(page)
+      }
+      await views.getByRole('button', { name: 'Custom' }).click()
+      await expectNoSeriousViolations(page)
+      await views.getByRole('button', { name: 'Day' }).click()
+      await page
+        .getByRole('button', { name: /^Edit session/ })
+        .first()
+        .click()
+      await expectNoSeriousViolations(page)
+      await page.getByRole('button', { name: 'Cancel' }).click()
+      await page
+        .getByRole('button', { name: /^Archive session/ })
+        .first()
+        .click()
+      await expect(page.getByText('Session archived.')).toBeVisible()
+      await expectNoSeriousViolations(page)
+
+      // Archive and its delete-all dialog.
+      await openScreen(page, 'Archive')
+      await expect(page.locator('.history-row')).toHaveCount(1)
+      await expectNoSeriousViolations(page)
+      await page.getByRole('button', { name: 'Delete all archived sessions' }).click()
+      await expect(page.getByRole('alertdialog')).toBeVisible()
+      await expectNoSeriousViolations(page)
+      await page.getByRole('button', { name: 'Cancel' }).click()
+
+      await openScreen(page, 'Settings')
+      await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+      await expectNoSeriousViolations(page)
+    })
+
+    test('the Discard dialog and the sign-out confirmation', async ({ page }) => {
+      await installClock(page)
+      await signUp(page, newEmail())
+      await openDiscardDialog(page)
+      await expectNoSeriousViolations(page)
+      await page.keyboard.press('Escape')
+      await expect(page.getByRole('alertdialog')).toHaveCount(0)
+
+      // A session made offline is unsynced, so signing out asks first.
+      await page.context().setOffline(true)
+      await openScreen(page, 'New session')
+      await finishCountdown(page, { minutes: 1 })
+      await expectNoSeriousViolations(page)
+      await page.getByRole('button', { name: 'New session' }).click()
+      await expectNoSeriousViolations(page)
+      await openScreen(page, 'Settings')
+      await expectNoSeriousViolations(page)
+      await openScreen(page, 'History')
+      await expect(page.locator('.history-row').first()).toBeVisible()
+      await expectNoSeriousViolations(page)
+      await page.getByRole('button', { name: 'Sign out' }).click()
+      await expect(page.getByRole('alertdialog', { name: 'Confirm sign out' })).toBeVisible()
+      await expectNoSeriousViolations(page)
+    })
+
+    test('a setup validation error has readable contrast', async ({ page }) => {
+      await installClock(page)
+      await signUp(page, newEmail())
+      await page.getByLabel('Duration').fill('0')
+      await expect(page.getByText('Must be a whole number of minutes')).toBeVisible()
+      await expectTheme(page)
+      // The page paints its own background. Without one, axe assumes white behind the text in
+      // the dark theme and reports a false 2.28:1 (#24), so this guards the cause too.
+      const painted = await page.evaluate(() => ({
+        html: getComputedStyle(document.documentElement).backgroundColor,
+        body: getComputedStyle(document.body).backgroundColor,
+      }))
+      expect(painted.html).not.toBe('rgba(0, 0, 0, 0)')
+      expect(painted.body).not.toBe('rgba(0, 0, 0, 0)')
+      await expectNoSeriousViolations(page)
+    })
   })
+}
 
-  test('offline: the setup screen, Settings, History and the sign-out confirmation', async ({
-    page,
-    context,
-  }) => {
-    await installClock(page)
-    await signUp(page, newEmail())
-    await context.setOffline(true)
-    // A session made offline is unsynced, so signing out asks first.
-    await finishCountdown(page, { minutes: 1 })
-    await expectNoSeriousViolations(page)
-    await page.getByRole('button', { name: 'New session' }).click()
-    await expectNoSeriousViolations(page)
-    await openScreen(page, 'Settings')
-    await expectNoSeriousViolations(page)
-    await openScreen(page, 'History')
-    await expect(page.locator('.history-row')).toHaveCount(1)
-    await expectNoSeriousViolations(page)
-    await page.getByRole('button', { name: 'Sign out' }).click()
-    await expect(page.getByRole('alertdialog', { name: 'Confirm sign out' })).toBeVisible()
-    await expectNoSeriousViolations(page)
-  })
-
-  test('a setup validation error has readable contrast', async ({ page }) => {
-    test.fixme(true, 'Bug #149: .field-error is #ff8a80 on white, 2.28:1')
-    await installClock(page)
-    await signUp(page, newEmail())
-    await page.getByLabel('Duration').fill('0')
-    await expect(page.getByText('Must be a whole number of minutes')).toBeVisible()
-    await expectNoSeriousViolations(page)
-  })
-})
+/** Signs up and visits the main screens at the current viewport, calling `check` on each. */
+async function visitEveryScreen(
+  page: Page,
+  check: (screen: string) => Promise<void>,
+): Promise<void> {
+  await installClock(page)
+  await page.goto('/')
+  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
+  await check('sign in')
+  await page.getByRole('button', { name: 'Create an account' }).click()
+  await page.getByRole('button', { name: 'Create account' }).click() // empty: field errors
+  await expect(page.getByRole('alert').first()).toBeVisible()
+  await check('sign up with errors')
+  await signUp(page, newEmail())
+  await check('setup')
+  await page.getByRole('radio', { name: 'Pomodoro' }).check()
+  await check('setup, Pomodoro')
+  await page.getByRole('radio', { name: 'YouTube' }).check()
+  await check('setup, YouTube')
+  await page.getByRole('radio', { name: 'None' }).check()
+  await page.getByRole('radio', { name: 'Countdown' }).check()
+  await startCountdown(page, { minutes: 1, tag: 'work', goal: 'W'.repeat(120) })
+  await check('timer')
+  await page.getByRole('button', { name: 'Pause' }).click()
+  await check('timer, paused')
+  await page.getByRole('button', { name: 'Resume' }).click()
+  await page.clock.fastForward(62_000)
+  await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
+  await check('summary')
+  await openHistoryFromSummary(page)
+  await expect(page.locator('.history-row')).toHaveCount(1)
+  const views = page.getByRole('group', { name: 'View' })
+  for (const name of ['Day', 'Week', 'Month', 'All time', 'Custom']) {
+    await views.getByRole('button', { name }).click()
+    await check(`History, ${name}`)
+  }
+  await views.getByRole('button', { name: 'Day' }).click()
+  await page
+    .getByRole('button', { name: /^Edit session/ })
+    .first()
+    .click()
+  await check('History, edit form')
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await page
+    .getByRole('button', { name: /^Archive session/ })
+    .first()
+    .click()
+  await expect(page.getByText('Session archived.')).toBeVisible()
+  await check('History, archived notice')
+  await openScreen(page, 'Archive')
+  await expect(page.locator('.history-row')).toHaveCount(1)
+  await check('Archive')
+  await page.getByRole('button', { name: 'Delete all archived sessions' }).click()
+  await expect(page.getByRole('alertdialog')).toBeVisible()
+  await check('Archive, delete-all dialog')
+  await page.getByRole('button', { name: 'Cancel' }).click()
+  await openScreen(page, 'Settings')
+  await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+  await check('Settings')
+}
 
 test.describe('touch targets at 360 px', () => {
   test.use({ viewport: { width: 360, height: 740 } })
 
-  test('setup, timer, summary, History, Archive and its dialog are all at least 44 x 44', async ({
-    page,
-  }) => {
-    await installClock(page)
-    await signUp(page, newEmail())
-    // "Sign out" is covered by the next test (#147).
-    const ignore = ['Sign out']
-    expect(await smallTargets(page, ignore)).toEqual([])
-    await page.getByRole('radio', { name: 'Pomodoro' }).check()
-    expect(await smallTargets(page, ignore)).toEqual([])
-    await page.getByRole('radio', { name: 'Countdown' }).check()
-    await page.getByRole('radio', { name: 'YouTube' }).check()
-    expect(await smallTargets(page, ignore)).toEqual([])
-    await page.getByRole('radio', { name: 'None' }).check()
-
-    await startCountdown(page, { minutes: 1, tag: 'work' })
-    expect(await smallTargets(page, ignore)).toEqual([])
-    await page.clock.fastForward(62_000)
-    await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
-    expect(await smallTargets(page, ignore)).toEqual([])
-
-    await page.getByRole('link', { name: 'View history' }).click()
-    await expect(page.locator('.history-row')).toHaveCount(1)
-    const views = page.getByRole('group', { name: 'View' })
-    for (const name of ['Day', 'Week', 'Month', 'All time', 'Custom']) {
-      await views.getByRole('button', { name }).click()
-      expect(await smallTargets(page, ignore), `History ${name}`).toEqual([])
-    }
-    await views.getByRole('button', { name: 'Day' }).click()
-    await page
-      .getByRole('button', { name: /^Edit session/ })
-      .first()
-      .click()
-    expect(await smallTargets(page, ignore), 'History edit form').toEqual([])
-    await page.getByRole('button', { name: 'Cancel' }).click()
-    await page
-      .getByRole('button', { name: /^Archive session/ })
-      .first()
-      .click()
-    await expect(page.getByText('Session archived.')).toBeVisible()
-    expect(await smallTargets(page, ignore), 'archive undo').toEqual([])
-
-    await openScreen(page, 'Archive')
-    await expect(page.locator('.history-row')).toHaveCount(1)
-    expect(await smallTargets(page, ignore)).toEqual([])
-    await page.getByRole('button', { name: 'Delete all archived sessions' }).click()
-    await expect(page.getByRole('alertdialog')).toBeVisible()
-    expect(await smallTargets(page, ignore), 'delete-all dialog').toEqual([])
+  test('every screen: all controls are at least 44 x 44', async ({ page }) => {
+    await visitEveryScreen(page, async (screen) => {
+      expect(await smallTargets(page), screen).toEqual([])
+    })
   })
 
-  test('Sign out, the sign-out confirmation and the auth screens', async ({ page, context }) => {
-    test.fixme(true, 'Bug #147: these are about 21 px tall')
+  test('the Discard dialog and the sign-out confirmation', async ({ page, context }) => {
     await installClock(page)
-    await page.goto('/')
-    expect(await smallTargets(page), 'sign in').toEqual([])
-    await page.getByRole('button', { name: 'Create an account' }).click()
-    expect(await smallTargets(page), 'sign up').toEqual([])
     await signUp(page, newEmail())
-    expect(await smallTargets(page), 'account bar').toEqual([])
+    await openDiscardDialog(page)
+    expect(await smallTargets(page), 'Discard dialog').toEqual([])
+    await page.keyboard.press('Escape')
     await context.setOffline(true)
+    await openScreen(page, 'New session')
     await finishCountdown(page, { minutes: 1 })
     await page.getByRole('button', { name: 'New session' }).click()
     await page.getByRole('button', { name: 'Sign out' }).click()
-    await expect(page.getByRole('alertdialog')).toBeVisible()
+    await expect(page.getByRole('alertdialog', { name: 'Confirm sign out' })).toBeVisible()
     expect(await smallTargets(page), 'sign-out confirmation').toEqual([])
   })
 
-  test('Settings: every control is 44 px, the alert slider is full width with Preview below', async ({
+  test('Settings: the alert slider is full width with Preview chime and bell on a row below', async ({
     page,
   }) => {
-    test.fixme(true, 'Bug #148: Preview buttons about 21 px, checkbox 13 px, alert slider 224 px')
     await installClock(page)
     await signUp(page, newEmail())
     await openScreen(page, 'Settings')
     await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
-    expect(await smallTargets(page, ['Sign out'])).toEqual([])
 
     const alert = await page.getByLabel('Alert volume').boundingBox()
     const background = await page.getByLabel('Background audio volume').boundingBox()
@@ -278,23 +339,29 @@ test.describe('touch targets at 360 px', () => {
   })
 })
 
-test.describe('at 768 px', () => {
-  test.use({ viewport: { width: 768, height: 1024 } })
+for (const width of [360, 768, 1280]) {
+  test.describe(`at ${width} px`, () => {
+    test.use({ viewport: { width, height: width === 360 ? 740 : 900 } })
 
-  test('no screen scrolls sideways', async ({ page }) => {
-    await installClock(page)
-    await signUp(page, newEmail())
-    await expectNoSidewaysScroll(page)
-    await finishCountdown(page, { minutes: 1, tag: 'work', goal: 'W'.repeat(120) })
-    await expectNoSidewaysScroll(page)
-    await page.getByRole('button', { name: 'New session' }).click()
-    for (const name of ['History', 'Archive', 'Settings'] as const) {
-      await openScreen(page, name)
-      await expect(page.getByRole('heading', { name })).toBeVisible()
-      await expectNoSidewaysScroll(page)
-    }
+    test('no screen scrolls sideways', async ({ page }) => {
+      await visitEveryScreen(page, async (screen) => {
+        const { scrollWidth, innerWidth } = await page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          innerWidth: window.innerWidth,
+        }))
+        expect(scrollWidth, screen).toBeLessThanOrEqual(innerWidth)
+      })
+    })
   })
-})
+}
+
+/** Which control has focus: its label, text or tag name. */
+function focused(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const el = document.activeElement as HTMLInputElement | null
+    return (el?.labels?.[0]?.textContent ?? el?.textContent ?? el?.tagName ?? '').trim()
+  })
+}
 
 test.describe('keyboard and screen readers', () => {
   test('setup is reachable in order and Enter starts a session', async ({ page }) => {
@@ -304,12 +371,7 @@ test.describe('keyboard and screen readers', () => {
     // Tab until Start (at most 40 stops), so the test does not depend on how many controls there are.
     for (let i = 0; i < 40 && order.at(-1) !== 'Start'; i++) {
       await page.keyboard.press('Tab')
-      order.push(
-        await page.evaluate(() => {
-          const el = document.activeElement as HTMLInputElement | null
-          return (el?.labels?.[0]?.textContent ?? el?.textContent ?? el?.tagName ?? '').trim()
-        }),
-      )
+      order.push(await focused(page))
     }
     const at = (name: string | RegExp) =>
       order.findIndex((entry) => (typeof name === 'string' ? entry === name : name.test(entry)))
@@ -329,6 +391,40 @@ test.describe('keyboard and screen readers', () => {
     await page.getByRole('button', { name: 'Pause' }).focus()
     await page.keyboard.press('Space')
     await expect(page.getByRole('button', { name: 'Resume' })).toBeVisible()
+    await page.keyboard.press('Enter')
+    await expect(page.getByRole('button', { name: 'Pause' })).toBeVisible()
+  })
+
+  test('the screen nav, mode radios and view buttons work with Enter, Space and the arrow keys', async ({
+    page,
+  }) => {
+    await installClock(page)
+    await signUp(page, newEmail())
+    const nav = page.getByRole('navigation', { name: 'Screens' })
+    await nav.getByRole('button', { name: 'History' }).focus()
+    await page.keyboard.press('Enter')
+    await expect(page.getByRole('heading', { name: 'History' })).toBeVisible()
+    await nav.getByRole('button', { name: 'Settings' }).focus()
+    await page.keyboard.press('Space')
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+    await nav.getByRole('button', { name: 'New session' }).focus()
+    await page.keyboard.press('Enter')
+    await expect(page.getByRole('button', { name: 'Start' })).toBeVisible()
+
+    // A radio group is one tab stop, moved with the arrow keys; Space selects.
+    await page.getByRole('radio', { name: 'Countdown' }).check()
+    await page.getByRole('radio', { name: 'Countdown' }).focus()
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByRole('radio', { name: 'Pomodoro' })).toBeChecked()
+
+    await openScreen(page, 'History')
+    const views = page.getByRole('group', { name: 'View' })
+    await views.getByRole('button', { name: 'Week' }).focus()
+    await page.keyboard.press('Space')
+    await expect(views.getByRole('button', { name: 'Week' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
   })
 
   test('every control has an accessible name and errors are announced', async ({ page }) => {
@@ -365,46 +461,52 @@ test.describe('keyboard and screen readers', () => {
     }
   })
 
-  test('focus is visible on every tab stop', async ({ page }) => {
-    await installClock(page)
-    await signUp(page, newEmail())
-    for (let i = 0; i < 6; i++) {
-      await page.keyboard.press('Tab')
-      const ring = await page.evaluate(() => {
-        const style = getComputedStyle(document.activeElement as Element)
-        return { style: style.outlineStyle, width: parseFloat(style.outlineWidth) }
-      })
-      expect(ring.style).not.toBe('none')
-      expect(ring.width).toBeGreaterThanOrEqual(2)
-    }
-  })
+  for (const scheme of SCHEMES) {
+    test.describe(`focus ring, ${scheme} theme`, () => {
+      test.use({ colorScheme: scheme })
 
-  test('the focus ring has 3:1 contrast on the light screens', async ({ page }) => {
-    test.fixme(true, 'Bug #150: #8ab4f8 on white is about 2:1')
-    await installClock(page)
-    await signUp(page, newEmail())
-    await page.keyboard.press('Tab')
-    const ratio = await page.evaluate(() => {
-      const channel = (c: number) => {
-        const s = c / 255
-        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
-      }
-      const luminance = (rgb: string) => {
-        const [r, g, b] = (rgb.match(/\d+/g) ?? ['0', '0', '0']).map(Number)
-        return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
-      }
-      const ring = luminance(getComputedStyle(document.activeElement as Element).outlineColor)
-      const bg = getComputedStyle(document.body).backgroundColor
-      // A transparent body shows the browser's white canvas.
-      const page = luminance(bg === 'rgba(0, 0, 0, 0)' ? 'rgb(255, 255, 255)' : bg)
-      const [hi, lo] = ring > page ? [ring, page] : [page, ring]
-      return (hi + 0.05) / (lo + 0.05)
+      test('is visible on every tab stop and has 3:1 contrast with the page', async ({ page }) => {
+        await installClock(page)
+        await signUp(page, newEmail())
+        for (const screen of ['New session', 'History', 'Settings'] as const) {
+          await openScreen(page, screen)
+          await expect(
+            page.getByRole('heading', { name: screen === 'New session' ? /./ : screen }).first(),
+          ).toBeVisible()
+          // Start from the page, not from the nav button the click left focus on.
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+          for (let i = 0; i < 8; i++) {
+            await page.keyboard.press('Tab')
+            const ring = await page.evaluate(() => {
+              const channel = (c: number) => {
+                const s = c / 255
+                return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+              }
+              const luminance = (rgb: string) => {
+                const [r, g, b] = (rgb.match(/[\d.]+/g) ?? ['0', '0', '0']).map(Number)
+                return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+              }
+              const el = document.activeElement as Element
+              const style = getComputedStyle(el)
+              const page = luminance(getComputedStyle(document.body).backgroundColor)
+              const ringLum = luminance(style.outlineColor)
+              const [hi, lo] = ringLum > page ? [ringLum, page] : [page, ringLum]
+              return {
+                style: style.outlineStyle,
+                width: parseFloat(style.outlineWidth),
+                ratio: (hi + 0.05) / (lo + 0.05),
+              }
+            })
+            expect(ring.style, `${screen} stop ${i}`).not.toBe('none')
+            expect(ring.width, `${screen} stop ${i}`).toBeGreaterThanOrEqual(2)
+            expect(ring.ratio, `${screen} stop ${i}`).toBeGreaterThanOrEqual(3)
+          }
+        }
+      })
     })
-    expect(ratio).toBeGreaterThanOrEqual(3)
-  })
+  }
 
   test('focus moves to the new screen after Start and when the summary opens', async ({ page }) => {
-    test.fixme(true, 'Bug #151: focus is left on <body>')
     await installClock(page)
     await signUp(page, newEmail())
     await page.getByLabel('Duration').fill('1')
@@ -417,42 +519,111 @@ test.describe('keyboard and screen readers', () => {
     expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe('BODY')
   })
 
-  test('Escape closes the sign-out confirmation', async ({ page, context }) => {
-    test.fixme(true, 'Bug #151: Escape does nothing')
+  // The three confirmations are inline alert dialogs, not modals: focus moves to Cancel when one
+  // opens, Escape or Cancel closes it and puts focus back on the button that opened it, and Tab
+  // is not trapped (the page behind stays reachable, as aria-modal is not set).
+  test('the Archive delete-all dialog takes focus, closes with Escape or Cancel and gives focus back', async ({
+    page,
+  }) => {
+    await installClock(page)
+    await signUp(page, newEmail())
+    await finishCountdown(page, { minutes: 1 })
+    await openHistoryFromSummary(page)
+    await page
+      .getByRole('button', { name: /^Archive session/ })
+      .first()
+      .click()
+    await expect(page.getByText('Session archived.')).toBeVisible()
+    await openScreen(page, 'Archive')
+    const opener = page.getByRole('button', { name: 'Delete all archived sessions' })
+    const dialog = page.getByRole('alertdialog')
+
+    await opener.focus()
+    await page.keyboard.press('Enter')
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(dialog.getByRole('button', { name: /^Delete 1 session/ })).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(dialog).toHaveCount(0)
+    await expect(opener).toBeFocused()
+
+    await page.keyboard.press('Space')
+    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused()
+    await page.keyboard.press('Space')
+    await expect(dialog).toHaveCount(0)
+    await expect(opener).toBeFocused()
+  })
+
+  test('the sign-out confirmation takes focus, closes with Escape or Cancel and gives focus back', async ({
+    page,
+    context,
+  }) => {
     await installClock(page)
     await signUp(page, newEmail())
     await context.setOffline(true)
     await finishCountdown(page, { minutes: 1 })
     await page.getByRole('button', { name: 'New session' }).click()
-    await page.getByRole('button', { name: 'Sign out' }).click()
-    await expect(page.getByRole('alertdialog')).toBeVisible()
+    const opener = page.getByRole('button', { name: 'Sign out' })
+    const dialog = page.getByRole('alertdialog', { name: 'Confirm sign out' })
+
+    await opener.focus()
+    await page.keyboard.press('Enter')
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused()
     await page.keyboard.press('Escape')
-    await expect(page.getByRole('alertdialog')).toHaveCount(0)
+    await expect(dialog).toHaveCount(0)
+    await expect(opener).toBeFocused()
+
+    await page.keyboard.press('Enter')
+    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused()
+    await page.keyboard.press('Space')
+    await expect(dialog).toHaveCount(0)
+    await expect(opener).toBeFocused()
+  })
+
+  test('the Discard dialog takes focus, closes with Escape or Cancel and gives focus back', async ({
+    page,
+  }) => {
+    await installClock(page)
+    await signUp(page, newEmail())
+    await openDiscardDialog(page)
+    const dialog = page.getByRole('alertdialog')
+    const opener = page.getByRole('button', { name: /^Discard change to session/ })
+    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused()
+    await page.keyboard.press('Escape')
+    await expect(dialog).toHaveCount(0)
+    await expect(opener).toBeFocused()
+
+    await page.keyboard.press('Enter')
+    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused()
+    await page.keyboard.press('Space')
+    await expect(dialog).toHaveCount(0)
+    await expect(opener).toBeFocused()
   })
 })
 
 test.describe('reduced motion', () => {
   test.use({ reducedMotion: 'reduce' })
 
-  test('transitions and animations are switched off', async ({ page }) => {
-    await installClock(page)
-    await signUp(page, newEmail())
-    await startCountdown(page, { minutes: 1 })
-    const moving = await page.evaluate(() => {
-      // Every value of a comma-separated list counts: "0s, 0.3s" still animates.
-      const longest = (list: string) =>
-        Math.max(...list.split(',').map((value) => parseFloat(value) || 0))
-      return Array.from(document.querySelectorAll('*'))
-        .filter((el) => {
-          const s = getComputedStyle(el)
-          return (
-            (s.animationName !== 'none' && longest(s.animationDuration) > 0.001) ||
-            longest(s.transitionDuration) > 0.001
-          )
-        })
-        .map((el) => el.tagName.toLowerCase() + '.' + el.className)
+  test('transitions and animations are switched off on every screen', async ({ page }) => {
+    await visitEveryScreen(page, async (screen) => {
+      const moving = await page.evaluate(() => {
+        // Every value of a comma-separated list counts: "0s, 0.3s" still animates.
+        const longest = (list: string) =>
+          Math.max(...list.split(',').map((value) => parseFloat(value) || 0))
+        return Array.from(document.querySelectorAll('*'))
+          .filter((el) => {
+            const s = getComputedStyle(el)
+            return (
+              (s.animationName !== 'none' && longest(s.animationDuration) > 0.001) ||
+              longest(s.transitionDuration) > 0.001
+            )
+          })
+          .map((el) => el.tagName.toLowerCase() + '.' + el.className)
+      })
+      expect(moving, screen).toEqual([])
     })
-    expect(moving).toEqual([])
   })
 
   test('the time is readable at a glance', async ({ page }) => {
