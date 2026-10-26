@@ -320,6 +320,48 @@ describe('a late Undo reply (#253)', () => {
   })
 })
 
+describe('a late device-only Undo (#264)', () => {
+  it('does not clear the message of a newer device-only archive', async () => {
+    await rejectedSession('First refused')
+    await store.save(
+      makeRecord({ startedAt: '2026-10-21T08:00:00Z', goal: 'Second refused' }),
+      'me',
+    )
+    const second = (await store.list('me')).find((d) => d.record.goal === 'Second refused')
+    if (!second) throw new Error('setup failed')
+    await store.markRejected(second.record.id, null)
+
+    const original = store.restoreOnDevice.bind(store)
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    vi.spyOn(store, 'restoreOnDevice').mockImplementation(async (owner, id) => {
+      await gate
+      return original(owner, id)
+    })
+    renderHistory()
+    await screen.findByText('First refused')
+
+    fireEvent.click(screen.getAllByRole('button', { name: /on this device only$/ })[0])
+    expect(await screen.findByText('Session archived on this device only.')).toBeInTheDocument()
+    // Undo is under way (held back) when another session is archived on this device only.
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    fireEvent.click(await screen.findByRole('button', { name: /on this device only$/ }))
+    await waitFor(async () =>
+      expect((await store.list('me')).filter((d) => d.archivedAt !== null)).toHaveLength(2),
+    )
+
+    release()
+    await waitFor(async () =>
+      expect((await store.list('me')).filter((d) => d.archivedAt !== null)).toHaveLength(1),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.getByText('Session archived on this device only.')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument()
+  })
+})
+
 describe('the Archive screen with a device-only session', () => {
   function renderArchive() {
     return render(
@@ -396,6 +438,83 @@ describe('the Archive screen with a device-only session', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn’t delete/)
     expect(screen.getByText('Wrong clock')).toBeInTheDocument()
     expect((await store.get(record.id))?.archivedAt).not.toBeNull()
+    // Focus goes back to Delete all (it was disabled while the request ran).
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Delete all archived sessions' })).toHaveFocus(),
+    )
+  })
+
+  it('a failed Delete all clears an earlier notice instead of showing it next to the error', async () => {
+    for (const goal of ['One', 'Two']) {
+      const record = makeRecord({ goal })
+      await new HttpSessionsApi({ fetch: server.fetch }).sync([record])
+      server.archive(record.id)
+    }
+    renderArchive()
+    await screen.findByText('One')
+    fireEvent.click(screen.getAllByRole('button', { name: /^Restore/ })[0])
+    expect(await screen.findByText('Session restored to History.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete all archived sessions' }))
+    server.mode = 'down'
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 1 session' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn’t delete/)
+    expect(screen.queryByText('Session restored to History.')).not.toBeInTheDocument()
+  })
+
+  it('Delete all says so when the server deleted 0 and nothing else was on the device', async () => {
+    // Listed, but deleted elsewhere before the confirmation: the server removes none.
+    vi.spyOn(HttpArchiveApi.prototype, 'list').mockResolvedValue({
+      kind: 'ok',
+      value: [
+        {
+          id: 'gone-1',
+          mode: 'countdown',
+          tag: 'work',
+          goal: 'Gone',
+          startedAt: '2026-10-21T09:00:00Z',
+          focusSeconds: 600,
+          status: 'completed',
+          archivedAt: '2026-10-22T09:00:00Z',
+        },
+      ],
+    })
+    vi.spyOn(HttpArchiveApi.prototype, 'deleteAll').mockResolvedValue({ kind: 'ok', value: 0 })
+    renderArchive()
+    await screen.findByText('Gone')
+    fireEvent.click(screen.getByRole('button', { name: 'Delete all archived sessions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete 1 session' }))
+    expect(await screen.findByText('Deleted 0 archived sessions.')).toBeInTheDocument()
+    expect(screen.getByText('No archived sessions.')).toBeInTheDocument()
+  })
+
+  it('on equal archive times the server row comes before the device-only row', async () => {
+    store.close()
+    const at = Date.UTC(2026, 9, 23, 12)
+    store = new IndexedDbSessionStore({ name: freshDbName(), now: () => at })
+    const device = await rejectedSession('Device tie')
+    await store.archiveOnDevice('me', device.id)
+    vi.spyOn(HttpArchiveApi.prototype, 'list').mockResolvedValue({
+      kind: 'ok',
+      value: [
+        {
+          id: 'server-tie',
+          mode: 'countdown',
+          tag: 'work',
+          goal: 'Server tie',
+          startedAt: '2026-10-21T09:00:00Z',
+          focusSeconds: 600,
+          status: 'completed',
+          archivedAt: new Date(at).toISOString(),
+        },
+      ],
+    })
+    renderArchive()
+    await screen.findByText('Server tie')
+    await screen.findByText('Device tie')
+    const goals = screen
+      .getAllByRole('listitem')
+      .map((item) => /Device tie|Server tie/.exec(item.textContent ?? '')?.[0])
+    expect(goals).toEqual(['Server tie', 'Device tie'])
   })
 
   it('Delete all says so when the device-side delete fails, and keeps those rows listed', async () => {
