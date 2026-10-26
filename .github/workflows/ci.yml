@@ -7,7 +7,7 @@
 # Each job goes through the same `make` targets as local work (Makefile). Test jobs write
 # JUnit XML to reports/ and upload it as a workflow artifact, even when tests fail.
 #
-# Four more jobs, not required checks:
+# Five more jobs, not required checks:
 #   image       (#27) builds the app image, validates the production configs and
 #               smoke-tests the production stack (Caddy + prod + dev) on it. Every PR and
 #               push. No credentials.
@@ -34,6 +34,9 @@
 #               deployed this commit and its smoke tests passed. deploy-dev itself runs
 #               with `deployment: false`, so a skipped deploy never shows as a successful
 #               one: deploy-prod's plan reads dev's deployments as "what dev ran".
+#   dev-catch-up  (#275) warns when main's newest commit's Deploy to dev was cancelled
+#               (an older commit's deploy replaced it while it was pending), so dev lags
+#               main until someone re-runs that job or merges again. Read-only API calls.
 
 name: CI
 
@@ -496,20 +499,36 @@ jobs:
       - name: Check this commit isn't older than the one dev runs
         id: order
         if: steps.config.outputs.configured == 'true'
+        # A failure leaves its reason in `reason` for the Summary (#275).
         run: |
-          die() { echo "::error title=$1::$2 Nothing was deployed."; exit 1; }
-          # No record yet prints nothing on stdout (and a line on stderr): a first deploy.
-          ssh -F "$SSH_CONFIG" focus-dev status > "$RUNNER_TEMP/current" ||
+          die() {
+            echo "reason=$1: $2" >> "$GITHUB_OUTPUT"
+            echo "::error title=$1::$2 Nothing was deployed."
+            exit 1
+          }
+          err=$RUNNER_TEMP/current.err
+          if ! ssh -F "$SSH_CONFIG" focus-dev status > "$RUNNER_TEMP/current" 2> "$err"; then
+            cat "$err" >&2
             die "Dev's release unknown" "couldn't read dev's release record (ssh status failed)."
-          current=$(sed -n 's/^tag=//p' "$RUNNER_TEMP/current")
-          if [[ -z $current || $current == "$TAG" ]]; then
+          fi
+          cat "$err" >&2
+          # A first deploy only on focus-ci's exact answer for no record (#275): nothing on
+          # stdout and its line on stderr. A record that is empty or has no tag= fails red.
+          if [[ ! -s $RUNNER_TEMP/current ]] && grep -Fqx "focus-ci: no release recorded for dev yet" "$err"; then
             echo "deploy=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          current=$(sed -n 's/^tag=//p' "$RUNNER_TEMP/current")
+          [[ -n $current ]] ||
+            die "Dev's release unknown" "dev's release record has no tag."
           [[ $current =~ ^[0-9a-f]{40}$ ]] ||
             die "Dev's release unknown" "dev's release record has a malformed tag."
+          if [[ $current == "$TAG" ]]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           git cat-file -e "$current^{commit}" 2> /dev/null ||
-            die "Deploy order unknown" "dev runs $current, which isn't in main's history here, so there's no telling whether $TAG is newer."
+            die "Deploy order unknown" "dev runs $current, which isn't in main's history here, so there's no telling whether $TAG is newer. Roll dev back to a release on main, then re-run this job (_docs/deployment.md, Deploy order)."
           older=0
           git merge-base --is-ancestor "$TAG" "$current" || older=$?
           case $older in
@@ -552,6 +571,8 @@ jobs:
           PREVIOUS_TAG: ${{ steps.record.outputs.previous_tag }}
           PROVENANCE_OUTCOME: ${{ steps.provenance.outcome }}
           BUILT_BY: ${{ steps.provenance.outputs.built_by }}
+          ORDER_OUTCOME: ${{ steps.order.outcome }}
+          ORDER_REASON: ${{ steps.order.outputs.reason }}
           DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
         run: |
@@ -572,6 +593,10 @@ jobs:
               echo "Not deployed: the image has no valid build provenance attestation from publish on main for this commit (#128). See the verify step's log."
               echo ""
             fi
+            if [[ $ORDER_OUTCOME == failure ]]; then
+              echo "Not deployed: the order check failed, see its log (#257).${ORDER_REASON:+ $ORDER_REASON}"
+              echo ""
+            fi
             if [[ $DEPLOY_OUTCOME == failure ]]; then
               echo "The deploy failed and the record is unchanged. If the new release failed its checks after starting, the server started the previous release again (automatic revert, #30): see the deploy step's log."
               echo ""
@@ -587,7 +612,10 @@ jobs:
     # The `dev` GitHub deployment of this commit (#257), created only once deploy-dev
     # deployed it and passed its smoke tests: never for a skip (not set up, or an older
     # commit than dev runs) or a failure. deploy-prod's plan reads these as what dev ran
-    # ("dev's newest successful deployment", "a dev deployment of it succeeded").
+    # ("a dev deployment of it succeeded"; dev's release is the newest commit among them
+    # since dev's last rollback). No concurrency group: this job can wait for a runner
+    # while the next commit deploys, so deployments can be created out of order (#275).
+    # The plan orders them by commit, not by creation, so that doesn't matter.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy-dev.outputs.deployed == 'true'
     needs: deploy-dev
     runs-on: ubuntu-24.04
@@ -602,3 +630,66 @@ jobs:
         env:
           TAG: ${{ github.sha }}
         run: echo "dev runs $TAG, deployed and smoke-tested by Deploy to dev"
+
+  dev-catch-up:
+    name: Check dev keeps up with main
+    # #275: GitHub keeps one pending job per group, and the one that joins last wins. When
+    # an older commit's Deploy to dev replaces a newer one's pending job, the newer run
+    # shows as cancelled and dev lags main until the next merge. This job runs in the
+    # replacing run (whether it deployed or skipped for order) and flags it: a warning and
+    # a summary naming the job to re-run. It doesn't re-run it: that needs
+    # `actions: write`, and the re-run would join the deploy-dev group, where it could
+    # replace another pending deploy in turn. A re-run of that job deploys its own commit's
+    # digest after its own provenance check (it reuses its run's publish output).
+    # Only main's newest commit matters: if its deploy is still to come, dev reaches it.
+    # Informational: it never fails the run (a failed lookup is a warning).
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.deploy-dev.outputs.deployed != '' }}
+    needs: deploy-dev
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read # main's head and the compare API
+      actions: read # main's head's CI run and its Deploy to dev job
+    steps:
+      # No checkout, no secret: GitHub's API only.
+      - name: Flag a newer commit whose Deploy to dev was cancelled
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.sha }}
+        run: |
+          unchecked() {
+            echo "::warning title=Dev catch-up not checked::couldn't check whether main's newest commit still deploys to dev ($1). Look at the latest CI run on main."
+            exit 0
+          }
+          head=$(gh api "repos/$GH_REPO/commits/main" --jq .sha) || unchecked "reading main failed"
+          [[ $head =~ ^[0-9a-f]{40}$ ]] || unchecked "main's head isn't a commit sha"
+          if [[ $head == "$TAG" ]]; then
+            echo "This commit is main's newest: nothing newer to deploy."
+            exit 0
+          fi
+          order=$(gh api "repos/$GH_REPO/compare/$TAG...$head?per_page=1" --jq .status) ||
+            unchecked "comparing commits failed"
+          if [[ $order != ahead ]]; then
+            echo "main's head $head isn't newer than $TAG: nothing to flag."
+            exit 0
+          fi
+          run=$(gh api "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$head&event=push&branch=main&per_page=1" --jq '.workflow_runs[0].id // ""') ||
+            unchecked "listing CI runs failed"
+          if [[ -z $run ]]; then
+            echo "main's head $head has no CI run yet: its deploy is still to come."
+            exit 0
+          fi
+          [[ $run =~ ^[0-9]+$ ]] || unchecked "unexpected run id"
+          job=$(gh api "repos/$GH_REPO/actions/runs/$run/jobs?filter=latest&per_page=100" --jq '.jobs[] | select(.name == "Deploy to dev") | "\(.id) \(.status) \(.conclusion // "")"') ||
+            unchecked "listing the run's jobs failed"
+          read -r job_id state conclusion <<< "$job"
+          if [[ $state != completed || $conclusion != cancelled ]]; then
+            echo "main's head $head: its Deploy to dev is ${state:-not created yet}${conclusion:+ ($conclusion)}, nothing to flag."
+            exit 0
+          fi
+          [[ $job_id =~ ^[0-9]+$ ]] || unchecked "unexpected job id"
+          url=$GITHUB_SERVER_URL/$GH_REPO/actions/runs/$run/job/$job_id
+          msg="main's newest commit, $head, hasn't deployed to dev: its Deploy to dev was cancelled ($url), most likely because an older commit's deploy replaced it while it waited in the deploy-dev group. Dev stays behind main until the next merge. To catch up now, re-run that job (Re-run job on its page, or gh run rerun --job $job_id): it deploys its own commit's image, after its own provenance and order checks."
+          echo "::warning title=Dev is behind main::$msg"
+          printf '### Dev is behind main\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"

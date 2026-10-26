@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -252,6 +253,10 @@ THIRD_SHA = "d" * 40
 # Deployment 11 of SHA failed dev's smoke tests; 10, a retry of the same sha, passed.
 DEV_WITH_RETRY = f"12 {OTHER_SHA}\n11 {SHA}\n10 {SHA}\n"
 DIGEST = "sha256:" + "c" * 64
+# Not on main (a force-pushed commit, say): the compare API calls it diverged.
+OFF_MAIN_SHA = "e" * 40
+# Creation times of dev deployments (and rollback runs), oldest first.
+T1, T2, T3, T4 = (f"2026-10-25T04:0{n}:00Z" for n in range(1, 5))
 
 
 @pytest.fixture(scope="module")
@@ -415,8 +420,27 @@ case $path in
       echo "${!var:-}"
     fi
     ;;
-  repos/o/r/compare/*) [[ $COMPARE == missing ]] && exit 1; echo "$COMPARE" ;;
+  repos/o/r/compare/*)
+    range=${path#repos/o/r/compare/}
+    range=${range%%\?*}
+    base=${range%%...*} head=${range#*...}
+    if [[ $head == main ]]; then
+      [[ $COMPARE == missing ]] && exit 1
+      echo "$COMPARE"
+    else # two commits: their places in MAIN_ORDER (oldest first, 40-hex shas)
+      order=" $MAIN_ORDER "
+      b=${order%% "$base" *} h=${order%% "$head" *}
+      if [[ $b == "$order" || $h == "$order" ]]; then
+        echo diverged
+      elif ((${#h} > ${#b})); then
+        echo ahead
+      else
+        echo behind
+      fi
+    fi
+    ;;
   repos/o/r/actions/workflows/ci.yml/runs*) echo "$CI_RUNS" ;;
+  repos/o/r/actions/workflows/rollback.yml/runs*) echo "$DEV_ROLLED_BACK_AT" ;; # after its --jq
   repos/o/r/commits/*) echo "feat: a | change (#1)" ;;
   *) echo "unexpected gh call: $*" >&2; exit 1 ;;
 esac
@@ -462,7 +486,54 @@ def run_step(
         ({"INPUT_TAG": SHA.upper()}, 1, "", "title=Bad tag"),
         ({"INPUT_TAG": f"{SHA};id"}, 1, "", "title=Bad tag"),
         ({"DEV_DEPLOYMENTS": ""}, 1, "", "title=Dev's release unknown"),
-        ({"STATE_12": "failure"}, 1, "", "title=Dev's release unknown"),
+        ({"STATE_12": "failure", "STATE_11": "failure"}, 1, "", "title=Dev's release unknown"),
+        # 11 reached success (inactive: superseded), 12 didn't: dev's release is SHA as far
+        # as GitHub knows (the deploy job re-checks dev's record).
+        ({"STATE_12": "failure"}, 0, f"tag={SHA}\nfrom_dev=true\n", "the release dev runs now"),
+        ({"STATE_12": "in_progress"}, 0, f"tag={SHA}\nfrom_dev=true\n", "the release dev runs"),
+        # #275: SHA's dev-deployment waited for a runner while OTHER_SHA deployed, so SHA's
+        # deployment (13) was created last and OTHER_SHA's (12) went inactive. Dev runs
+        # OTHER_SHA, the newer commit: the plan takes it, not the newest deployment.
+        (
+            {
+                "DEV_DEPLOYMENTS": f"13 {SHA} {T3}\n12 {OTHER_SHA} {T2}\n",
+                "STATE_13": "success",
+                "STATE_12": "inactive",
+            },
+            0,
+            f"tag={OTHER_SHA}\nfrom_dev=true\n",
+            "the release dev runs now",
+        ),
+        # Dev ran THIRD_SHA, was rolled back at T3, then OTHER_SHA (older than THIRD_SHA, its
+        # CI still running at the rollback) deployed: dev runs OTHER_SHA, and THIRD_SHA, the
+        # release dev rolled back from, isn't offered.
+        (
+            {
+                "DEV_DEPLOYMENTS": f"14 {OTHER_SHA} {T4}\n13 {THIRD_SHA} {T2}\n11 {SHA} {T1}\n",
+                "STATE_14": "success",
+                "STATE_13": "inactive",
+                "EVER_14": "true",
+                "DEV_ROLLED_BACK_AT": T3,
+            },
+            0,
+            f"tag={OTHER_SHA}\nfrom_dev=true\n",
+            "the release dev runs now",
+        ),
+        # Rolled back after its last deployment: what dev runs isn't known here. Stop
+        # before the approval, not after it.
+        ({"DEV_ROLLED_BACK_AT": T3}, 1, "", f"dev was rolled back (run finished {T3})"),
+        ({"DEV_ROLLED_BACK_AT": "yesterday"}, 1, "", "title=Dev's release unknown"),
+        # A deployment of a commit off main (a force-push): no order, fail closed.
+        (
+            {
+                "DEV_DEPLOYMENTS": f"13 {OFF_MAIN_SHA} {T3}\n12 {OTHER_SHA} {T2}\n",
+                "STATE_13": "success",
+            },
+            1,
+            "",
+            "couldn't order dev's deployments",
+        ),
+        ({"DEV_DEPLOYMENTS": f"12 {OTHER_SHA} soon\n"}, 1, "", "title=Dev's release unknown"),
         ({"INPUT_TAG": SHA, "COMPARE": "diverged"}, 1, "", "title=Not on main"),
         ({"INPUT_TAG": SHA, "COMPARE": "behind"}, 1, "", "title=Not on main"),
         ({"INPUT_TAG": SHA, "COMPARE": "missing"}, 1, "", "title=Unknown commit"),
@@ -488,7 +559,9 @@ def test_deploy_prod_plan_picks_a_commit_on_main_that_passed_ci(
     says: str,
 ) -> None:
     """The plan step, run with bash and a fake gh: the input or dev's current release,
-    which must be a full sha on main with a green CI run on main."""
+    which must be a full sha on main with a green CI run on main. Dev's release is the
+    newest commit (not the newest deployment) among its deployments that reached success
+    since its last rollback (#275)."""
     step = step_named(prod_jobs["plan"], "Pick the commit")
     env = {
         "GH_REPO": "o/r",
@@ -496,7 +569,9 @@ def test_deploy_prod_plan_picks_a_commit_on_main_that_passed_ci(
         "GH_LOG": str(tmp_path / "gh.log"),
         "GITHUB_REF": "refs/heads/main",
         "INPUT_TAG": "",
-        "DEV_DEPLOYMENTS": f"12 {OTHER_SHA}\n11 {SHA}\n",
+        "DEV_DEPLOYMENTS": f"12 {OTHER_SHA} {T2}\n11 {SHA} {T1}\n",
+        "MAIN_ORDER": f"{SHA} {OTHER_SHA} {THIRD_SHA}",
+        "DEV_ROLLED_BACK_AT": "",
         "STATE_12": "success",
         "STATE_11": "inactive",
         "EVER_12": "true",
@@ -573,17 +648,24 @@ ORDER_GATE = "steps.order.outputs.deploy == 'true'"
 
 FAKE_SSH_DEV = r"""#!/usr/bin/env bash
 # Fake ssh for the order step: `status` prints dev's record (the tag in $DEV_STATE, if
-# any; nothing on stdout without one, like focus-ci), or exits $SSH_RC.
+# any; nothing on stdout without one, like focus-ci), or exits $SSH_RC. DEV_RECORD, when
+# set (even empty), is printed as the record instead; DEV_STDERR goes to stderr first (an
+# ssh warning, say).
 request=${*: -1}
 echo "$request" >> "$SSH_LOG"
 [[ ${SSH_RC:-0} == 0 ]] || exit "$SSH_RC"
 [[ $request == status ]] || exit 99
-if [[ -s $DEV_STATE ]]; then
+[[ -z ${DEV_STDERR:-} ]] || printf '%s\n' "$DEV_STDERR" >&2
+if [[ -n ${DEV_RECORD+set} ]]; then
+  printf '%b' "$DEV_RECORD"
+elif [[ -s $DEV_STATE ]]; then
   printf 'env=dev\ntag=%s\ndigest=sha256:%064d\naction=deploy\n' "$(cat "$DEV_STATE")" 0
 else
   echo "focus-ci: no release recorded for dev yet" >&2
 fi
 """
+NO_RECORD = "focus-ci: no release recorded for dev yet"
+UNKNOWN = "reason=Dev's release unknown: "
 
 
 def git(repo: Path, *args: str) -> str:
@@ -634,18 +716,43 @@ def run_order(
 
 
 @pytest.mark.parametrize(
-    ("tag", "dev_runs", "status", "outputs", "says"),
+    ("tag", "dev_runs", "fake", "status", "outputs", "says"),
     [
         # #257: an older commit's run reaches the group after a newer one deployed.
-        (0, 2, 0, "deploy=false\n", "::notice title=Dev deploy skipped::"),
-        (1, 2, 0, "deploy=false\n", "::notice title=Dev deploy skipped::"),
-        (2, 0, 0, "deploy=true\n", ""),  # newer: deploys
-        (3, 2, 0, "deploy=true\n", ""),
-        (4, 3, 0, "deploy=true\n", ""),  # a revert commit is newer: deploys
-        (2, 2, 0, "deploy=true\n", ""),  # the same commit again (a re-run): deploys
-        (2, None, 0, "deploy=true\n", ""),  # dev has no release yet: a first deploy
-        (2, "f" * 40, 1, "", "title=Deploy order unknown"),  # not in main's history
-        (2, "abc", 1, "", "title=Dev's release unknown"),  # malformed record
+        (0, 2, {}, 0, "deploy=false\n", "::notice title=Dev deploy skipped::"),
+        (1, 2, {}, 0, "deploy=false\n", "::notice title=Dev deploy skipped::"),
+        (2, 0, {}, 0, "deploy=true\n", ""),  # newer: deploys
+        (3, 2, {}, 0, "deploy=true\n", ""),
+        (4, 3, {}, 0, "deploy=true\n", ""),  # a revert commit is newer: deploys
+        (2, 2, {}, 0, "deploy=true\n", ""),  # the same commit again (a re-run): deploys
+        # Dev has no release yet, focus-ci's real answer (nothing on stdout, its line on
+        # stderr): a first deploy, also with an ssh warning before it.
+        (2, None, {}, 0, "deploy=true\n", ""),
+        (2, None, {"DEV_STDERR": "Warning: a line from ssh"}, 0, "deploy=true\n", ""),
+        (2, "f" * 40, {}, 1, "reason=Deploy order unknown: ", "title=Deploy order unknown"),
+        (2, "abc", {}, 1, UNKNOWN, "title=Dev's release unknown"),  # malformed record
+        # #275: only that exact answer is a first deploy. A record that exists but is empty
+        # or has no tag= line, or an empty answer without focus-ci's line, fails red.
+        (2, None, {"DEV_RECORD": ""}, 1, UNKNOWN, "has no tag."),
+        (2, None, {"DEV_RECORD": "env=dev\ndigest=sha256:0\n"}, 1, UNKNOWN, "has no tag."),
+        (2, None, {"DEV_RECORD": "\n"}, 1, UNKNOWN, "has no tag."),
+        (
+            2,
+            None,
+            {"DEV_RECORD": "", "DEV_STDERR": NO_RECORD.replace("dev", "prod")},
+            1,
+            UNKNOWN,
+            "has no tag.",
+        ),
+        (
+            2,
+            None,
+            {"DEV_RECORD": "env=dev\n", "DEV_STDERR": NO_RECORD},
+            1,
+            UNKNOWN,
+            "has no tag.",
+        ),
+        (2, None, {"DEV_RECORD": "tag=\n"}, 1, UNKNOWN, "has no tag."),
     ],
     ids=[
         "oldest-after-newest",
@@ -655,8 +762,15 @@ def run_order(
         "revert-commit",
         "same-commit",
         "first-deploy",
+        "first-deploy-with-ssh-warning",
         "unknown-commit",
         "malformed-record",
+        "empty-record",
+        "record-without-tag",
+        "blank-record",
+        "no-record-message-of-another-env",
+        "no-record-message-with-a-record",
+        "empty-tag",
     ],
 )
 def test_order_step_skips_an_older_commit_and_deploys_a_newer_one(
@@ -665,20 +779,27 @@ def test_order_step_skips_an_older_commit_and_deploys_a_newer_one(
     main_history: tuple[Path, list[str]],
     tag: int,
     dev_runs: int | str | None,
+    fake: dict[str, str],
     status: int,
     outputs: str,
     says: str,
 ) -> None:
     """The order step, run as GitHub runs it in a checkout of main with a fake ssh: an
     ancestor of the commit dev runs skips green with a notice and a summary; the same
-    commit, a newer one or a first deploy goes on; anything it can't place fails red.
-    It only ever sends `status`, so dev's record is unchanged by it."""
+    commit, a newer one or a first deploy goes on; anything it can't place fails red,
+    with its reason in the `reason` output for the Summary (#275). It only ever sends
+    `status`, so dev's record is unchanged by it."""
     repo, shas = main_history
     current = shas[dev_runs] if isinstance(dev_runs, int) else (dev_runs or "")
-    result, output, summary = run_order(jobs, tmp_path, repo, shas[tag], current)
+    result, output, summary = run_order(jobs, tmp_path, repo, shas[tag], current, **fake)
     assert result.returncode == status, result
-    assert output.read_text() == outputs
+    if status:
+        assert output.read_text().startswith(outputs)
+        assert output.read_text().count("\n") == 1
+    else:
+        assert output.read_text() == outputs
     assert says in result.stdout
+    assert fake.get("DEV_STDERR", "") in result.stderr  # the server's lines stay in the log
     assert (tmp_path / "ssh.log").read_text() == "status\n"
     assert (tmp_path / "dev_state").read_text() == current
     if outputs == "deploy=false\n":
@@ -694,7 +815,30 @@ def test_order_step_fails_when_dev_cant_be_read(
     result, output, _ = run_order(jobs, tmp_path, repo, shas[2], shas[1], SSH_RC="255")
     assert result.returncode == 1, result
     assert "title=Dev's release unknown" in result.stdout
-    assert output.read_text() == ""
+    reason = "couldn't read dev's release record (ssh status failed)."
+    assert output.read_text() == f"{UNKNOWN}{reason}\n"
+
+
+def test_first_deploy_answer_is_focus_ci_s_own(jobs: dict[str, Any]) -> None:
+    """The order step takes a first deploy only on the exact line focus-ci's `status`
+    prints for an environment with no record, with the dev profile's environment name."""
+    script = FOCUS_CI.read_text()
+    status = re.search(r"^do_status\(\) \{\n(.*?)^\}", script, re.S | re.M)
+    assert status
+    assert 'echo "focus-ci: no release recorded for $env_name yet" >&2' in status.group(1)
+    profile = re.search(r"^  dev\)\n(.*?);;", script, re.S | re.M)
+    assert profile and "env_name=dev" in profile.group(1)
+    assert f'grep -Fqx "{NO_RECORD}"' in step_named(jobs["deploy-dev"], ORDER_STEP)["run"]
+
+
+def test_unknown_order_points_at_the_recovery(jobs: dict[str, Any]) -> None:
+    """Dev runs a commit missing from main's history: the error says how to get out (#275),
+    and deployment.md's Deploy order section has the steps."""
+    run = step_named(jobs["deploy-dev"], ORDER_STEP)["run"]
+    assert "Roll dev back to a release on main, then re-run this job" in run
+    docs = (REPO / "_docs" / "deployment.md").read_text()
+    section = docs.split("### Deploy order (#257)", 1)[1].split("\n### ", 1)[0]
+    assert "rollback.yml" in section and "runbooks/rollback.md" in section
 
 
 def test_merges_finishing_out_of_order_leave_dev_on_the_newest(
@@ -770,6 +914,260 @@ def test_dev_deployment_is_created_only_after_a_real_deploy(jobs: dict[str, Any]
 def test_rollback_has_no_order_check() -> None:
     """A deliberate rollback goes back on purpose: rollback.yml never compares commits."""
     assert "merge-base" not in (WORKFLOWS / "rollback.yml").read_text()
+
+
+def run_dev_summary(
+    jobs: dict[str, Any], tmp_path: Path, **env: str
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    """deploy-dev's Summary step with the given step outcomes (skipped by default)."""
+    summary_step = step_named(jobs["deploy-dev"], "Summary")
+    full_env = {
+        "DEV_URL": "https://dev.ineedtofoc.us",
+        "TAG": SHA,
+        "DIGEST": DIGEST,
+        "RUNNER_TEMP": str(tmp_path),
+        "PROVENANCE_OUTCOME": "success",
+        "ORDER_OUTCOME": "success",
+        "ORDER_REASON": "",
+        "DEPLOY_OUTCOME": "skipped",
+        "SMOKE_OUTCOME": "skipped",
+        **env,
+    }
+    (tmp_path / "summary").unlink(missing_ok=True)
+    result, _, summary = run_step(summary_step, tmp_path, full_env, "#!/bin/sh\n", "unused")
+    return result, summary.read_text()
+
+
+def test_summary_says_why_after_a_failed_order_check(
+    jobs: dict[str, Any], tmp_path: Path, main_history: tuple[Path, list[str]]
+) -> None:
+    """#275: the order step fails on a record without a tag; the Summary, which still runs,
+    says nothing was deployed and why, from the step's `reason` output."""
+    summary_step = step_named(jobs["deploy-dev"], "Summary")
+    assert summary_step["env"]["ORDER_OUTCOME"] == "${{ steps.order.outcome }}"
+    assert summary_step["env"]["ORDER_REASON"] == "${{ steps.order.outputs.reason }}"
+    repo, shas = main_history
+    order_dir = tmp_path / "order"
+    order_dir.mkdir()
+    result, output, _ = run_order(jobs, order_dir, repo, shas[2], "", DEV_RECORD="env=dev\n")
+    assert result.returncode == 1, result
+    reason = output.read_text().removeprefix("reason=").strip()
+    result, text = run_dev_summary(jobs, tmp_path, ORDER_OUTCOME="failure", ORDER_REASON=reason)
+    assert result.returncode == 0, result
+    assert "### Deploy to dev: skipped, smoke tests: skipped" in text
+    assert (
+        "Not deployed: the order check failed, see its log (#257). "
+        "Dev's release unknown: dev's release record has no tag.\n"
+    ) in text
+    # A step that died without a reason still gets the line.
+    _, text = run_dev_summary(jobs, tmp_path, ORDER_OUTCOME="failure")
+    assert "Not deployed: the order check failed, see its log (#257).\n" in text
+    # A deploy that got through the check doesn't.
+    _, text = run_dev_summary(jobs, tmp_path, DEPLOY_OUTCOME="success", SMOKE_OUTCOME="success")
+    assert "order check failed" not in text and "Deploy to dev: deployed" in text
+
+
+# --- deploy-prod's plan and dev's rollbacks (#275) -------------------------------------
+
+
+def test_plan_finds_dev_rollbacks_by_the_rollback_run_name(prod_jobs: dict[str, Any]) -> None:
+    """The plan's cutoff finds dev's rollback runs by their run name. Run its jq on runs
+    like GitHub's: the latest dev one counts, prod ones and other workflows' names don't."""
+    rollback = load_workflow(ROLLBACK)
+    assert rollback["run-name"].startswith("Roll back ${{ inputs.env }} to ")
+    triggers: dict[str, Any] = rollback.get("on", rollback.get(True)) or {}
+    assert "dev" in triggers["workflow_dispatch"]["inputs"]["env"]["options"]
+    run = step_named(prod_jobs["plan"], "Pick the commit")["run"]
+    found = re.search(r"actions/workflows/rollback\.yml/runs\?[^\"]*\" \\\n\s+--jq '([^']+)'", run)
+    assert found, "the plan's rollback query moved"
+    assert "branch=main&event=workflow_dispatch" in found.group(0)
+    jq = shutil.which("jq")
+    assert jq, "this test needs jq"
+    runs = {
+        "workflow_runs": [
+            {"display_title": "Roll back prod to the last known-good release", "updated_at": T4},
+            {"display_title": f"Roll back dev to {SHA}", "updated_at": T2},
+            {"display_title": "Roll back dev to the last known-good release", "updated_at": T3},
+            {"display_title": "Roll back development", "updated_at": T4},
+        ]
+    }
+
+    def latest(data: dict[str, Any]) -> str:
+        out = subprocess.run(
+            [jq, "-r", found.group(1)], input=json.dumps(data), capture_output=True, text=True
+        )
+        assert out.returncode == 0, out
+        return out.stdout.strip()
+
+    assert latest(runs) == T3
+    assert latest({"workflow_runs": runs["workflow_runs"][:1]}) == ""
+    assert latest({"workflow_runs": []}) == ""
+
+
+# --- Dev catching up with main (#275) ---------------------------------------------------
+
+CATCH_UP_STEP = "Flag a newer commit whose Deploy to dev was cancelled"
+
+FAKE_GH_JSON = r"""#!/usr/bin/env bash
+# Fake `gh api <path> --jq <expr>`: the JSON file $GH_JSON/<path, with / ? & = as _>, run
+# through the real jq like gh's --jq. No such file: gh fails (exit 1).
+path=$2 expr=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  [[ ${args[i]} == --jq ]] && expr=${args[i + 1]}
+done
+echo "$path" >> "$GH_LOG"
+file=$GH_JSON/$(printf '%s' "$path" | tr '/?&=' '____')
+[[ -f $file ]] || { echo "gh: HTTP 404 for $path" >&2; exit 1; }
+"$JQ" -r "$expr" "$file"
+"""
+
+HEAD_SHA = "f" * 40
+HEAD_RUN = 4242
+HEAD_JOB = 777
+HEAD_RUNS_QUERY = "event=push&branch=main&per_page=1"
+
+
+def gh_json_name(path: str) -> str:
+    return path.translate(str.maketrans("/?&=", "____"))
+
+
+def run_catch_up(
+    jobs: dict[str, Any], tmp_path: Path, answers: dict[str, Any], tag: str = SHA
+) -> tuple[subprocess.CompletedProcess[str], str, list[str]]:
+    answers_dir = tmp_path / "gh"
+    answers_dir.mkdir()
+    for path, body in answers.items():
+        (answers_dir / gh_json_name(path)).write_text(json.dumps(body))
+    jq = shutil.which("jq")
+    assert jq, "this test needs jq"
+    env = {
+        "GH_TOKEN": "not-a-token",
+        "GH_REPO": "o/r",
+        "TAG": tag,
+        "GH_JSON": str(answers_dir),
+        "GH_LOG": str(tmp_path / "gh.log"),
+        "JQ": jq,
+    }
+    step = step_named(jobs["dev-catch-up"], CATCH_UP_STEP)
+    result, _, summary = run_step(step, tmp_path, env, FAKE_GH_JSON, "gh")
+    log = tmp_path / "gh.log"
+    return result, summary.read_text(), log.read_text().splitlines() if log.exists() else []
+
+
+def head_answers(
+    order: str = "ahead", runs: list[dict[str, Any]] | None = None, jobs: Any = None
+) -> dict[str, Any]:
+    """main's head is HEAD_SHA, `order` relative to SHA; its CI run and that run's jobs."""
+    answers: dict[str, Any] = {
+        "repos/o/r/commits/main": {"sha": HEAD_SHA},
+        f"repos/o/r/compare/{SHA}...{HEAD_SHA}?per_page=1": {"status": order},
+        f"repos/o/r/actions/workflows/ci.yml/runs?head_sha={HEAD_SHA}&{HEAD_RUNS_QUERY}": {
+            "workflow_runs": [{"id": HEAD_RUN}] if runs is None else runs
+        },
+    }
+    if jobs is not None:
+        path = f"repos/o/r/actions/runs/{HEAD_RUN}/jobs?filter=latest&per_page=100"
+        answers[path] = {"jobs": jobs}
+    return answers
+
+
+def deploy_job(status: str, conclusion: str | None) -> list[dict[str, Any]]:
+    return [
+        {"id": 1, "name": "Publish image to GHCR", "status": "completed", "conclusion": "success"},
+        {"id": HEAD_JOB, "name": "Deploy to dev", "status": status, "conclusion": conclusion},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("answers", "flagged"),
+    [
+        # #275: this older commit's deploy replaced main's head's pending one, which shows
+        # as cancelled. Dev lags main until someone re-runs it: flag it.
+        (head_answers(jobs=deploy_job("completed", "cancelled")), True),
+        # main's head still deploys on its own (waiting, running, done) or never will (a red
+        # main): nothing to flag.
+        (head_answers(jobs=deploy_job("queued", None)), False),
+        (head_answers(jobs=deploy_job("waiting", None)), False),
+        (head_answers(jobs=deploy_job("in_progress", None)), False),
+        (head_answers(jobs=deploy_job("completed", "success")), False),
+        (head_answers(jobs=deploy_job("completed", "skipped")), False),
+        (head_answers(jobs=deploy_job("completed", "failure")), False),
+        (head_answers(jobs=deploy_job("completed", "cancelled")[:1]), False),  # not created yet
+        (head_answers(runs=[]), False),  # its CI hasn't started
+        (head_answers(order="behind"), False),
+        ({"repos/o/r/commits/main": {"sha": SHA}}, False),  # this commit is main's head
+    ],
+    ids=[
+        "head-cancelled",
+        "head-queued",
+        "head-waiting",
+        "head-running",
+        "head-deployed",
+        "head-skipped",
+        "head-failed",
+        "head-job-not-created",
+        "head-no-run",
+        "head-not-newer",
+        "this-is-head",
+    ],
+)
+def test_catch_up_flags_a_newer_commit_whose_deploy_was_cancelled(
+    jobs: dict[str, Any], tmp_path: Path, answers: dict[str, Any], flagged: bool
+) -> None:
+    result, summary, _ = run_catch_up(jobs, tmp_path, answers)
+    assert result.returncode == 0, result
+    if flagged:
+        assert "::warning title=Dev is behind main::" in result.stdout
+        assert summary.startswith("### Dev is behind main\n\n")
+        assert HEAD_SHA in summary
+        assert f"https://github.com/o/r/actions/runs/{HEAD_RUN}/job/{HEAD_JOB}" in summary
+        assert f"gh run rerun --job {HEAD_JOB}" in summary
+    else:
+        assert "::warning" not in result.stdout and summary == ""
+
+
+@pytest.mark.parametrize("missing", [0, 1, 2, 3])
+def test_catch_up_never_fails_the_run(jobs: dict[str, Any], tmp_path: Path, missing: int) -> None:
+    """A lookup that fails (the API is down, say) is a warning, never a red run: dev's
+    deploy already happened, and dev-deployment doesn't depend on this job."""
+    answers = head_answers(jobs=deploy_job("completed", "cancelled"))
+    del answers[list(answers)[missing]]
+    result, summary, _ = run_catch_up(jobs, tmp_path, answers)
+    assert result.returncode == 0, result
+    assert "::warning title=Dev catch-up not checked::" in result.stdout
+    assert summary == ""
+
+
+def test_catch_up_rejects_odd_answers(jobs: dict[str, Any], tmp_path: Path) -> None:
+    """What reaches a workflow command or a URL is checked first: a head that isn't a sha
+    (a workflow command, say) is never echoed."""
+    answers = {"repos/o/r/commits/main": {"sha": "::error::x"}}
+    result, summary, _ = run_catch_up(jobs, tmp_path, answers)
+    assert result.returncode == 0, result
+    assert "::error::x" not in result.stdout
+    assert "::warning title=Dev catch-up not checked::" in result.stdout and summary == ""
+
+
+def test_catch_up_job_runs_after_every_deploy_dev_that_got_past_the_order_check(
+    jobs: dict[str, Any],
+) -> None:
+    """It runs in the run whose deploy replaced the newer pending one, whether that deploy
+    went ahead or skipped for order, with read-only API access only: no environment, no
+    secret, no checkout, no re-run (that would need actions: write, #275)."""
+    job = jobs["dev-catch-up"]
+    assert job["needs"] == "deploy-dev"
+    assert job["if"] == (
+        f"${{{{ !cancelled() && {MAIN_PUSH_ONLY} && needs.deploy-dev.outputs.deployed != '' }}}}"
+    )
+    assert job["permissions"] == {"contents": "read", "actions": "read"}
+    assert "environment" not in job and "concurrency" not in job
+    assert "secrets." not in yaml.safe_dump(job)
+    assert all("uses" not in step for step in job["steps"])
+    run = step_named(job, CATCH_UP_STEP)["run"]
+    assert "exit 1" not in run and "rerun" not in run.replace("gh run rerun --job", "")
+    # It finds deploy-dev's job by its name.
+    assert f'select(.name == "{jobs["deploy-dev"]["name"]}")' in run
 
 
 # --- Build provenance (#128) ----------------------------------------------------------
