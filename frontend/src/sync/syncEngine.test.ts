@@ -46,6 +46,7 @@ const stores: IndexedDbSessionStore[] = []
 const stops: (() => void)[] = []
 
 afterEach(() => {
+  vi.useRealTimers()
   for (const stop of stops.splice(0)) stop()
   for (const store of stores.splice(0)) store.close()
 })
