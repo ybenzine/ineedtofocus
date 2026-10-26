@@ -109,8 +109,10 @@ WORKFLOW_BOT = "github-actions[bot]"
 DECISION_MARKER = re.compile(r"<!-- oncall:decision (\{.*\}) -->")
 MARKER_TEXT = re.compile(r"<!--\s*oncall\s*:", re.IGNORECASE)
 # The decision's cause as the workflow's summary may show it: one line, at most MAX_CAUSE
-# characters of letters, digits, spaces and `_ . , ; : ( ) ' / % + = -` (no mention,
-# link, issue reference, HTML or Markdown).
+# characters of letters, digits, spaces and `_ . , ; : ( ) ' / % + = -`: no `@` mention,
+# `#n` reference, Markdown link, HTML, backtick, or `>` to end the marker's HTML comment.
+# A bare URL (`https://…`, `www.…`) or `GH-<n>` still fits, and GitHub would autolink it
+# in prose, so the summary shows the cause as inline code, where nothing is linked.
 CAUSE_UNSAFE = re.compile(r"[^A-Za-z0-9 _.,;:()'/%+=-]")
 MAX_CAUSE = 200
 # Runs this long before the incident opened still belong to it: the run that opens an
@@ -542,7 +544,13 @@ def capped_summary(
     else:
         where = f" (run {found['run']})" if found["run"] else ""
         action = f"`{found['action']}`{where}"
-        cause = found["cause"] or "not recorded in the decision (see the agent's update above)"
+        # Inline code: GitHub autolinks nothing there, not a bare URL, `www.…` or `GH-<n>`,
+        # which the cause's characters still allow. It holds no backtick to close the span.
+        cause = (
+            f"`{found['cause']}`"
+            if found["cause"]
+            else "not recorded in the decision (see the agent's update above)"
+        )
     if open_pr:
         closing = (
             f"The incident stays open: its fix PR #{open_pr} is still open. Close it once that "

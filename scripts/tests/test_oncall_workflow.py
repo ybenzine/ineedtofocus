@@ -879,7 +879,9 @@ def test_simulated_capped_resolution_closes_the_incident(tmp_path: Path, grafana
     assert "- **Fired:** 2026-10-25T08:37:51Z" in summary
     assert "- **Resolved:** 2026-10-25T09:00:00Z" in summary
     assert "- **Last agent decision:** `escalate` (run https://github.com/" in summary
-    assert "- **Cause, from that decision:** InjectedSaveFault: fault injection left on" in summary
+    assert (
+        "- **Cause, from that decision:** `InjectedSaveFault: fault injection left on`\n" in summary
+    )
     base = "https://github.com/ybenzine/ineedtofocus/actions/runs/"
     for i in range(1, 5):
         assert f"  - [{i}]({base}{i}): firing, 2999-01-01T00:0{i}:00Z" in summary

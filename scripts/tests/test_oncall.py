@@ -355,7 +355,7 @@ def test_the_capped_summary_gives_the_alert_times_runs_and_last_decision() -> No
     assert "- **Fired:** 2026-10-25T08:37:51Z" in text
     assert "- **Resolved:** 2026-10-25T11:30:00Z" in text
     assert f"- **Last agent decision:** `escalate` (run {ACT_RUN})" in text
-    assert "- **Cause, from that decision:** InjectedSaveFault left on" in text
+    assert "- **Cause, from that decision:** `InjectedSaveFault left on`\n" in text
     base = "https://github.com/ybenzine/ineedtofocus/actions/runs/"
     runs = [line for line in text.splitlines() if line.startswith("  - ")]
     assert runs == [
@@ -377,6 +377,37 @@ def test_the_capped_summary_without_a_decision_or_with_an_open_fix_pr() -> None:
     no_cause = summary_of([bot("x\n\n" + o.decision_marker("none", "", ""))])
     assert "- **Last agent decision:** `none`\n" in no_cause
     assert "not recorded in the decision" in no_cause
+
+
+@pytest.mark.parametrize(
+    ("cause", "shown"),
+    [
+        (
+            "see https://evil.example/x and www.evil.example",
+            "see https://evil.example/x and www.evil.example",
+        ),
+        ("same as GH-5", "same as GH-5"),
+        ("a `` `code` `` span, @ping, #5 <b>", "a code span, ping, 5 b"),
+    ],
+)
+def test_the_capped_summary_shows_the_cause_as_inline_code(cause: str, shown: str) -> None:
+    """The cause's characters still allow a bare URL, `www.…` and `GH-<n>`, which GitHub
+    autolinks in prose but not in inline code. A cause can't hold a backtick, so it can't
+    close the span: from the agent (check_decision) or from a recorded marker."""
+    assert "`" not in o._cause("`" * 5 + cause)
+    decided = o.check_decision({"action": "escalate", "cause": cause}, CONTEXT)["cause"]
+    for record in (
+        o.decision_marker("escalate", decided, ACT_RUN),
+        # A record with a raw cause is filtered again when read.
+        "<!-- oncall:decision "
+        + json.dumps({"action": "escalate", "cause": cause, "run": ACT_RUN})
+        + " -->",
+    ):
+        text = summary_of([bot("x\n\n" + record)])
+        (line,) = [
+            s for s in text.splitlines() if s.startswith("- **Cause, from that decision:** ")
+        ]
+        assert line == f"- **Cause, from that decision:** `{shown}`"
 
 
 def test_the_capped_summary_lists_at_most_the_last_runs() -> None:
@@ -583,8 +614,9 @@ def test_a_valid_decision(raw: dict[str, Any], expected: dict[str, Any]) -> None
     ],
 )
 def test_the_cause_is_kept_as_one_safe_line(cause: str, kept: str) -> None:
-    """#312: the cause reaches the workflow's own summary, so it can't carry a mention, an
-    issue reference, a link, HTML or Markdown, or end the marker's HTML comment."""
+    """#312: the cause reaches the workflow's own summary, so it can't carry an `@`
+    mention, a `#n` reference, a Markdown link, HTML, a backtick, or end the marker's HTML
+    comment. A bare URL still fits: the summary shows the cause as inline code (below)."""
     result = o.check_decision({"action": "escalate", "cause": cause}, CONTEXT)
     assert result["cause"] == kept
 
