@@ -31,6 +31,10 @@ test('a session finished offline syncs when the connection returns, as exactly o
 
   // More attempts (a reload, the backoff timer) must not add a second row.
   await page.reload()
+  // Let the reload finish starting up (signed in again, History loaded) before the clock jumps:
+  // the jump also fires the app's own request timeouts (#310), and a start-up request still in
+  // flight would be aborted as if two minutes had passed while it waited.
+  await expectTotals(page, { focus: '1 min', sessions: '1' })
   await page.clock.fastForward(120_000)
   await expect(page.getByText('Not synced yet')).toHaveCount(0)
   expect(await serverSessionCount(page.request)).toBe(1)
