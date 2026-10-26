@@ -63,7 +63,7 @@ flowchart LR
     Col --> Grafana["Grafana Cloud<br/>dashboards, alerts"]
     Grafana -- "webhook to<br/>repository_dispatch" --> OnCall["oncall.yml<br/>on-call agent (Claude Code)"]
     OnCall -- "rollback.yml or fix PR" --> CI
-    CI["GitHub Actions<br/>ci.yml, deploy-prod.yml"] -- "image + attestation" --> GHCR[("GHCR")]
+    CI["GitHub Actions<br/>ci.yml, deploy-prod.yml,<br/>rollback.yml"] -- "image + attestation" --> GHCR[("GHCR")]
     CI -- "deploy over SSH<br/>(dev on merge, prod on approval)" --> Droplet
 ```
 
@@ -84,7 +84,7 @@ Full stack, hosting, CI/CD and on-call plan: [_docs/tech_stack.md](_docs/tech_st
 
 ## Run it locally
 
-Needs Docker with Compose v2. For tests and linters, also [uv](https://docs.astral.sh/uv/) and Node.js 24 (see the `Makefile` header).
+Needs Docker with Compose v2. For tests and linters, also [uv](https://docs.astral.sh/uv/), Node.js ≥ 22 (24 in `frontend/.nvmrc`) and [jq](https://jqlang.org/) (`make test-scripts` uses it).
 
 ```sh
 cp .env.example .env    # optional: change ports or local credentials
