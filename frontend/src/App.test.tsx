@@ -151,6 +151,81 @@ describe('App sign-out guard with a timer only in memory (#245)', () => {
   })
 })
 
+describe('App sign-out with a finished record held only in memory (#298)', () => {
+  /** A session stopped while the store refuses every write: the record lives in memory only. */
+  async function heldController(saveRecord: (record: unknown) => Promise<void>) {
+    const inner = new MemoryActiveSessionStore()
+    const store: ActiveSessionStore = {
+      load: () => inner.load(),
+      clear: () => inner.clear(),
+      save() {
+        throw new Error('QuotaExceededError')
+      },
+    }
+    let now = Date.UTC(2026, 9, 23, 9, 0)
+    const controller = new TimerController({ store, saveRecord, now: () => now })
+    await controller.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
+    now += 10 * 60_000
+    expect((await controller.stop()).recordPending).toBe(true)
+    expect(controller.holdsRecord()).toBe(true)
+    return controller
+  }
+
+  function renderOnHistory(controller: TimerController, signOut: () => Promise<null>) {
+    render(
+      <AccountContext.Provider
+        value={{
+          user: { id: 'u', email: 'a@b.co', created_at: '' },
+          expired: false,
+          leaveExpired: () => undefined,
+          signOut,
+        }}
+      >
+        <App controller={controller} preferences={new MemoryPreferencesStore()} />
+      </AccountContext.Provider>,
+    )
+  }
+
+  afterEach(() => window.history.replaceState(null, '', '/'))
+
+  it('asks before signing out, counting the held session; Cancel keeps it', async () => {
+    const controller = await heldController(() => Promise.reject(new Error('IndexedDB down')))
+    const signOut = vi.fn().mockResolvedValue(null)
+    renderOnHistory(controller, signOut)
+    fireEvent.click(await screen.findByRole('button', { name: 'History' }))
+    await screen.findByRole('heading', { name: 'History' })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    const dialog = await screen.findByRole('alertdialog', { name: 'Confirm sign out' })
+    expect(dialog).toHaveTextContent(
+      "1 session hasn't synced and will be deleted from this device.",
+    )
+    expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(signOut).not.toHaveBeenCalled()
+    expect(controller.holdsRecord()).toBe(true)
+  })
+
+  it('hands the record over during sign-out and signs out without asking', async () => {
+    let attempts = 0
+    const saved: unknown[] = []
+    const controller = await heldController(async (record) => {
+      attempts += 1
+      if (attempts < 3) throw new Error('IndexedDB down') // stop(), then AccountBar's retry
+      saved.push(record)
+    })
+    const signOut = vi.fn().mockResolvedValue(null)
+    renderOnHistory(controller, signOut)
+    fireEvent.click(await screen.findByRole('button', { name: 'History' }))
+    await screen.findByRole('heading', { name: 'History' })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(saved).toHaveLength(1)
+    expect(controller.holdsRecord()).toBe(false)
+  })
+})
+
 describe('App', () => {
   it('shows the setup screen', async () => {
     setup()
