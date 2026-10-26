@@ -47,6 +47,9 @@ function clockText(snapshot: TimerSnapshot): string {
   return formatElapsed(snapshot.focusMs)
 }
 
+/** Shown while the timer runs only in memory; clears once the write to the device lands (#245). */
+export const UNSAVED_NOTICE = "This session isn't saved on this device yet. Keep this tab open."
+
 export default function TimerScreen({
   controller,
   audio,
@@ -57,6 +60,8 @@ export default function TimerScreen({
   const [snapshot, setSnapshot] = useState<TimerSnapshot | null>(() => controller.current())
   const [keepAwake, setKeepAwake] = useKeepAwakeSetting()
   const [error, setError] = useState<string | null>(null)
+  // The timer runs only in memory: a reload would lose it (#245).
+  const [unsaved, setUnsaved] = useState(() => controller.hasUnsaved())
   const callbacks = useRef({ onEvents, onEnded })
   useEffect(() => {
     callbacks.current = { onEvents, onEnded }
@@ -77,6 +82,7 @@ export default function TimerScreen({
     if (update.events.length > 0) callbacks.current.onEvents?.(update.events)
     if (update.snapshot) {
       setSnapshot(update.snapshot)
+      setUnsaved(update.unsaved === true)
     } else {
       endedRef.current = true
       callbacks.current.onEnded(update)
@@ -125,8 +131,10 @@ export default function TimerScreen({
       if (event.key !== null && event.key !== ACTIVE_SESSION_KEY) return
       if (inFlight.current > 0) return
       const current = controller.current()
-      if (current) setSnapshot(current)
-      else apply({ snapshot: null, events: [], outcome: null, recordPending: false })
+      if (current) {
+        setSnapshot(current)
+        setUnsaved(controller.hasUnsaved())
+      } else apply({ snapshot: null, events: [], outcome: null, recordPending: false })
     }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('storage', onStorage)
@@ -164,6 +172,10 @@ export default function TimerScreen({
       <p className="timer-meta">
         <span className="timer-tag">{snapshot.tag}</span>
         {snapshot.goal && <span className="timer-goal">{snapshot.goal}</span>}
+      </p>
+
+      <p role="status" className={unsaved ? 'timer-unsaved' : undefined}>
+        {unsaved ? UNSAVED_NOTICE : ''}
       </p>
 
       <div className="timer-controls">

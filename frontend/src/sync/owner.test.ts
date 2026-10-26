@@ -238,3 +238,32 @@ describe('with the accounts UI’s registry (#9)', () => {
     expect(await sessions.list(ALICE)).toEqual([])
   })
 })
+
+describe('a session whose first write failed keeps its owner on the retry (#245)', () => {
+  it('records the user who started it, not whoever is signed in at the retry', () => {
+    let signedIn: string | null = ALICE
+    let full = true
+    const storage: Storage = Object.assign(Object.create(window.localStorage) as Storage, {
+      getItem: (key: string) => window.localStorage.getItem(key),
+      removeItem: (key: string) => window.localStorage.removeItem(key),
+      setItem: (key: string, value: string) => {
+        if (full) throw new Error('QuotaExceededError')
+        window.localStorage.setItem(key, value)
+      },
+    })
+    const active = new OwnedActiveSessionStore(
+      new MemoryActiveSessionStore(),
+      () => signedIn,
+      storage,
+    )
+    const state = {
+      session: { id: 's1' } as never,
+      pendingRecord: null,
+    }
+    expect(() => active.save(state)).toThrow()
+    signedIn = null // another tab signed Alice out
+    full = false
+    active.save(state)
+    expect(active.ownerOf('s1')).toBe(ALICE)
+  })
+})

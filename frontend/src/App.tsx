@@ -9,6 +9,7 @@ import ArchiveScreen from './archive/ArchiveScreen.tsx'
 import HistoryScreen from './history/HistoryScreen.tsx'
 import {
   notifySessionExpired,
+  registerMemoryTimerProbe,
   registerLocalDataHook,
   signedInUserId,
   trySyncAll,
@@ -252,6 +253,9 @@ function AppBody({
     if (window.location.pathname !== path) window.history.pushState(null, '', path)
     setView({ name: screen })
   }
+
+  // A timer kept only in this tab's memory still blocks sign-out and keeps its screen (#245).
+  useEffect(() => registerMemoryTimerProbe(() => timer.hasUnsaved()), [timer])
 
   // Send what is on the device now, when the connection returns, and on backoff (AC13.3).
   // Runs only while someone is signed in: AuthGate renders the app only then (#9).
