@@ -408,4 +408,81 @@ describe("an edit survives a parallel tab's locked merge (#279)", () => {
     expect(stored().pending).toEqual({ week_start_day: 5 })
     expect(stored().values.week_start_day).toBe(5)
   })
+
+  it("ends at the newest value when A edits one field twice inside B's merge window (#288)", async () => {
+    deferredLocks()
+    const { server, api } = fakeServer()
+    const a = new SettingsStore({
+      api: { ...api, patch: vi.fn(() => new Promise<Settings>(() => undefined)) },
+      storage: localStorage,
+      owner: 'u1',
+      retryBaseMs: 3_600_000,
+    })
+    const race = racingStorage(() => {
+      a.update({ week_start_day: 5 })
+      a.update({ week_start_day: 6 })
+    })
+    const b = new SettingsStore({
+      api: {
+        ...api,
+        patch: vi.fn(async (p: SettingsPatch) => {
+          const r = await api.patch(p)
+          race.state.armed = true
+          return r
+        }),
+      },
+      storage: race.view,
+      owner: 'u1',
+      retryBaseMs: 3_600_000,
+    })
+    b.update({ background_volume: 70 })
+    await b.flush()
+    await settle()
+    expect(stored().values.week_start_day).toBe(6)
+    expect(stored().pending).toHaveProperty('week_start_day', 6)
+    expect(a.values.week_start_day).toBe(6)
+    expect(server.value.background_volume).toBe(70)
+  })
+
+  it("sends the newest value when A re-edits a field with a send in flight inside B's merge (#288)", async () => {
+    deferredLocks()
+    const { server, api } = fakeServer()
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const aPatch = vi.fn(async (p: SettingsPatch) => {
+      if (aPatch.mock.calls.length === 1) await gate
+      return api.patch(p)
+    })
+    const a = new SettingsStore({
+      api: { get: api.get, patch: aPatch },
+      storage: localStorage,
+      owner: 'u1',
+      retryBaseMs: 3_600_000,
+    })
+    a.update({ alert_volume: 20 }) // in flight; pending alert_volume 20
+    await settle()
+    const race = racingStorage(() => a.update({ alert_volume: 60 }))
+    const b = new SettingsStore({
+      api: {
+        ...api,
+        patch: vi.fn(async (p: SettingsPatch) => {
+          const r = await api.patch(p)
+          race.state.armed = true
+          return r
+        }),
+      },
+      storage: race.view,
+      owner: 'u1',
+      retryBaseMs: 3_600_000,
+    })
+    b.update({ background_volume: 70 })
+    await b.flush()
+    await settle()
+    release()
+    await a.flush()
+    await settle()
+    expect(server.value.alert_volume).toBe(60)
+    expect(a.values.alert_volume).toBe(60)
+    expect(stored().values.alert_volume).toBe(60)
+  })
 })
