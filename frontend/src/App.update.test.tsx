@@ -82,9 +82,11 @@ describe('App tells the updater when the tab holds data only in memory', () => {
   }
 
   it('a timer that exists only in memory holds the update until it reaches the device', async () => {
-    const { store, state } = failingStore()
+    const { store } = failingStore()
     const controller = new TimerController({ store, saveRecord: () => undefined })
-    render(<App controller={controller} preferences={new MemoryPreferencesStore()} />)
+    const { unmount } = render(
+      <App controller={controller} preferences={new MemoryPreferencesStore()} />,
+    )
     await screen.findByRole('button', { name: 'Start' })
     expect(holdsMemoryOnlyData()).toBe(false)
 
@@ -94,7 +96,22 @@ describe('App tells the updater when the tab holds data only in memory', () => {
     expect(controller.holdsRecord()).toBe(false)
     expect(holdsMemoryOnlyData()).toBe(true)
 
-    state.failing = false // the next tick writes it
+    // Unmounting unregisters the holder, even while the timer is still memory-only.
+    unmount()
+    expect(controller.hasUnsaved()).toBe(true)
+    expect(holdsMemoryOnlyData()).toBe(false)
+  })
+
+  it('a memory-only timer lets go once the next tick writes it', async () => {
+    const { store, state } = failingStore()
+    const controller = new TimerController({ store, saveRecord: () => undefined })
+    render(<App controller={controller} preferences={new MemoryPreferencesStore()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    expect(holdsMemoryOnlyData()).toBe(true)
+
+    // The next tick: TimerScreen's TICK_MS interval retries the write (#refresh/#writeUnsaved).
+    state.failing = false
     await waitFor(() => expect(holdsMemoryOnlyData()).toBe(false), { timeout: 3000 })
   })
 
