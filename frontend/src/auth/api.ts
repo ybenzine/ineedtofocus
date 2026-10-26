@@ -53,6 +53,15 @@ async function call(path: string, init?: RequestInit, timeoutMs?: number): Promi
   }
 }
 
+/** A body read can fail too (timeout, abort, dropped link): that's an unreachable server, not a sign-out. */
+async function readUser(response: Response): Promise<User> {
+  try {
+    return (await response.json()) as User
+  } catch {
+    throw new AuthError('network', "Can't reach the server. Check your connection and try again.")
+  }
+}
+
 async function toError(response: Response): Promise<AuthError> {
   const error = await readError(response)
   if (response.status === 401) {
@@ -82,7 +91,7 @@ async function toError(response: Response): Promise<AuthError> {
 async function credentials(path: string, email: string, password: string): Promise<User> {
   const response = await call(path, { method: 'POST', body: JSON.stringify({ email, password }) })
   if (!response.ok) throw await toError(response)
-  return (await response.json()) as User
+  return readUser(response)
 }
 
 export const SIGNOUT_TIMEOUT_MS = 10000
@@ -92,7 +101,7 @@ export const httpAuthApi: AuthApi = {
     const response = await call('/api/auth/me', undefined, ME_TIMEOUT_MS)
     if (response.status === 401) return null
     if (!response.ok) throw await toError(response)
-    return (await response.json()) as User
+    return readUser(response)
   },
   signUp: (email, password) => credentials('/api/auth/signup', email, password),
   signIn: (email, password) => credentials('/api/auth/signin', email, password),

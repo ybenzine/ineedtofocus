@@ -100,4 +100,22 @@ describe('describeWait', () => {
     expect(describeWait(421)).toBe('Try again in 8 minutes.')
     expect(describeWait(undefined)).toBe('Try again in a few minutes.')
   })
+
+  it.each(['TimeoutError', 'AbortError'])(
+    'reports a %s while reading the /me body as a network error',
+    async (name) => {
+      const response = {
+        status: 200,
+        ok: true,
+        json: () => Promise.reject(new DOMException('signal timed out', name)),
+      }
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response))
+      expect((await failure(httpAuthApi.me())).kind).toBe('network')
+    },
+  )
+
+  it('returns null only for a 401 on /me', async () => {
+    reply(401, { error: { code: 'unauthorized', message: 'x' } })
+    expect(await httpAuthApi.me()).toBeNull()
+  })
 })
