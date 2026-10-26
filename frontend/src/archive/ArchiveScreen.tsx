@@ -170,6 +170,7 @@ export default function ArchiveScreen({
 
   async function deleteAll() {
     setProblem('')
+    setNotice('')
     setBusy(true)
     try {
       const result = await api.deleteAll()
@@ -193,7 +194,9 @@ export default function ArchiveScreen({
       const stuck = deviceFailed ? deviceOnly.length : 0
       if (stuck === 0) setDeviceOnly([])
       const n = result.value + deviceOnly.length - stuck
-      if (n > 0) setNotice(`Deleted ${n} archived ${n === 1 ? 'session' : 'sessions'}.`)
+      // Nothing deleted still gets an answer: the list just emptied.
+      if (n > 0 || stuck === 0)
+        setNotice(`Deleted ${n} archived ${n === 1 ? 'session' : 'sessions'}.`)
       if (stuck > 0) {
         setProblem(
           `Couldn’t delete ${stuck === 1 ? 'the archived session' : `${stuck} archived sessions`} that ${stuck === 1 ? 'is' : 'are'} only on this device. ${stuck === 1 ? 'It stays' : 'They stay'} in the Archive. Try again.`,
