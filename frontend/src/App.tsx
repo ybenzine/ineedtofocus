@@ -26,6 +26,7 @@ import {
 import { SettingsContext, useSettingsState } from './settings/SettingsContext.ts'
 import SettingsScreen from './settings/SettingsScreen.tsx'
 import { settingsDataHook } from './settings/hook.ts'
+import { heldRecordHook } from './timer/hook.ts'
 import { SettingsStore } from './settings/store.ts'
 import { type PreferencesStore } from './setup/preferences.ts'
 import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
@@ -258,6 +259,8 @@ function AppBody({
   useEffect(() => registerMemoryTimerProbe(() => timer.hasUnsaved()), [timer])
   // ...and so does a finished record held only in memory: no update reload until it is handed over.
   useEffect(() => registerMemoryHolder(() => timer.hasUnsaved() || timer.holdsRecord()), [timer])
+  // Sign-out tries to hand a held record over and counts it if it can't (#298).
+  useEffect(() => registerLocalDataHook(heldRecordHook(timer)), [timer])
 
   // Send what is on the device now, when the connection returns, and on backoff (AC13.3).
   // Runs only while someone is signed in: AuthGate renders the app only then (#9).

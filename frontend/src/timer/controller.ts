@@ -229,6 +229,14 @@ export class TimerController {
     return this.#held !== null
   }
 
+  /**
+   * Drops a record held only in memory (#298): sign-out confirmed it would be deleted, and the
+   * controller outlives the sign-out, so a later `start()` must not hand it to `saveRecord`.
+   */
+  discardHeld(): void {
+    this.#held = null
+  }
+
   /** Hands a finished session that couldn't be saved earlier to `saveRecord` again. */
   async retryPending(): Promise<boolean> {
     const stored = this.#store.load()
