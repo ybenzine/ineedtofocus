@@ -439,9 +439,8 @@ describe('the Archive screen with a device-only session', () => {
     expect(screen.getByText('Wrong clock')).toBeInTheDocument()
     expect((await store.get(record.id))?.archivedAt).not.toBeNull()
     // Focus goes back to Delete all (it was disabled while the request ran).
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Delete all archived sessions' })).toHaveFocus(),
-    )
+    const deleteAll = screen.getByRole('button', { name: 'Delete all archived sessions' })
+    await waitFor(() => expect(deleteAll).toHaveFocus())
   })
 
   it('a failed Delete all clears an earlier notice instead of showing it next to the error', async () => {
@@ -534,7 +533,9 @@ describe('the Archive screen with a device-only session', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/only on this device/)
     expect(screen.getByText('Wrong clock')).toBeInTheDocument()
     expect(screen.queryByText('Server archived')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Delete all archived sessions' })).toHaveFocus()
+    // Focus returns in an effect once the busy state ends, which may follow the messages.
+    const deleteAll = screen.getByRole('button', { name: 'Delete all archived sessions' })
+    await waitFor(() => expect(deleteAll).toHaveFocus())
     expect((await store.get(record.id))?.archivedAt).not.toBeNull()
   })
 

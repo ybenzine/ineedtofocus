@@ -121,6 +121,8 @@ test('History tag filter and the week-start setting', async ({ page }) => {
   await page.getByLabel('Week starts on').selectOption('1')
   await openScreen(page, 'History')
   await page.getByRole('group', { name: 'View' }).getByRole('button', { name: 'Week' }).click()
+  // Not empty first: an empty label (still loading) also differs from the Sunday week.
+  await expect(period).not.toBeEmpty()
   await expect(period).not.toHaveText(sundayWeek ?? '')
   const mondayWeek = await period.textContent()
   await expectTotals(page, { focus: '4 min', sessions: '2' })

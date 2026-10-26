@@ -292,7 +292,8 @@ describe('sign out', () => {
     await signedIn(api)
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
-    expect(document.documentElement).not.toHaveAttribute('data-theme')
+    // The theme is reset in a passive effect, which may not have run when the heading shows up.
+    await waitFor(() => expect(document.documentElement).not.toHaveAttribute('data-theme'))
   })
 
   it('runs registered hooks: try to sync, count, then clear', async () => {
