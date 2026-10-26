@@ -1,6 +1,7 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 import {
+  expectNoSidewaysScroll,
   finishCountdown,
   installClock,
   newEmail,
@@ -636,3 +637,67 @@ test.describe('reduced motion', () => {
     expect(size).toBeGreaterThanOrEqual(48)
   })
 })
+
+// The iPhone/iPad silent-mode hint (#307): visible, readable and inside the screen in both themes.
+const IPHONE_UA =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+
+/** WCAG contrast of an element's text against the first opaque background behind it. */
+async function textContrast(page: Page, text: string): Promise<number> {
+  return page.getByText(text).evaluate((el) => {
+    const parse = (value: string) => (value.match(/[\d.]+/g) ?? []).map(Number)
+    const channel = (v: number) => {
+      const s = v / 255
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+    }
+    const luminance = ([r = 0, g = 0, b = 0]: number[]) =>
+      0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+    let background = [0, 0, 0, 0]
+    for (let node: Element | null = el; node; node = node.parentElement) {
+      const color = parse(getComputedStyle(node).backgroundColor)
+      if (color.length < 4 || (color[3] ?? 1) > 0) {
+        background = color
+        break
+      }
+    }
+    const a = luminance(parse(getComputedStyle(el).color))
+    const b = luminance(background)
+    return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+  })
+}
+
+for (const scheme of SCHEMES) {
+  test.describe(`silent-mode hint on an iPhone, ${scheme} theme`, () => {
+    test.use({
+      colorScheme: scheme,
+      userAgent: IPHONE_UA,
+      hasTouch: true,
+      viewport: { width: 360, height: 740 },
+    })
+
+    test('shows in Settings and in Setup with Rain, readable and without sideways scroll', async ({
+      page,
+    }) => {
+      await installClock(page)
+      await signUp(page, newEmail())
+
+      await page.getByRole('radio', { name: 'Rain' }).check()
+      const setupHint = 'On iPhone and iPad, rain and alerts are off while silent mode is on.'
+      await expect(page.getByText(setupHint)).toBeVisible()
+      expect(await textContrast(page, setupHint)).toBeGreaterThanOrEqual(4.5)
+      await expectNoSidewaysScroll(page)
+      await expectNoSeriousViolations(page)
+      await page.getByRole('radio', { name: 'None' }).check()
+      await expect(page.getByText(setupHint)).toHaveCount(0)
+
+      await openScreen(page, 'Settings')
+      const settingsHint =
+        'On iPhone and iPad, the chime, bell and rain are off while silent mode is on.'
+      await expect(page.getByText(settingsHint)).toBeVisible()
+      expect(await textContrast(page, settingsHint)).toBeGreaterThanOrEqual(4.5)
+      await expectNoSidewaysScroll(page)
+      await expectNoSeriousViolations(page)
+      expect(await smallTargets(page)).toEqual([])
+    })
+  })
+}
