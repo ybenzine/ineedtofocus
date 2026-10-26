@@ -47,11 +47,19 @@ export default function ArchiveScreen({
   const restored = useRef(new Set<string>())
   const cancel = useRef<HTMLButtonElement>(null)
   const deleteButton = useRef<HTMLButtonElement>(null)
+  // Delete all is disabled while busy, so focus goes back to it once the request is over.
+  const focusDelete = useRef(false)
 
   useEffect(() => heading.current?.focus(), [])
   useEffect(() => {
     if (confirming) cancel.current?.focus()
   }, [confirming])
+  useEffect(() => {
+    if (!busy && focusDelete.current) {
+      focusDelete.current = false
+      deleteButton.current?.focus()
+    }
+  }, [busy])
 
   useEffect(() => {
     let cancelled = false
@@ -168,20 +176,30 @@ export default function ArchiveScreen({
       setConfirming(false)
       if (result.kind !== 'ok') {
         fail(result.kind, 'delete the archived sessions')
-        deleteButton.current?.focus()
+        focusDelete.current = true
         return
       }
       // Also sessions archived on another device that this device hasn't been told about.
+      let deviceFailed = false
       if (owner !== null) {
         const ids = sessions.map((s) => s.id)
-        await store?.removeArchived(owner, ids).catch(() => undefined)
+        await store?.removeArchived(owner, ids).catch(() => {
+          deviceFailed = true
+        })
       }
       setLoad({ kind: 'ready', sessions: [] })
-      setDeviceOnly([])
-      heading.current?.focus()
       // The device-only ones are deleted from the device with the rest and counted with them.
-      const n = result.value + deviceOnly.length
-      setNotice(`Deleted ${n} archived ${n === 1 ? 'session' : 'sessions'}.`)
+      // If that failed they exist only here, so they stay listed and are not reported deleted.
+      const stuck = deviceFailed ? deviceOnly.length : 0
+      if (stuck === 0) setDeviceOnly([])
+      const n = result.value + deviceOnly.length - stuck
+      if (n > 0) setNotice(`Deleted ${n} archived ${n === 1 ? 'session' : 'sessions'}.`)
+      if (stuck > 0) {
+        setProblem(
+          `Couldn’t delete ${stuck === 1 ? 'the archived session' : `${stuck} archived sessions`} that ${stuck === 1 ? 'is' : 'are'} only on this device. ${stuck === 1 ? 'It stays' : 'They stay'} in the Archive. Try again.`,
+        )
+        focusDelete.current = true
+      } else heading.current?.focus()
     } finally {
       setBusy(false)
     }
@@ -189,6 +207,11 @@ export default function ArchiveScreen({
 
   const sessions = load.kind === 'ready' ? load.sessions : []
   const count = sessions.length + deviceOnly.length
+  // One list, most recently archived first; a tie keeps the server's row first.
+  const rows = [
+    ...sessions.map((s) => ({ s, onDeviceOnly: false })),
+    ...deviceOnly.map((s) => ({ s, onDeviceOnly: true })),
+  ].sort((a, b) => Date.parse(b.s.archivedAt) - Date.parse(a.s.archivedAt))
 
   function row(s: ArchivedSession, onDeviceOnly: boolean) {
     return (
@@ -247,8 +270,7 @@ export default function ArchiveScreen({
       ) : (
         <>
           <ul className="history-list">
-            {sessions.map((s) => row(s, false))}
-            {deviceOnly.map((s) => row(s, true))}
+            {rows.map(({ s, onDeviceOnly }) => row(s, onDeviceOnly))}
           </ul>
           <button
             type="button"

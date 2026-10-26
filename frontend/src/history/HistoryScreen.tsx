@@ -451,18 +451,20 @@ export default function HistoryScreen({
     setReload((n) => n + 1)
   }
 
-  async function discardChange(session: HistorySession) {
-    if (owner === null || !sessions) return
+  /** Whether the change was discarded; on `false` the row keeps its edit and says why. */
+  async function discardChange(session: HistorySession): Promise<boolean> {
+    if (owner === null || !sessions) return false
     setProblem('')
     try {
       await sessions.discardEdit(owner, session.id)
     } catch {
       setProblem('Couldn’t discard the change. Try again.')
-      return
+      return false
     }
-    if (!mounted.current) return
+    if (!mounted.current) return true
     pendingFocus.current = session.id
     setReload((n) => n + 1)
+    return true
   }
 
   async function undoArchive() {
@@ -477,7 +479,8 @@ export default function HistoryScreen({
         return setProblem('Couldn’t undo the archive. Try again.')
       }
       if (!mounted.current) return
-      setUndo(null)
+      // Only this archive's message: a newer one (another archive meanwhile) stays.
+      setUndo((current) => (current?.id === undo.id ? null : current))
       setReload((n) => n + 1)
       return
     }
@@ -490,8 +493,9 @@ export default function HistoryScreen({
       return fail(result.kind, 'undo the archive')
     }
     archivedHere.current.delete(id)
-    // Cleared before the next await, so the message is gone by the time the row is back.
-    setUndo(null)
+    // Cleared before the next await, so the message is gone by the time the row is back. A reply
+    // that comes late must not clear a newer message (another archive in the meantime).
+    setUndo((current) => (current?.id === id ? null : current))
     if (owner !== null) await sessions?.setArchived(owner, id, null).catch(() => undefined)
     cache.current.clear()
     setReload((n) => n + 1)
@@ -655,7 +659,7 @@ function Results({
   onSave: (session: HistorySession, change: SessionEdit) => Promise<void>
   onArchive: (session: HistorySession) => Promise<void>
   onArchiveOnDevice: (session: HistorySession) => Promise<void>
-  onDiscard: (session: HistorySession) => Promise<void>
+  onDiscard: (session: HistorySession) => Promise<boolean>
 }) {
   const unsynced = data.sessions.filter((s) => s.unsaved).length
   return (
@@ -773,7 +777,7 @@ interface SessionRowProps {
   onSave: (change: SessionEdit) => Promise<void>
   onArchive: () => void
   onArchiveOnDevice: () => void
-  onDiscard: () => Promise<void>
+  onDiscard: () => Promise<boolean>
 }
 
 function SessionRow({
@@ -809,10 +813,14 @@ function SessionRow({
   }
   async function confirmDiscard() {
     setBusy(true)
+    let discarded = false
     try {
-      await onDiscard()
+      discarded = await onDiscard()
     } finally {
       setBusy(false)
+      // A discard that failed leaves the Discard button, with the error shown, as the focus
+      // target; a confirmed one leaves focus to the screen (the row's Edit button).
+      returnFocus.current = !discarded
       setDiscarding(false)
     }
   }
@@ -863,6 +871,7 @@ function SessionRow({
           <button
             type="button"
             data-edit-for={session.id}
+            disabled={discarding}
             aria-label={`Edit session from ${label}`}
             onClick={onEdit}
           >
