@@ -1,7 +1,8 @@
 // Preview buttons and the alert volume slider (AC5.2, AC5.3). Reusable: the Settings screen
 // (#22) places it. The volume is the alert volume only, separate from background audio.
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
+import { onAppleMobile, SETTINGS_SILENT_HINT } from './appleMobile.ts'
 import { type AlertPlayer } from './alerts.ts'
 import RangeInput from '../RangeInput.tsx'
 
@@ -15,6 +16,9 @@ export interface SoundPreviewProps {
 export default function SoundPreview({ player, volume }: SoundPreviewProps) {
   const [local, setLevel] = useState(() => player.volume)
   const level = volume ?? local
+  const hintId = useId()
+  // Silent mode mutes Web Audio on iPhone/iPad and can't be detected, so say so (#307).
+  const hint = onAppleMobile()
 
   function preview(name: 'chime' | 'bell') {
     // A button press is a user gesture: unlock first, then play once the context is running.
@@ -39,12 +43,25 @@ export default function SoundPreview({ player, volume }: SoundPreviewProps) {
           }}
         />
       </label>
-      <button type="button" onClick={() => preview('chime')}>
+      <button
+        type="button"
+        aria-describedby={hint ? hintId : undefined}
+        onClick={() => preview('chime')}
+      >
         Preview chime
       </button>
-      <button type="button" onClick={() => preview('bell')}>
+      <button
+        type="button"
+        aria-describedby={hint ? hintId : undefined}
+        onClick={() => preview('bell')}
+      >
         Preview bell
       </button>
+      {hint && (
+        <p id={hintId} className="field-hint">
+          {SETTINGS_SILENT_HINT}
+        </p>
+      )}
     </section>
   )
 }

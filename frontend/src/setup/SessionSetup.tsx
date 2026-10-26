@@ -10,6 +10,7 @@ import {
   type Tag,
   type TimerConfig,
 } from '../timer/index.ts'
+import { onAppleMobile, SETUP_SILENT_HINT } from '../sounds/appleMobile.ts'
 import { OfflineRainSuggestion } from '../sounds/AudioControls.tsx'
 import { useOnline } from '../sounds/useOnline.ts'
 import { AUDIO_SOURCES, GOAL_MAX_LENGTH, type AudioSource } from './options.ts'
@@ -332,6 +333,7 @@ export default function SessionSetup({
             </label>
           ))}
         </div>
+        {audio === 'rain' && onAppleMobile() && <p className="field-hint">{SETUP_SILENT_HINT}</p>}
         {audio === 'youtube' && !online && (
           <OfflineRainSuggestion onUseRain={() => setAudio('rain')} />
         )}
