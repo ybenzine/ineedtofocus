@@ -44,3 +44,20 @@ describe('360 px layout (#131)', () => {
     expect(player).toMatch(/min-height:\s*12\.5rem/)
   })
 })
+
+describe('danger buttons keep their colour (#238)', () => {
+  // `button:hover:not(:disabled)` has higher specificity than `button.danger`, so each state that
+  // changes a button's colour needs its own danger rule, using the error token.
+  it.each([':hover:not(:disabled)', ':active:not(:disabled)', ':focus-visible'])(
+    'has a button.danger%s rule that stays on --error',
+    (state) => {
+      const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      const found = rules.find(([, selectors]) =>
+        (selectors ?? '').split(',').some((s) => s.trim() === `button.danger${state}`),
+      )
+      expect(found, `no rule for button.danger${state}`).toBeDefined()
+      expect(found?.[2]).toMatch(/color:\s*var\(--error\)/)
+      expect(found?.[2]).toMatch(/border-color:\s*var\(--error\)/)
+    },
+  )
+})
