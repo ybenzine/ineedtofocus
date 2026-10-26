@@ -334,7 +334,7 @@ That first real drill on dev (incident [#231](https://github.com/ybenzine/ineedt
 On 2026-10-26 a deliberately broken release reached dev. The real **Session saves failing (dev)** alert fired, and the on-call agent tied the failures to that deploy and rolled dev back through the `oncall` workflow, with no human acting on the incident. There was no fault injection and no simulated payload. The full evidence is on [#317](https://github.com/ybenzine/ineedtofocus/issues/317).
 
 - **Releases:** `G` = `d6bc665` (dev before the drill), `B` = `3ceae88` (demo [#318](https://github.com/ybenzine/ineedtofocus/pull/318): both save endpoints raise `RuntimeError` when the app is labelled `deployment.environment.name=dev`), `R` = `34a1bf3` (revert [#321](https://github.com/ybenzine/ineedtofocus/pull/321), tree identical to `G`).
-- **Runs:** CI for `B` [40341748427](https://github.com/ybenzine/ineedtofocus/actions/runs/40341748427) (deployed it to dev), firing on-call run [40343299665](https://github.com/ybenzine/ineedtofocus/actions/runs/40343299665), `rollback.yml` [40343637237](https://github.com/ybenzine/ineedtofocus/actions/runs/40343637237), resolved on-call run [40344593714](https://github.com/ybenzine/ineedtofocus/actions/runs/40344593714), CI for `R` [40347922616](https://github.com/ybenzine/ineedtofocus/actions/runs/40347922616) (deployed it to dev). Incident: [#319](https://github.com/ybenzine/ineedtofocus/issues/319).
+- **Runs:** CI for `B` [40341748427](https://github.com/ybenzine/ineedtofocus/actions/runs/40341748427) (deployed it to dev), firing on-call run [40343299665](https://github.com/ybenzine/ineedtofocus/actions/runs/40343299665), `rollback.yml` [40343637237](https://github.com/ybenzine/ineedtofocus/actions/runs/40343637237), resolved on-call run [40344593714](https://github.com/ybenzine/ineedtofocus/actions/runs/40344593714), CI for `R` [40347922616](https://github.com/ybenzine/ineedtofocus/actions/runs/40347922616) (green; its **Deploy to dev** deployed nothing, because dev already ran `3d65b12`, the README merge #320 just after `R`, which [40348807424](https://github.com/ybenzine/ineedtofocus/actions/runs/40348807424) had deployed). Incident: [#319](https://github.com/ybenzine/ineedtofocus/issues/319).
 
 | UTC | Event |
 |---|---|
@@ -352,6 +352,7 @@ On 2026-10-26 a deliberately broken release reached dev. The real **Session save
 | 14:59:23 | [Follow-up report](https://github.com/ybenzine/ineedtofocus/issues/319#issuecomment-6419264070) (from, to, verification) |
 | 14:59:53–14:59:54 | Resolved run, over the daily cap, posts the workflow's [incident summary](https://github.com/ybenzine/ineedtofocus/issues/319#issuecomment-6419277737) (#312) and closes #319 |
 | 15:10:32 | Revert #321 merges (`R`) |
+| 15:28:38–15:29:20 | **Deploy to dev** deploys `3d65b12` (#320, on top of `R`), so dev runs `main` again, without the gate. `R`'s own CI run, which GitHub started late (15:17:49), then skips its deploy as older than what dev runs |
 
 Alert to restored in about 3 minutes, alert to resolved in 8.
 
