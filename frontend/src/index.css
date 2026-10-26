@@ -182,7 +182,10 @@ button.primary {
   font-size: 1rem;
 }
 
-button.danger {
+button.danger,
+button.danger:hover:not(:disabled),
+button.danger:active:not(:disabled),
+button.danger:focus-visible {
   border-color: var(--error);
   color: var(--error);
 }

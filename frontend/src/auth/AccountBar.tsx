@@ -11,7 +11,7 @@ import {
 } from './localData.ts'
 
 /**
- * Who is signed in, and Sign out. Shown on the setup screen only, never over a running timer.
+ * Who is signed in, and Sign out. Shown on every screen except a running timer or the session summary.
  * Sign out is refused while a timer runs; unsynced sessions and edits get one last sync (at most
  * 10 s, skipped offline) and, if any remain, are deleted only after a confirmation (Cancel is
  * the default).

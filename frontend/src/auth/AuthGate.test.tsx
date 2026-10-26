@@ -102,6 +102,7 @@ afterEach(() => {
   localStorage.clear()
   sessionStorage.clear()
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 describe('AuthGate', () => {
@@ -507,7 +508,6 @@ describe('offline sign out', () => {
     expect(await screen.findByText(OFFLINE_SIGN_OUT_NOTICE)).toBeInTheDocument()
     expect(localStorage.getItem(PENDING_LOGOUT_KEY)).not.toBeNull()
     expect(localStorage.getItem(SETTINGS_KEY)).toBeNull()
-    vi.restoreAllMocks()
   })
 
   it('clears data, sets the marker and explains', async () => {
@@ -651,6 +651,39 @@ describe('offline sign out', () => {
     expect(await screen.findByText(SERVER_SIGN_OUT_MESSAGE)).toBeInTheDocument()
     expect(screen.queryByText(/internet/)).not.toBeInTheDocument()
     expect(signIn).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['429', new AuthError('rate_limited', 'slow down')],
+    ['another 4xx', new AuthError('other', 'forbidden')],
+  ])('counts a %s on the queued logout as a server failure, not offline', async (_name, error) => {
+    localStorage.setItem(PENDING_LOGOUT_KEY, '1')
+    const signIn = vi.fn().mockResolvedValue(user)
+    const signOut = vi.fn().mockRejectedValue(error)
+    renderGate(makeApi({ signOut, signIn }))
+    await screen.findByRole('heading', { name: 'Sign in' })
+    await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
+    fill('a@b.co', 'password1')
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(await screen.findByText(SERVER_SIGN_OUT_MESSAGE)).toBeInTheDocument()
+    expect(screen.queryByText(/internet/)).not.toBeInTheDocument()
+    expect(signIn).not.toHaveBeenCalled()
+    expect(localStorage.getItem(PENDING_LOGOUT_KEY)).not.toBeNull()
+  })
+
+  it('refuses sign-up while the queued logout keeps failing', async () => {
+    localStorage.setItem(PENDING_LOGOUT_KEY, '1')
+    const signUp = vi.fn().mockResolvedValue(user)
+    const signOut = vi.fn().mockRejectedValue(new AuthError('server', 'down'))
+    renderGate(makeApi({ signOut, signUp }))
+    await screen.findByRole('heading', { name: 'Sign in' })
+    await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByRole('button', { name: 'Create an account' }))
+    fill('a@b.co', 'password1')
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
+    expect(await screen.findByText(SERVER_SIGN_OUT_MESSAGE)).toBeInTheDocument()
+    expect(signUp).not.toHaveBeenCalled()
+    expect(screen.queryByText('the timer app')).not.toBeInTheDocument()
   })
 
   it('keeps asking to connect to the internet when the device is offline', async () => {
