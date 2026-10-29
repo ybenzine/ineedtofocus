@@ -70,3 +70,19 @@ describe('timer screen status gap (#286)', () => {
     expect(rule('.timer-screen,\n.summary')).toMatch(/gap:\s*var\(--column-gap\)/)
   })
 })
+
+describe('fieldset legends are pills (#330)', () => {
+  it('shares one rule between New session and Settings with the requested styles', () => {
+    const match = css.match(/\.setup legend,\s*\.settings fieldset\.field legend\s*\{([^}]*)\}/)
+    if (!match) throw new Error('no shared legend rule')
+    const legend = match[1] ?? ''
+    expect(legend).toMatch(/font-weight:\s*600/)
+    expect(legend).toMatch(/background-color:\s*var\(--surface\)/)
+    expect(legend).toMatch(/border:\s*1px solid var\(--border\)/)
+    expect(legend).toMatch(/border-radius:\s*1rem/)
+    expect(legend).toMatch(/padding:\s*0 10px/)
+    expect(legend).toMatch(/display:\s*table/)
+    expect(legend).toMatch(/margin:\s*0 auto/)
+    expect(legend).toMatch(/max-width:\s*100%/)
+  })
+})
