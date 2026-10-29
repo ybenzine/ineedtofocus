@@ -376,3 +376,32 @@ describe('no colour literals outside the token blocks (#213, #214)', () => {
     }
   })
 })
+
+// #328: the History view switcher sits on the page background in both themes; it used to be a
+// --surface slab that stood out in light mode.
+describe('History view switcher background (#328)', () => {
+  // Every innermost rule (inside @media too) whose selector mentions `cls` and sets a background.
+  const backgroundRules = (src: string, cls: string) =>
+    [...src.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .map((m) => ({ selector: (m[1] as string).trim(), body: m[2] as string }))
+      .filter((r) => r.selector.includes(cls) && /background/.test(r.body))
+
+  it('exactly one .history-views rule sets a background: var(--bg), for every theme', () => {
+    const rules = backgroundRules(css, '.history-views')
+    expect(rules).toHaveLength(1)
+    expect(rules[0]?.body).toMatch(/background:\s*var\(--bg\)/)
+  })
+
+  it('the finder sees theme and media overrides', () => {
+    const themed =
+      ".history-views{background:var(--bg)}:root[data-theme='light'] .history-views{background:#fff}"
+    const media =
+      '@media (prefers-color-scheme: light) { :root .history-views { background: red } }'
+    expect(backgroundRules(themed, '.history-views')).toHaveLength(2)
+    expect(backgroundRules(media, '.history-views')).toHaveLength(1)
+  })
+
+  it('.history-tags has no background of its own', () => {
+    expect(backgroundRules(css, '.history-tags')).toEqual([])
+  })
+})

@@ -20,7 +20,7 @@
 
 :root {
   --bg: #11112a; /* page background, every screen, full-bleed */
-  --surface: #1b1b3c; /* cards, panels, segmented track, active nav pill */
+  --surface: #1b1b3c; /* cards, panels, active nav pill */
   --border: #33336a; /* decorative dividers and card outlines only */
   --control-border: #6161b3; /* inputs, selects, outline buttons: 3:1 non-text contrast */
   --text: #edecfb; /* body text, headings */
@@ -781,7 +781,7 @@ main.focus-screen {
   max-width: 100%;
   box-sizing: border-box;
   padding: 0.25rem;
-  background: var(--surface);
+  background: var(--bg); /* the page, in both themes (#328) */
   border-radius: 0.75rem;
 }
 
