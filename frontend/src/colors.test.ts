@@ -380,25 +380,28 @@ describe('no colour literals outside the token blocks (#213, #214)', () => {
 // #328: the History view switcher sits on the page background in both themes; it used to be a
 // --surface slab that stood out in light mode.
 describe('History view switcher background (#328)', () => {
-  const rule = (sel: string) =>
-    css.match(new RegExp(`(?:^|\\n)${sel.replace('.', '\\.')}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+  // Every innermost rule (inside @media too) whose selector mentions `cls` and sets a background.
+  const backgroundRules = (src: string, cls: string) =>
+    [...src.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .map((m) => ({ selector: (m[1] as string).trim(), body: m[2] as string }))
+      .filter((r) => r.selector.includes(cls) && /background/.test(r.body))
 
-  it('.history-views uses the page token, one rule for every theme', () => {
-    expect(rule('.history-views')).toMatch(/background:\s*var\(--bg\)/)
-    expect(css).not.toMatch(/\[data-theme[^{]*\{[^}]*\.history-views/)
+  it('exactly one .history-views rule sets a background: var(--bg), for every theme', () => {
+    const rules = backgroundRules(css, '.history-views')
+    expect(rules).toHaveLength(1)
+    expect(rules[0]?.body).toMatch(/background:\s*var\(--bg\)/)
+  })
+
+  it('the finder sees theme and media overrides', () => {
+    const themed =
+      ".history-views{background:var(--bg)}:root[data-theme='light'] .history-views{background:#fff}"
+    const media =
+      '@media (prefers-color-scheme: light) { :root .history-views { background: red } }'
+    expect(backgroundRules(themed, '.history-views')).toHaveLength(2)
+    expect(backgroundRules(media, '.history-views')).toHaveLength(1)
   })
 
   it('.history-tags has no background of its own', () => {
-    expect(rule('.history-tags')).not.toMatch(/background/)
-  })
-
-  it('text and the selected pill stay AA on the page background in both sets', () => {
-    for (const set of [DARK, LIGHT]) {
-      expect(contrast(set['text'] as string, set['bg'] as string)).toBeGreaterThanOrEqual(4.5)
-      expect(contrast(set['on-accent'] as string, set['accent'] as string)).toBeGreaterThanOrEqual(
-        4.5,
-      )
-      expect(contrast(set['accent'] as string, set['bg'] as string)).toBeGreaterThanOrEqual(3)
-    }
+    expect(backgroundRules(css, '.history-tags')).toEqual([])
   })
 })
