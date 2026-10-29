@@ -107,6 +107,35 @@ def test_theme_column_is_added_to_existing_rows_as_system(
     command.upgrade(alembic_config, "head")
 
 
+def test_youtube_title_column_is_nullable_and_old_rows_keep_null(
+    alembic_config: Config, test_db_url: str
+) -> None:
+    """0004 (#326) is expand-only: a nullable column, old rows get NULL; it rolls back."""
+    command.upgrade(alembic_config, "0003")
+    run(
+        _exec(
+            test_db_url,
+            "INSERT INTO users (id, email, password_hash) VALUES (:u, 'a@b.c', 'x')",
+            u=USER,
+        )
+    )
+    run(
+        _exec(
+            test_db_url,
+            "INSERT INTO youtube_recent_links (user_id, url) VALUES (:u, 'https://youtu.be/x')",
+            u=USER,
+        )
+    )
+    command.upgrade(alembic_config, "head")
+
+    def title(conn: Connection) -> Any:
+        return conn.execute(text("SELECT title FROM youtube_recent_links")).scalar_one()
+
+    assert run(_with_conn(test_db_url, title)) is None
+    command.downgrade(alembic_config, "0003")
+    command.upgrade(alembic_config, "head")
+
+
 def test_single_migration_head(alembic_config: Config) -> None:
     assert len(ScriptDirectory.from_config(alembic_config).get_heads()) == 1
 

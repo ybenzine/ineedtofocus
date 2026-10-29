@@ -1,11 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SettingsContext } from '../settings/SettingsContext.ts'
 import { SettingsStore } from '../settings/store.ts'
 import AudioControls from './AudioControls.tsx'
 import { LocalAudioSourceStore, MemoryYoutubeLinkStore, YOUTUBE_LINK_KEY } from './audioSource.ts'
 import { MemoryBackgroundVolumeStore, RainPlayer } from './rain.ts'
-import { httpYoutubeLinksApi } from './youtubeLinksApi.ts'
+import { httpYoutubeLinksApi, type RecentLink } from './youtubeLinksApi.ts'
 import {
   API_TIMEOUT_MS,
   PLAYER_ERROR_MESSAGE,
@@ -41,6 +41,7 @@ function fakeYoutube() {
       setLoop: vi.fn(),
       nextVideo: vi.fn(),
       getPlaylistIndex: vi.fn(() => undefined as number | undefined),
+      getVideoData: vi.fn(() => ({ title: '' })),
       getPlaylist: vi.fn(() => [ID, ID2, 'ccccccccccc'] as string[] | null),
       destroy: vi.fn(),
     }
@@ -58,17 +59,20 @@ function fakeYoutube() {
 function setup(
   options: {
     paused?: boolean
-    links?: string[]
-    list?: () => Promise<string[]>
+    links?: (string | RecentLink)[]
+    list?: () => Promise<RecentLink[]>
     linkStore?: MemoryYoutubeLinkStore
     loadApi?: () => Promise<YtNamespace>
     settings?: SettingsStore
   } = {},
 ) {
   const fake = fakeYoutube()
+  const saved = (options.links ?? []).map((l) =>
+    typeof l === 'string' ? { url: l, title: null } : l,
+  )
   const api = {
-    list: vi.fn(options.list ?? (async () => options.links ?? [])),
-    use: vi.fn(async (url: string) => [url, ...(options.links ?? [])]),
+    list: vi.fn(options.list ?? (async () => saved)),
+    use: vi.fn(async (url: string, title?: string) => [{ url, title: title ?? null }, ...saved]),
   }
   const settings = options.settings ?? new SettingsStore()
   const rain = new RainPlayer({
@@ -123,7 +127,7 @@ describe('YouTube background audio (AC8.4)', () => {
     expect(options.playerVars).toMatchObject({ loop: 1, playlist: ID })
     expect(options.host).toBe('https://www.youtube-nocookie.com')
     expect(JSON.stringify(options)).not.toContain('tracking')
-    expect(t.api.use).toHaveBeenCalledWith(`https://youtu.be/${ID}?si=tracking`)
+    expect(t.api.use).toHaveBeenCalledWith(`https://youtu.be/${ID}?si=tracking`, undefined)
     expect(t.linkStore.load()).toBe(`https://youtu.be/${ID}?si=tracking`)
     // The player's container is shown, never hidden.
     expect(t.players[0].mount.parentElement).not.toHaveAttribute('hidden')
@@ -417,43 +421,131 @@ describe('problems leave the session alone (AC8.5)', () => {
   })
 })
 
+function videoData(player: YtPlayer) {
+  return vi.mocked(player.getVideoData as NonNullable<YtPlayer['getVideoData']>)
+}
+
+function nowPlaying(): HTMLElement {
+  return document.querySelector('.youtube-now-playing') as HTMLElement
+}
+
+describe('titles (#326)', () => {
+  const URL = `https://youtu.be/${ID}`
+
+  it('shows the player title next to the icon, and sends it once', async () => {
+    const t = setup()
+    await paste(URL)
+    await waitFor(() => expect(t.players).toHaveLength(1))
+    expect(within(nowPlaying()).getByText('YouTube video')).toBeInTheDocument() // until it is known
+    videoData(t.players[0]).mockReturnValue({ title: 'Quiet piano for focus' })
+    await t.ready()
+    expect(within(nowPlaying()).getByTitle('Quiet piano for focus')).toBeInTheDocument()
+    expect(t.api.use).toHaveBeenLastCalledWith(URL, 'Quiet piano for focus')
+    // The same title again is not sent again.
+    await act(async () => t.players[0].options.events.onStateChange({ data: 1 }))
+    expect(t.api.use).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads the title when the video starts, and follows a playlist', async () => {
+    const t = setup()
+    await paste(`https://www.youtube.com/playlist?list=${LIST}`)
+    await waitFor(() => expect(t.players).toHaveLength(1))
+    await t.ready()
+    expect(within(nowPlaying()).getByText('YouTube playlist')).toBeInTheDocument()
+    expect(t.api.use).toHaveBeenCalledTimes(1)
+    const data = videoData(t.players[0])
+    data.mockReturnValue({ title: 'First song' })
+    await act(async () => t.players[0].options.events.onStateChange({ data: 1 }))
+    expect(within(nowPlaying()).getByTitle('First song')).toBeInTheDocument()
+    data.mockReturnValue({ title: 'Second song' })
+    await act(async () => t.players[0].options.events.onStateChange({ data: 1 }))
+    expect(within(nowPlaying()).getByTitle('Second song')).toBeInTheDocument()
+    expect(t.api.use).toHaveBeenLastCalledWith(
+      `https://www.youtube.com/playlist?list=${LIST}`,
+      'Second song',
+    )
+  })
+
+  it('shows the saved title for the link before it plays again', async () => {
+    const linkStore = new MemoryYoutubeLinkStore()
+    linkStore.save(URL)
+    setup({ linkStore, links: [{ url: URL, title: 'Saved title' }] })
+    await waitFor(() => expect(screen.getAllByTitle('Saved title')).toHaveLength(2)) // now playing + recent
+  })
+
+  it('keeps the fallback when the player cannot say or throws', async () => {
+    const t = setup()
+    await paste(URL)
+    await waitFor(() => expect(t.players).toHaveLength(1))
+    videoData(t.players[0]).mockImplementation(() => {
+      throw new Error('not ready')
+    })
+    await t.ready()
+    expect(within(nowPlaying()).getByText('YouTube video')).toBeInTheDocument()
+    expect(t.api.use).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('recent links (AC8.6)', () => {
   it('lists the saved links and plays one with a single tap', async () => {
-    const t = setup({ links: [`https://youtu.be/${ID}`, `https://www.youtube.com/watch?v=${ID2}`] })
+    const t = setup({
+      links: [
+        { url: `https://youtu.be/${ID}`, title: 'First one' },
+        { url: `https://www.youtube.com/watch?v=${ID2}`, title: 'Second one' },
+      ],
+    })
     const list = await screen.findByRole('list', { name: 'Recent YouTube links' })
     expect(list.querySelectorAll('li')).toHaveLength(2)
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: `Video ${ID2}` }))
+      fireEvent.click(screen.getByRole('button', { name: 'Second one' }))
     })
     await waitFor(() => expect(t.players).toHaveLength(1))
     expect(t.players[0].options.videoId).toBe(ID2)
-    expect(t.api.use).toHaveBeenCalledWith(`https://www.youtube.com/watch?v=${ID2}`)
+    expect(t.api.use).toHaveBeenCalledWith(`https://www.youtube.com/watch?v=${ID2}`, undefined)
   })
 
   it('shows each video or playlist once, keeping the newest entry (#249)', async () => {
     setup({
       links: [
-        `https://youtu.be/${ID}?t=5`,
+        { url: `https://youtu.be/${ID}?t=5`, title: 'Newest' },
         `https://www.youtube.com/watch?v=${ID2}`,
         `https://www.youtube.com/watch?v=${ID}&list=${LIST}`,
         `https://www.youtube.com/playlist?list=${LIST}`,
         `https://youtu.be/${ID2}`,
       ],
     })
-    await screen.findByRole('button', { name: `Video ${ID}` })
-    const names = screen
-      .getAllByRole('button')
-      .filter((b) => /^(Video|Playlist) /.test(b.textContent ?? ''))
-    expect(names.map((b) => b.textContent)).toEqual([
-      `Video ${ID}`,
-      `Video ${ID2}`,
-      `Playlist ${LIST}`,
-    ])
+    await screen.findByRole('button', { name: 'Newest' })
+    const names = screen.getAllByRole('button').filter((b) => /^YouTube /.test(b.textContent ?? ''))
+    expect(names.map((b) => b.textContent)).toEqual(['YouTube video', 'YouTube playlist'])
+    expect(screen.getAllByRole('listitem')).toHaveLength(3)
+  })
+
+  it('shows an icon and the title, or a generic name, never the id (#326)', async () => {
+    setup({
+      links: [
+        { url: `https://youtu.be/${ID}`, title: 'Rain on a tin roof' },
+        `https://youtu.be/${ID2}`,
+      ],
+    })
+    const titled = await screen.findByRole('button', { name: 'Rain on a tin roof' })
+    expect(titled.querySelector('svg[aria-hidden="true"]')).not.toBeNull()
+    const plain = screen.getByRole('button', { name: 'YouTube video' })
+    expect(plain.querySelector('svg[aria-hidden="true"]')).not.toBeNull()
+    expect(document.body.textContent).not.toContain(ID)
+    expect(document.body.textContent).not.toContain(ID2)
+  })
+
+  it('trims a long title but keeps the full one as its name and tooltip (#326)', async () => {
+    const title = 'Relaxing rain sounds for deep sleep and study'
+    setup({ links: [{ url: `https://youtu.be/${ID}`, title }] })
+    const button = await screen.findByRole('button', { name: title })
+    expect(button).toHaveTextContent('Relaxing rain…')
+    expect(button.querySelector('[title]')).toHaveAttribute('title', title)
   })
 
   it('never uses a stored string as a link target, and skips ones it cannot read', async () => {
     setup({ links: ['javascript:alert(1)', `https://youtu.be/${ID}`] })
-    await screen.findByRole('button', { name: `Video ${ID}` })
+    await screen.findByRole('button', { name: 'YouTube video' })
     expect(screen.getAllByRole('listitem')).toHaveLength(1)
     expect(document.querySelector('a[href]')).toBeNull()
     expect(document.querySelector('iframe')).toBeNull() // only the API builds it, from the id
@@ -470,12 +562,12 @@ describe('recent links (AC8.6)', () => {
 
 describe('a slow first fetch', () => {
   it('keeps a newer list when the first fetch finishes late', async () => {
-    let finish: (urls: string[]) => void = () => undefined
-    const t = setup({ list: () => new Promise<string[]>((resolve) => (finish = resolve)) })
+    let finish: (links: RecentLink[]) => void = () => undefined
+    const t = setup({ list: () => new Promise<RecentLink[]>((resolve) => (finish = resolve)) })
     await paste(`https://youtu.be/${ID}`)
-    await screen.findByRole('button', { name: `Video ${ID}` })
-    await act(async () => finish([`https://youtu.be/${ID2}`]))
-    expect(screen.queryByRole('button', { name: `Video ${ID2}` })).not.toBeInTheDocument()
+    await screen.findByRole('button', { name: 'YouTube video' })
+    await act(async () => finish([{ url: `https://youtu.be/${ID2}`, title: 'Late list' }]))
+    expect(screen.queryByRole('button', { name: 'Late list' })).not.toBeInTheDocument()
     expect(t.api.use).toHaveBeenCalled()
   })
 })
@@ -560,7 +652,7 @@ describe('httpYoutubeLinksApi', () => {
         new Response(JSON.stringify({ links: [{ url: 'https://youtu.be/x', last_used_at: 't' }] })),
     )
     vi.stubGlobal('fetch', fetchMock)
-    expect(await httpYoutubeLinksApi.list()).toEqual(['https://youtu.be/x'])
+    expect(await httpYoutubeLinksApi.list()).toEqual([{ url: 'https://youtu.be/x', title: null }])
     await httpYoutubeLinksApi.use('https://youtu.be/y')
     expect(fetchMock).toHaveBeenLastCalledWith(
       '/api/youtube-links',
@@ -569,6 +661,18 @@ describe('httpYoutubeLinksApi', () => {
         body: JSON.stringify({ url: 'https://youtu.be/y' }),
       }),
     )
+    await httpYoutubeLinksApi.use('https://youtu.be/y', 'A title')
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/youtube-links',
+      expect.objectContaining({
+        body: JSON.stringify({ url: 'https://youtu.be/y', title: 'A title' }),
+      }),
+    )
+    await httpYoutubeLinksApi.use('https://youtu.be/y', 'é'.repeat(250))
+    const sent = JSON.parse(
+      (fetchMock.mock.lastCall as unknown as [string, { body: string }])[1].body,
+    )
+    expect(Array.from(sent.title)).toHaveLength(200)
     fetchMock.mockImplementation(async () => new Response('no', { status: 401 }))
     await expect(httpYoutubeLinksApi.list()).rejects.toThrow()
     vi.unstubAllGlobals()

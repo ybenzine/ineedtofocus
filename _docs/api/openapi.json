@@ -918,6 +918,19 @@
       "YoutubeLinkIn": {
         "additionalProperties": false,
         "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The video or playlist title the player reported, at most 200 characters. Optional: when it is missing or blank, a title already saved for this video or playlist is kept; when present it replaces the saved one.",
+            "title": "Title"
+          },
           "url": {
             "maxLength": 2048,
             "title": "Url",
@@ -937,6 +950,18 @@
             "title": "Last Used At",
             "type": "string"
           },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until the player has reported one",
+            "title": "Title"
+          },
           "url": {
             "title": "Url",
             "type": "string"
@@ -944,6 +969,7 @@
         },
         "required": [
           "url",
+          "title",
           "last_used_at"
         ],
         "title": "YoutubeLinkOut",

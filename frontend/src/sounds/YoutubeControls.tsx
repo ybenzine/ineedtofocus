@@ -7,13 +7,9 @@ import { useSettingsStore, useSettingsState } from '../settings/SettingsContext.
 import { LocalYoutubeLinkStore, type YoutubeLinkStore } from './audioSource.ts'
 import YoutubePlayer from './youtubePlayer.tsx'
 import { loadYoutubeApi, type LoadYoutubeApi } from './ytApi.ts'
-import {
-  checkYoutubeLink,
-  describeYoutubeLink,
-  parseYoutubeLink,
-  type YoutubeLink,
-} from './youtubeLink.ts'
-import { httpYoutubeLinksApi, type YoutubeLinksApi } from './youtubeLinksApi.ts'
+import { checkYoutubeLink, parseYoutubeLink, type YoutubeLink } from './youtubeLink.ts'
+import { httpYoutubeLinksApi, type RecentLink, type YoutubeLinksApi } from './youtubeLinksApi.ts'
+import YoutubeLabel from './YoutubeLabel.tsx'
 import RangeInput from '../RangeInput.tsx'
 
 export const INVALID_LINK_MESSAGE =
@@ -56,53 +52,69 @@ export default function YoutubeControls({
   })
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [recent, setRecent] = useState<YoutubeLink[]>([])
+  const [recent, setRecent] = useState<{ link: YoutubeLink; title: string | null }[]>([])
+  // The title the player reported for the link now playing.
+  const [playing, setPlaying] = useState<{ url: string; title: string } | null>(null)
 
   // Set once a link has been used: a slower first fetch must not overwrite that newer list.
   const usedSinceMount = useRef(false)
 
-  function showRecent(urls: string[]) {
+  function showRecent(items: RecentLink[]) {
     // One entry per video or playlist id, the newest (first) one: the server's rule (#249).
     const seen = new Set<string>()
-    setRecent(
-      urls
-        .map((url) => parseYoutubeLink(url))
-        .filter((parsed): parsed is YoutubeLink => {
-          if (parsed === null) return false
-          const key = `${parsed.target.kind}:${parsed.target.id}`
-          if (seen.has(key)) return false
-          seen.add(key)
-          return true
-        })
-        .slice(0, 5),
-    )
+    const shown: { link: YoutubeLink; title: string | null }[] = []
+    for (const item of items) {
+      const parsed = parseYoutubeLink(item.url)
+      if (parsed === null) continue
+      const key = `${parsed.target.kind}:${parsed.target.id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      shown.push({ link: parsed, title: item.title })
+    }
+    setRecent(shown.slice(0, 5))
   }
 
   useEffect(() => {
     const abort = new AbortController()
     api.list(abort.signal).then(
-      (urls) => {
-        if (!usedSinceMount.current) showRecent(urls)
+      (items) => {
+        if (!usedSinceMount.current) showRecent(items)
       },
       () => undefined,
     )
     return () => abort.abort()
   }, [api])
 
-  function choose(chosen: YoutubeLink) {
-    setError(null)
-    setText('')
-    setLink(chosen)
-    linkStore.save(chosen.url)
-    // Remembering the link is best effort: playback never waits for it.
-    api.use(chosen.url).then(
-      (urls) => {
+  // Remembering the link is best effort: playback never waits for it.
+  function remember(url: string, title?: string) {
+    api.use(url, title).then(
+      (items) => {
         usedSinceMount.current = true
-        showRecent(urls)
+        showRecent(items)
       },
       () => undefined,
     )
   }
+
+  function choose(chosen: YoutubeLink) {
+    setError(null)
+    setText('')
+    setLink(chosen)
+    setPlaying(null)
+    linkStore.save(chosen.url)
+    remember(chosen.url)
+  }
+
+  // The label of the link now playing: the player's own title, else the one saved with it.
+  const nowTitle =
+    link === null
+      ? null
+      : playing?.url === link.url
+        ? playing.title
+        : (recent.find(
+            (item) =>
+              item.link.target.kind === link.target.kind && item.link.target.id === link.target.id,
+          )?.title ?? null)
 
   function submit(event: FormEvent) {
     event.preventDefault()
@@ -121,7 +133,14 @@ export default function YoutubeControls({
             playing={!paused}
             volume={volume}
             loadApi={loadApi}
+            onTitle={(title) => {
+              setPlaying({ url: link.url, title })
+              remember(link.url, title)
+            }}
           />
+          <p className="youtube-now-playing">
+            <YoutubeLabel kind={link.target.kind} title={nowTitle} />
+          </p>
           <div className="timer-volume">
             <label htmlFor={volumeId}>YouTube volume</label>
             <RangeInput
@@ -165,9 +184,9 @@ export default function YoutubeControls({
       {recent.length > 0 && (
         <ul className="youtube-recent" aria-label="Recent YouTube links">
           {recent.map((item) => (
-            <li key={item.url}>
-              <button type="button" className="secondary" onClick={() => choose(item)}>
-                {describeYoutubeLink(item)}
+            <li key={item.link.url}>
+              <button type="button" className="secondary" onClick={() => choose(item.link)}>
+                <YoutubeLabel kind={item.link.target.kind} title={item.title} />
               </button>
             </li>
           ))}

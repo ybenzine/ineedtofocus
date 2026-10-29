@@ -11,6 +11,8 @@ export interface YtPlayer {
   nextVideo(): void
   getPlaylist(): string[] | null | undefined
   getPlaylistIndex(): number | undefined
+  /** The title of the video loaded now; empty or missing until the player knows it. */
+  getVideoData?(): { title?: string } | undefined
   destroy(): void
 }
 
@@ -35,6 +37,7 @@ export type LoadYoutubeApi = () => Promise<YtNamespace>
 
 export const YT_ENDED = 0
 export const YT_PLAYING = 1
+export const YT_CUED = 5
 /** Video not found (100), embedding not allowed (101, 150): only that item is lost. */
 export const SKIPPABLE_ERRORS = [100, 101, 150]
 /** Used when the player can't say how many items the playlist has. */
