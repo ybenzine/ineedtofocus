@@ -1,6 +1,6 @@
 // Edit and archive on History (F11), through the real HTTP clients against the fake server.
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import Dexie from 'dexie'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HttpArchiveApi } from '../archive/api.ts'
@@ -166,6 +166,23 @@ describe('editing a session (AC11.1)', () => {
     await waitFor(() => expect(server.editRequests).toHaveLength(1))
     expect(server.editRequests[0].body).toEqual({ goal: null })
     expect(server.get(record.id)).toMatchObject({ goal: null })
+  })
+
+  it('has no goal count or times note, one field per row, Save and Cancel sharing the last row', async () => {
+    await syncedSession({ goal: 'Keep me' })
+    renderScreen()
+    await screen.findByText('Keep me')
+    fireEvent.click(screen.getByRole('button', { name: /^Edit session/ }))
+    const form = screen.getByRole('form', { name: /^Edit session from/ })
+    expect(within(form).queryByText(/\/120/)).not.toBeInTheDocument()
+    expect(within(form).queryByText(/can’t be changed/)).not.toBeInTheDocument()
+    const children = Array.from(form.children)
+    expect(children).toHaveLength(3)
+    expect(children[0]).toContainElement(screen.getByLabelText('Tag'))
+    expect(children[1]).toContainElement(screen.getByLabelText('Goal'))
+    expect(children[2]).toContainElement(screen.getByRole('button', { name: 'Save' }))
+    expect(children[2]).toContainElement(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByLabelText('Tag')).toHaveFocus()
   })
 
   it('sends nothing when nothing changed, and Cancel discards the form', async () => {

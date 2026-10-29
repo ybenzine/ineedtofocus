@@ -984,17 +984,15 @@ function EditForm({
           maxLength={GOAL_MAX_LENGTH}
           onChange={(event) => setGoal(oneLine(event.target.value))}
         />
-        <p className="field-hint">
-          {goal.length}/{GOAL_MAX_LENGTH}
-        </p>
       </div>
-      <p className="field-hint">Times and durations can’t be changed.</p>
-      <button type="submit" className="primary" disabled={busy}>
-        Save
-      </button>
-      <button type="button" onClick={onCancel}>
-        Cancel
-      </button>
+      <div className="history-edit-actions">
+        <button type="submit" className="primary" disabled={busy}>
+          Save
+        </button>
+        <button type="button" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
     </form>
   )
 }
