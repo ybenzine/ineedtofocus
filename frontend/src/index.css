@@ -375,11 +375,18 @@ main > p {
   min-width: 0;
 }
 
-.setup legend {
-  padding: 0 0.25rem;
-  font-size: 0.8125rem;
-  font-weight: 500;
-  color: var(--muted);
+/* Fieldset legends are centred pills on the fieldset's top border, on New session and Settings (#330). */
+.setup legend,
+.settings fieldset.field legend {
+  font-weight: 600;
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 0 10px;
+  display: table;
+  margin: 0 auto;
+  max-width: 100%;
+  color: var(--text);
 }
 
 .choices {
@@ -587,12 +594,6 @@ main > p {
 .settings fieldset.field {
   margin: 0;
   min-width: 0;
-}
-
-.settings fieldset.field legend {
-  padding: 0 0.25rem;
-  font-size: 0.9375rem;
-  color: var(--muted);
 }
 
 .settings .field > label:has(input[type='checkbox']) {
