@@ -192,14 +192,46 @@ def _check_youtube_url(value: str) -> str:
 YoutubeUrl = Annotated[str, Field(max_length=2048), AfterValidator(_check_youtube_url)]
 
 
+YOUTUBE_TITLE_MAX_LENGTH = 200
+
+
+def _clean_title(value: str | None) -> str | None:
+    """Trim the title; a blank one counts as none. Length is checked before this (so an error
+    never needs to repeat the value)."""
+    if value is None:
+        return None
+    # Postgres text cannot hold NUL, and a lone surrogate (valid in JSON) cannot be UTF-8.
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("Title contains invalid characters") from None
+    if "\x00" in value:
+        raise ValueError("Title contains invalid characters")
+    return value.strip() or None
+
+
+YoutubeTitle = Annotated[
+    str | None, Field(max_length=YOUTUBE_TITLE_MAX_LENGTH), AfterValidator(_clean_title)
+]
+
+
 class YoutubeLinkIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     url: YoutubeUrl
+    title: YoutubeTitle = Field(
+        default=None,
+        description=(
+            "The video or playlist title the player reported, at most 200 characters. Optional: "
+            "when it is missing or blank, a title already saved for this video or playlist is "
+            "kept; when present it replaces the saved one."
+        ),
+    )
 
 
 class YoutubeLinkOut(BaseModel):
     url: str
+    title: str | None = Field(description="Null until the player has reported one")
     last_used_at: datetime
 
 
@@ -265,7 +297,7 @@ def youtube_key(url: str) -> str:
     return f"url:{url.strip()}"
 
 
-_LinkRow = tuple[uuid.UUID, str, datetime]  # id, url, last_used_at
+_LinkRow = tuple[uuid.UUID, str, str | None, datetime]  # id, url, title, last_used_at
 
 
 def _newest_per_key(rows: Sequence[_LinkRow]) -> list[_LinkRow]:
@@ -282,17 +314,24 @@ def _newest_per_key(rows: Sequence[_LinkRow]) -> list[_LinkRow]:
 
 async def _user_rows(db: DbSession, user: CurrentUser) -> list[_LinkRow]:
     result = await db.execute(
-        select(YoutubeRecentLink.id, YoutubeRecentLink.url, YoutubeRecentLink.last_used_at)
+        select(
+            YoutubeRecentLink.id,
+            YoutubeRecentLink.url,
+            YoutubeRecentLink.title,
+            YoutubeRecentLink.last_used_at,
+        )
         .where(YoutubeRecentLink.user_id == user.id)
         .order_by(YoutubeRecentLink.last_used_at.desc(), YoutubeRecentLink.id)
     )
-    return [(i, u, t) for i, u, t in result.all()]
+    return [(i, u, title, t) for i, u, title, t in result.all()]
 
 
 async def _recent(db: DbSession, user: CurrentUser) -> YoutubeLinksOut:
     # Rows written before #249 can hold one id under several URLs: collapse them on read.
     rows = _newest_per_key(await _user_rows(db, user))
-    return YoutubeLinksOut(links=[YoutubeLinkOut(url=r[1], last_used_at=r[2]) for r in rows])
+    return YoutubeLinksOut(
+        links=[YoutubeLinkOut(url=r[1], title=r[2], last_used_at=r[3]) for r in rows]
+    )
 
 
 @router.get("/youtube-links", responses=_ERRORS)
@@ -315,15 +354,18 @@ async def use_youtube_link(
     # row instead of failing with a 500.
     await db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(str(user.id), 0))))
     key = youtube_key(body.url)
-    stale = [row[0] for row in await _user_rows(db, user) if youtube_key(row[1]) == key]
+    same = [row for row in await _user_rows(db, user) if youtube_key(row[1]) == key]
+    stale = [row[0] for row in same]
+    # A new title wins; without one, keep the newest title already known for this id (#326).
+    title = body.title or next((row[2] for row in same if row[2]), None)
     if stale:
         await db.execute(delete(YoutubeRecentLink).where(YoutubeRecentLink.id.in_(stale)))
     await db.execute(
         insert(YoutubeRecentLink)
-        .values(user_id=user.id, url=body.url, last_used_at=func.clock_timestamp())
+        .values(user_id=user.id, url=body.url, title=title, last_used_at=func.clock_timestamp())
         .on_conflict_do_update(
             constraint="uq_youtube_recent_links_user_url",
-            set_={"last_used_at": func.clock_timestamp()},
+            set_={"title": title, "last_used_at": func.clock_timestamp()},
         )
     )
     keep = [row[0] for row in _newest_per_key(await _user_rows(db, user))]

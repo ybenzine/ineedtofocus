@@ -24,6 +24,8 @@ class YoutubeRecentLink(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE")
     )
     url: Mapped[str] = mapped_column(String(2048))
+    # The video or playlist title the player reported (#326). User content: never logged.
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
     last_used_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

@@ -112,8 +112,3 @@ function findTarget(parsed: URL, host: string): YoutubeTarget | null {
   if (list !== null && PLAYLIST_ID.test(list)) return { kind: 'playlist', id: list }
   return null
 }
-
-/** A label for the recent list. Plain text only: the pasted string is never an href. */
-export function describeYoutubeLink(link: YoutubeLink): string {
-  return `${link.target.kind === 'video' ? 'Video' : 'Playlist'} ${link.target.id}`
-}

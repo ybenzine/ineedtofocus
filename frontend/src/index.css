@@ -1004,3 +1004,19 @@ main.focus-screen {
   display: grid;
   gap: 0.5rem;
 }
+
+/* A YouTube link: the play-button icon, then the (trimmed) title (#326). */
+.youtube-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.youtube-icon {
+  flex: none;
+}
+
+.youtube-now-playing {
+  margin: 0;
+}

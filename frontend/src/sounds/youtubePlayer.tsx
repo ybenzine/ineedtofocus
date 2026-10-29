@@ -12,6 +12,7 @@ import {
   SKIPPED_ITEM_MESSAGE,
   SKIP_NOTE_MS,
   UNKNOWN_PLAYLIST_LENGTH,
+  YT_CUED,
   YT_ENDED,
   YT_PLAYING,
   loadYoutubeApi,
@@ -28,6 +29,8 @@ export interface YoutubePlayerProps {
   loadApi?: LoadYoutubeApi
   /** Told about a video that can't play, or a player that can't load; the message is shown here. */
   onProblem?: () => void
+  /** The title of the video now loaded, once the player knows it (and when it changes). */
+  onTitle?: (title: string) => void
 }
 
 export default function YoutubePlayer({
@@ -36,6 +39,7 @@ export default function YoutubePlayer({
   volume,
   loadApi = loadYoutubeApi,
   onProblem,
+  onTitle,
 }: YoutubePlayerProps) {
   const wrapper = useRef<HTMLDivElement>(null)
   const player = useRef<YtPlayer | null>(null)
@@ -43,6 +47,7 @@ export default function YoutubePlayer({
   const wantPlaying = useRef(playing)
   const wantVolume = useRef(volume)
   const problemHandler = useRef(onProblem)
+  const titleHandler = useRef(onTitle)
   const [message, setMessage] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
 
@@ -50,6 +55,7 @@ export default function YoutubePlayer({
     wantPlaying.current = playing
     wantVolume.current = volume
     problemHandler.current = onProblem
+    titleHandler.current = onTitle
   })
 
   const { kind, id } = target
@@ -61,6 +67,19 @@ export default function YoutubePlayer({
     let failuresInARow = 0
     let lastSkippedIndex: number | undefined
     let noteTimer: number | undefined
+    let lastTitle = ''
+    const reportTitle = () => {
+      if (cancelled) return
+      let title = ''
+      try {
+        title = created?.getVideoData?.()?.title?.trim() ?? ''
+      } catch {
+        // Not known yet.
+      }
+      if (title === '' || title === lastTitle) return
+      lastTitle = title
+      titleHandler.current?.(title)
+    }
     const fail = (text: string) => {
       if (cancelled) return
       setMessage(text)
@@ -92,8 +111,11 @@ export default function YoutubePlayer({
               created.setVolume(wantVolume.current)
               if (kind === 'playlist') created.setLoop(true)
               if (wantPlaying.current) created.playVideo()
+              reportTitle()
             },
             onStateChange: (event) => {
+              // The title is often only known once a video starts (and changes in a playlist).
+              if (event.data === YT_PLAYING || event.data === YT_CUED) reportTitle()
               if (event.data === YT_PLAYING) {
                 hasPlayed = true
                 failuresInARow = 0
