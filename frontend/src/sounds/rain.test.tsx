@@ -48,7 +48,7 @@ function fakeAudio(state: AudioContextState = 'running') {
     }),
     decodeAudioData: vi.fn(async (data: ArrayBuffer) => ({
       bytes: data.byteLength,
-      duration: 30.2,
+      duration: 56.2,
     })),
     createGain: vi.fn(() => {
       const gain = {
@@ -100,7 +100,7 @@ describe('RainPlayer', () => {
     expect(sources[0].loop).toBe(true)
     // Only the loop itself repeats, not the encoder's padding at either end.
     expect(sources[0].loopStart).toBe(0.1)
-    expect(sources[0].loopEnd).toBeCloseTo(30.1)
+    expect(sources[0].loopEnd).toBeCloseTo(56.1)
     expect(sources[0].start).toHaveBeenCalledWith(0, 0.1)
     expect(sources[0].start).toHaveBeenCalled()
     expect(gains[0].gain.value).toBe(0.5)
@@ -302,14 +302,16 @@ describe('rain.mp3 (AC8.3)', () => {
     let peak = 0
     for (const s of samples) peak = Math.max(peak, Math.abs(s))
     expect(20 * Math.log10(peak)).toBeLessThanOrEqual(-1)
-    // The first difference approximates a high-pass: rain has plenty of energy up there.
+    // The first difference approximates a high-pass: white noise scores 2, a rumble under 1 kHz
+    // under 0.01. The real light-rain recording (#135, 44.1 kHz) scores about 0.08; the old
+    // generated hiss scored over 0.5.
     let total = 0
     let diff = 0
     for (let i = 1; i < samples.length; i++) {
       total += samples[i] * samples[i]
       diff += (samples[i] - samples[i - 1]) ** 2
     }
-    expect(diff / total).toBeGreaterThan(0.5)
+    expect(diff / total).toBeGreaterThan(0.03)
   })
 })
 

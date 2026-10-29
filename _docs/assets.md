@@ -4,17 +4,17 @@ Every third-party or generated asset shipped with the app, with its source and l
 
 ## Alert sounds (F5, AC5.1)
 
-| File                               | Used for                                                       | Length / size | Format                      |
-| ---------------------------------- | -------------------------------------------------------------- | ------------- | --------------------------- |
+| File                               | Used for                                                       | Length / size | Format                       |
+| ---------------------------------- | -------------------------------------------------------------- | ------------- | ---------------------------- |
 | `frontend/public/sounds/chime.mp3` | Interval chime (unlimited-timer reminders)                     | 4.55 s, 55 KB | MP3, mono, 44.1 kHz, 96 kbps |
 | `frontend/public/sounds/bell.mp3`  | End bell (automatic phase change, session end, 12 h auto-stop) | 2.85 s, 34 KB | MP3, mono, 44.1 kHz, 96 kbps |
 
 Both are CC0 recordings from Freesound that Yacine chose (#254). CC0 needs no attribution; they are credited here anyway. The originals are not committed.
 
-| Shipped file | Title and author                                                                                    | Freesound URL                              | License | Original                                    |
-| ------------ | --------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------- | ------------------------------------------- |
-| `chime.mp3`  | "Bright Tibetan Bell Ding (B)" by steaq (`346328__steaq__bright-tibetan-bell-ding-b-note-cleaner.wav`) | https://freesound.org/people/steaq/sounds/346328/ | CC0 1.0 | WAV, 44.1 kHz/16-bit stereo, 15.5 s |
-| `bell.mp3`   | "Single chime" by LloydEvans09 (`185822__lloydevans09__single-chime.wav`)                           | https://freesound.org/people/LloydEvans09/sounds/185822/ | CC0 1.0 | WAV, 96 kHz/24-bit stereo, 7.7 s |
+| Shipped file | Title and author                                                                                       | Freesound URL                                            | License | Original                            |
+| ------------ | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- | ------- | ----------------------------------- |
+| `chime.mp3`  | "Bright Tibetan Bell Ding (B)" by steaq (`346328__steaq__bright-tibetan-bell-ding-b-note-cleaner.wav`) | https://freesound.org/people/steaq/sounds/346328/        | CC0 1.0 | WAV, 44.1 kHz/16-bit stereo, 15.5 s |
+| `bell.mp3`   | "Single chime" by LloydEvans09 (`185822__lloydevans09__single-chime.wav`)                              | https://freesound.org/people/LloydEvans09/sounds/185822/ | CC0 1.0 | WAV, 96 kHz/24-bit stereo, 7.7 s    |
 
 - **Processing** (`frontend/scripts/generate-sounds.mjs`, which holds the source URLs and the exact
   steps; run `node scripts/generate-sounds.mjs <chime-original.wav> <bell-original.wav>` from
@@ -37,34 +37,41 @@ previews (AC5.3) play the same files.
 
 ## Rain loop (F8, AC8.3)
 
-| File                             | Used for                    | Format                             | Length / size                                |
-| -------------------------------- | --------------------------- | ---------------------------------- | -------------------------------------------- |
-| `frontend/public/audio/rain.mp3` | Background rain (AC8.1-8.2) | MP3, mono, 22.05 kHz, 128 kbps CBR | 30.2 s (30 s loop + 0.1 s each side), 485 KB |
+| File                             | Used for                    | Format                                                  | Length / size                                |
+| -------------------------------- | --------------------------- | ------------------------------------------------------- | -------------------------------------------- |
+| `frontend/public/audio/rain.mp3` | Background rain (AC8.1-8.2) | MP3, mono, 44.1 kHz, VBR (LAME `-q:a 6`, about 63 kbps) | 56.2 s (56 s loop + 0.1 s each side), 490 KB |
 
-- **Source and license:** an original generated work, owned by the project, made by
-  `frontend/scripts/generate-rain.mjs` (seeded noise hiss plus random droplets). It contains no
-  third-party material. A generated loop is accepted for the MVP by the product manager's ruling
-  on #17; the sound is not a recording.
-- **Level:** integrated loudness -21.9 LUFS, true peak -11.7 dBFS (`ffmpeg -i rain.mp3 -af
-ebur128=peak=true -f null -`). That sits below the alerts at background volume 50.
-- **Spectrum:** broadband hiss up to Nyquist (11 kHz); about 17% of the energy is above 7 kHz and
-  31% below 1.5 kHz (`ffmpeg -af highpass=f=7000,astats`).
-- **Deterministic:** the synthesis uses a fixed seed; the committed file was produced by
-  `node scripts/generate-rain.mjs` (run from `frontend/`) and LAME 4.0
-  (`lame -q 0 -m m --cbr -b 128 --noreplaygain`, run by the script). CI does not encode; it uses
-  the committed file. Re-running with the same LAME gives the same bytes.
-- **Seamless loop:** the signal is exactly periodic over 30 s (the filter wraps around, droplet
-  tails wrap, the swell has whole cycles). MP3 decoders add or strip a little silence at each end
-  and browsers differ, so the file carries 0.1 s of the periodic signal on each side and the
-  player loops only `[0.1 s, 30.1 s)` with `loopStart`/`loopEnd` (`RAIN_LOOP_START`,
-  `RAIN_LOOP_END` in `src/sounds/rain.ts`). Tests decode the MP3 and check that no silent run
-  longer than 5 ms sits at either end of the looped region, with and without the decoder's delay
-  stripped.
+- **Source and license:** Yacine Benzine's own field recording of light rain, provided on #135
+  (2026-10-29) as `light_rain.wav` (48 kHz, 16-bit stereo, exactly 60 s, 11.5 MB). It is owned by the
+  project's author and product owner, so no third-party license or attribution applies. The WAV is
+  not committed; only the encoded MP3 ships. This replaces the generated loop of #17
+  (`generate-rain.mjs`, removed) and the Freesound/Commons candidates listed on #135, which Yacine
+  set aside in favour of his own recording.
+- **Processing:** `frontend/scripts/make-rain.mjs`, which holds the exact steps
+  (`node scripts/make-rain.mjs <light_rain.wav>` from `frontend/`; needs ffmpeg with libmp3lame, and
+  CI does not run it). In order: (1) **mono** (channels averaged) at 44.1 kHz; (2) **loop by
+  crossfade**: the last 4 s fade out (equal-power, quarter sine) under the first 4 s fading in, which
+  gives a 56 s loop whose end runs into its start; (3) **padding**: 0.1 s of the periodic signal on
+  each side; (4) **loudness**: +19.5 dB (the recording is -36 LUFS in stereo, about -41 LUFS as mono),
+  then a look-ahead limiter at -2 dBFS (5 ms attack, 80 ms release); (5) **encode** as VBR MP3.
+- **Measured on the shipped MP3** (`ffmpeg -i rain.mp3 -af ebur128=peak=true -f null -`): integrated
+  loudness **-22.5 LUFS** (range 2.5 LU), true peak **-1.2 dBFS**, sample peak -1.7 dBFS, **44.1 kHz**,
+  **489,888 bytes** (limit 600,000), 56.2 s. That sits below the alerts at background volume 50. The
+  recording's peaks are 20 dB or more above its average, so the limiter takes up to about 11 dB off
+  the rare loudest drops to reach this level.
+- **Spectrum:** energy up to 8 kHz and beyond; about 18 dB below the total level above 8 kHz and
+  10 dB below it above 4 kHz (`ffmpeg -af highpass=f=8000,astats`). Natural rain is darker than the
+  old synthetic hiss, so the test's high-frequency check was lowered (see the test comment).
+- **Seamless loop:** the crossfade makes the loop periodic, and MP3 decoders add or strip a little
+  silence at each end and browsers differ, so the player loops only `[0.1 s, 56.1 s)` with
+  `loopStart`/`loopEnd` (`RAIN_LOOP_START`, `RAIN_LOOP_END` in `src/sounds/rain.ts`). Tests decode the
+  MP3 and check that no silent run longer than 5 ms sits at either end of the looped region, and
+  that the wrap is no bigger a step than the rest, with and without the decoder's delay stripped.
 - **Offline:** it lives in `public/audio/`, so the service worker (#19) precaches it; the app loads
   it from `${import.meta.env.BASE_URL}audio/rain.mp3` and plays it through a looping Web Audio
   `AudioBufferSourceNode`.
-- **Listening check:** Yacine listened on 2026-10-23 and accepted it for the MVP; a real light-rain
-  recording replaces it in #135.
+- **Listening check:** pending Yacine's listen on the PR (the agent cannot listen; the numbers above
+  and the seam tests are what was checked).
 
 ## Typeface (#213)
 

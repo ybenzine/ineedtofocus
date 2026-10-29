@@ -14,12 +14,12 @@ export const RAIN_URL = `${import.meta.env.BASE_URL}audio/rain.mp3`
 
 /**
  * The loop inside the MP3. MP3 decoders add or strip a little silence at each end (encoder delay
- * and padding), so the file holds the 30 s periodic loop plus 0.1 s of the same signal on each
- * side (`scripts/generate-rain.mjs`), and only [start, end) is looped: always real rain, with no
+ * and padding), so the file holds the 56 s crossfaded loop plus 0.1 s of the same signal on each
+ * side (`scripts/make-rain.mjs`), and only [start, end) is looped: always real rain, with no
  * gap at the seam whichever way the browser decodes.
  */
 export const RAIN_LOOP_START = 0.1
-export const RAIN_LOOP_END = 30.1
+export const RAIN_LOOP_END = 56.1
 
 /** Gain ramp on start, pause and stop, so the noise never clicks (seconds). */
 export const FADE_SECONDS = 0.04
