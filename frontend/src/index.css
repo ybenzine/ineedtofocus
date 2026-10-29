@@ -780,7 +780,7 @@ main.focus-screen {
   max-width: 100%;
   box-sizing: border-box;
   padding: 0.25rem;
-  background: var(--surface);
+  background: var(--bg); /* the page, in both themes (#328) */
   border-radius: 0.75rem;
 }
 

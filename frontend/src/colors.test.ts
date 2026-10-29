@@ -376,3 +376,29 @@ describe('no colour literals outside the token blocks (#213, #214)', () => {
     }
   })
 })
+
+// #328: the History view switcher sits on the page background in both themes; it used to be a
+// --surface slab that stood out in light mode.
+describe('History view switcher background (#328)', () => {
+  const rule = (sel: string) =>
+    css.match(new RegExp(`(?:^|\\n)${sel.replace('.', '\\.')}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+
+  it('.history-views uses the page token, one rule for every theme', () => {
+    expect(rule('.history-views')).toMatch(/background:\s*var\(--bg\)/)
+    expect(css).not.toMatch(/\[data-theme[^{]*\{[^}]*\.history-views/)
+  })
+
+  it('.history-tags has no background of its own', () => {
+    expect(rule('.history-tags')).not.toMatch(/background/)
+  })
+
+  it('text and the selected pill stay AA on the page background in both sets', () => {
+    for (const set of [DARK, LIGHT]) {
+      expect(contrast(set['text'] as string, set['bg'] as string)).toBeGreaterThanOrEqual(4.5)
+      expect(contrast(set['on-accent'] as string, set['accent'] as string)).toBeGreaterThanOrEqual(
+        4.5,
+      )
+      expect(contrast(set['accent'] as string, set['bg'] as string)).toBeGreaterThanOrEqual(3)
+    }
+  })
+})
