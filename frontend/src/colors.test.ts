@@ -322,6 +322,37 @@ describe('no colour literals outside the token blocks (#213, #214)', () => {
     expect(css).toMatch(/background:\s*Highlight/)
   })
 
+  it('SVG colour attributes use only currentColor, none, a url() or the YouTube brand colours (#326)', () => {
+    // The brand colours are pinned, for the YouTube icon only: YouTube red and white.
+    const BRAND: Record<string, string[]> = {
+      'sounds/YoutubeLabel.tsx': ['red', 'white'],
+    }
+    const attribute =
+      /\b(?:fill|stroke|stop-color|stopColor|flood-color|floodColor|color)=(?:"([^"]*)"|\{'([^']*)'\})/g
+    const SAFE = new Set(['none', 'currentcolor', 'transparent', 'inherit'])
+    const offending: string[] = []
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name)
+        if (entry.isDirectory()) walk(path)
+        else if (/\.tsx$/.test(entry.name) && !/\.test\.tsx$/.test(entry.name)) {
+          const rel = path.slice(resolve(root, 'src').length + 1)
+          for (const m of withoutComments(readFileSync(path, 'utf8')).matchAll(attribute)) {
+            const value = (m[1] ?? m[2] ?? '').trim().toLowerCase()
+            if (SAFE.has(value) || value.startsWith('url(')) continue
+            if (BRAND[rel]?.includes(value)) continue
+            offending.push(`${rel}: ${m[0]}`)
+          }
+        }
+      }
+    }
+    walk(resolve(root, 'src'))
+    expect(offending).toEqual([])
+    // The scan sees what it should.
+    const probe = '<svg><rect fill="#123456" /><path fill="blue" stroke={\'tomato\'} /></svg>'
+    expect([...probe.matchAll(attribute)]).toHaveLength(3)
+  })
+
   it('no component sets a colour literal', () => {
     const files: string[] = []
     const walk = (dir: string) => {

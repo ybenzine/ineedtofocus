@@ -513,6 +513,19 @@ def test_326_a_title_of_the_wrong_type_is_refused_without_echoing_it(
     assert "secrettitle" not in r.text
 
 
+@pytest.mark.parametrize("bad", ["badz\x00title", "badz\ud800title"], ids=["nul", "lone-surrogate"])
+def test_326_a_title_postgres_cannot_store_is_422_without_echoing_it(
+    client: TestClient, bad: str
+) -> None:
+    body = json.dumps({"url": link(1), "title": bad})  # ASCII escapes keep the surrogate
+    r = client.post(
+        "/api/youtube-links", content=body, headers={"Content-Type": "application/json"}
+    )
+    assert r.status_code == 422
+    assert "badz" not in r.text
+    assert urls(client) == []
+
+
 # One list of cases shared with the client check (frontend/src/sounds/youtubeLink.test.ts).
 # `server_ok` is what the server says about `url` as written (null: depends on the Unicode version
 # of the Python in use, so not asserted); `sent` is what the client posts when it accepts the link.

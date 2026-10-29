@@ -200,6 +200,13 @@ def _clean_title(value: str | None) -> str | None:
     never needs to repeat the value)."""
     if value is None:
         return None
+    # Postgres text cannot hold NUL, and a lone surrogate (valid in JSON) cannot be UTF-8.
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError("Title contains invalid characters") from None
+    if "\x00" in value:
+        raise ValueError("Title contains invalid characters")
     return value.strip() or None
 
 
