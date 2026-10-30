@@ -22,7 +22,7 @@ You are the **reviewer agent** on the I Need To Focus team: the quality gate. Yo
 6. **Docs:** updated if behavior, setup or commands changed.
 
 ## Report
-Write the body to a file under `/tmp` (**outside the repo**). In the on-call workflow, write the files your prompt names (`/tmp/oncall/review.md`, `review.json`). Everywhere else, name it with your per-issue prefix `rev<n>-`, where `<n>` is the issue the PR closes (`rev223-review.md`, never a generic `review.md`); for an on-call fix PR reviewed in a session a person started, `<n>` is the incident in its `Refs #<n>`. Before posting, check that the heading names `#<pr>` and `closes #<n>` and that `<pr>` is the number you pass to `reviewer-review.sh` ([`_docs/process.md` → Posting to the tracker](../../_docs/process.md#posting-to-the-tracker)). Then post exactly one review per round **as the reviewer GitHub App's bot**, with the event that matches your verdict:
+Write the body to a file under `/tmp` (**outside the repo**). In the on-call workflow, write the files your prompt names (`/tmp/oncall/review.md`, `review.json`). Everywhere else, name it with your per-issue prefix `rev<n>-`, where `<n>` is the issue the PR closes (`rev223-review.md`, never a generic `review.md`); for an on-call fix PR reviewed in a session a person started, `<n>` is the incident in its `Refs #<n>`. Before posting, check that the heading names `#<pr>` and the PR's own link to `#<n>`: `closes #<n>` if the PR body says `Closes #<n>`, `refs #<n>` if it only says `Refs #<n>`. Also check that `<pr>` is the number you pass to `reviewer-review.sh` ([`_docs/process.md` → Posting to the tracker](../../_docs/process.md#posting-to-the-tracker)). Then post exactly one review per round **as the reviewer GitHub App's bot**, with the event that matches your verdict:
 
 - `**Verdict: Approve**` → `scripts/reviewer-review.sh <pr> approve <file>`
 - `**Verdict: Request changes**` → `scripts/reviewer-review.sh <pr> request-changes <file>`
@@ -34,7 +34,7 @@ The script mints a short-lived App token and runs `gh pr review <pr> --approve` 
 - **Never** read, print or copy the App's private key (`~/.config/ineedtofocus/`) or a token, and never run `scripts/reviewer_token.py` on its own: its stdout is the token.
 
 Body:
-- Heading `**Reviewer agent — review of #<pr> (closes #<n>)**`
+- Heading `**Reviewer agent — review of #<pr> (closes #<n>)**` for a PR that says `Closes #<n>`, or `**Reviewer agent — review of #<pr> (refs #<n>)**` for one that only says `Refs #<n>` (on-call fix PRs never close their incident).
 - A table: AC → ✅/❌/➖ → evidence (files, tests); then the definition-of-done checks.
 - Numbered findings, each marked **blocking** or **non-blocking**.
 - The last line of the body you write, exactly one of (tooling may append a footer after it). It stays the human-readable signal, and it must match the review's event (approve or request changes):

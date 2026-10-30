@@ -1004,6 +1004,16 @@ def test_the_review_prompt_never_posts() -> None:
     assert "/tmp/oncall/review.md" in text and "/tmp/oncall/review.json" in text
 
 
+def test_the_review_heading_refs_the_incident() -> None:
+    # On-call fix PRs only say `Refs #<n>`, so the heading must not claim they close it (#233).
+    text = o.review_prompt(12, 7)
+    assert "**Reviewer agent — review of #12 (refs #7)**" in text
+    assert "closes #7" not in text.lower()
+    definition = (o.REPO / ".claude" / "agents" / "reviewer.md").read_text()
+    assert "review of #<pr> (closes #<n>)**` for a PR that says `Closes #<n>`" in definition
+    assert "review of #<pr> (refs #<n>)**` for one that only says `Refs #<n>`" in definition
+
+
 def test_the_reviewer_definition_keeps_the_on_call_review_files() -> None:
     # oncall.yml runs `claude -p --agent reviewer`, which loads this definition.
     # Its per-issue `rev<n>-` naming must not override the files the job uploads.
