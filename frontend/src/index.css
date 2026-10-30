@@ -668,7 +668,8 @@ main.focus-screen {
 
 /* The timer screen follows the approved mockup (#327): _docs/design/timer-screen-mockup.html. */
 .timer-screen {
-  /* Fill the page so the audio card and the buttons sit at the bottom. */
+  /* Fill the page so the bottom area (audio card, Keep screen awake) sits at the bottom; Pause
+     and Stop sit below the tag and goal line (AC9.4). */
   min-height: calc(100dvh - 3rem);
   align-items: stretch;
 }
@@ -776,7 +777,8 @@ main.focus-screen {
   text-align: center;
 }
 
-/* Audio card, then Pause and Stop, pinned to the bottom. */
+/* The audio card, then Keep screen awake, pinned to the bottom. The controls sit above it, below
+   the tag and goal line (AC9.4). */
 .timer-bottom {
   margin-block-start: auto;
   display: flex;
