@@ -16,7 +16,7 @@ import { useOnline } from '../sounds/useOnline.ts'
 import YoutubeSetup from '../sounds/YoutubeSetup.tsx'
 import { checkYoutubeLink } from '../sounds/youtubeLink.ts'
 import type { YoutubeLinksApi } from '../sounds/youtubeLinksApi.ts'
-import { AUDIO_SOURCES, GOAL_MAX_LENGTH, type AudioSource } from './options.ts'
+import { AUDIO_SOURCES, GOAL_MAX_LENGTH, tagLabel, type AudioSource } from './options.ts'
 import type { PreferencesStore } from './preferences.ts'
 
 const AUDIO_LABELS: Record<AudioSource, string> = { none: 'None', rain: 'Rain', youtube: 'YouTube' }
@@ -44,10 +44,6 @@ export interface SessionSetupProps {
   onStart: (request: SessionRequest) => void | Promise<void>
   /** Injectable for tests; the recent YouTube links. */
   youtubeApi?: YoutubeLinksApi
-}
-
-function capitalize(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 /** Whole numbers only; anything else becomes NaN so range validation rejects it. */
@@ -320,7 +316,7 @@ export default function SessionSetup({
                 checked={tag === t}
                 onChange={() => setTag(t)}
               />
-              <span>{capitalize(t)}</span>
+              <span>{tagLabel(t)}</span>
             </label>
           ))}
         </div>
