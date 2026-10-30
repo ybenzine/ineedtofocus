@@ -712,6 +712,7 @@ main.focus-screen {
   align-items: center;
   justify-content: center;
   gap: 0.375rem;
+  container-type: inline-size;
 }
 
 .timer-clock {
@@ -720,6 +721,11 @@ main.focus-screen {
   line-height: 1;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
+}
+
+/* 8 characters (10:00:00 to 12:00:00, #358) are about 4.3 em wide: scale to the ring's content box. */
+.timer-clock-long {
+  font-size: min(4rem, 22cqw);
 }
 
 .on-break .timer-clock {
