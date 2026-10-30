@@ -72,6 +72,7 @@ beforeEach(() => {
 afterEach(() => {
   unregisters.splice(0).forEach((fn) => fn())
   localStorage.clear()
+  window.history.replaceState(null, '', '/')
   vi.restoreAllMocks()
 })
 
@@ -197,6 +198,7 @@ describe('Account section: delete (AC1.7, AC7, AC8)', () => {
     const hook = registerHook({ sessions: 3, edits: 1 })
     localStorage.setItem(USER_KEY, JSON.stringify(user))
     localStorage.setItem(SETTINGS_KEY, '{}')
+    window.history.replaceState(null, '', '/settings')
     const api = makeAccountApi()
     await renderSection(api)
     const dialog = openConfirm()
@@ -207,6 +209,7 @@ describe('Account section: delete (AC1.7, AC7, AC8)', () => {
     expect(hook.clear).toHaveBeenCalledTimes(1)
     expect(localStorage.getItem(SETTINGS_KEY)).toBeNull()
     expect(localStorage.getItem(USER_KEY)).toBeNull()
+    expect(window.location.pathname).toBe('/')
     // No second "haven't synced" prompt for the 3 unsynced sessions.
     expect(screen.getByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
   })
@@ -219,6 +222,7 @@ describe('Account section: delete (AC1.7, AC7, AC8)', () => {
   ])('on %s shows the problem and clears nothing', async (_name, error, message) => {
     const hook = registerHook()
     localStorage.setItem(SETTINGS_KEY, '{}')
+    window.history.replaceState(null, '', '/settings')
     await renderSection(makeAccountApi({ deleteAccount: vi.fn().mockRejectedValue(error) }))
     const dialog = openConfirm()
     fireEvent.change(within(dialog).getByLabelText('Password'), { target: { value: 'pw' } })
@@ -227,6 +231,7 @@ describe('Account section: delete (AC1.7, AC7, AC8)', () => {
     expect(hook.clear).not.toHaveBeenCalled()
     expect(localStorage.getItem(SETTINGS_KEY)).toBe('{}')
     expect(localStorage.getItem(USER_KEY)).not.toBeNull()
+    expect(window.location.pathname).toBe('/settings')
     expect(screen.queryByText(ACCOUNT_DELETED_NOTICE)).not.toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Delete account' })).toBeEnabled()
   })

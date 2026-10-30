@@ -197,6 +197,9 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
         return null
       },
       accountDeleted: async () => {
+        // Reset the URL now, not at the next sign-in, so a reload cannot bring the last
+        // screen back (AC1.7).
+        if (window.location.pathname !== '/') window.history.replaceState(null, '', '/')
         await clearLocalUserData()
         setDeleted(true)
         setUser(null)
