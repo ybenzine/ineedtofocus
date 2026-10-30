@@ -50,7 +50,8 @@ esac
 # steps set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, so code a session wrote and ran with
 # `make test-*` can't read the Claude key. Without it, no session starts. With it, the CLI
 # prints "Permission mode forced to default": in -p mode that refuses whatever the allow
-# list doesn't cover, like dontAsk (test_oncall_cli.py checks it on the pinned CLI).
+# list doesn't cover, like dontAsk (test_oncall_cli.py checks it on the pinned CLI). On
+# Linux it also runs each command in bubblewrap, which scripts/oncall-sandbox.sh installs.
 [[ ${CLAUDE_CODE_SUBPROCESS_ENV_SCRUB:-} == 1 ]] || {
   echo "::error title=No env scrub::an on-call session needs CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 (#266)"
   exit 2
@@ -84,8 +85,8 @@ case $session in
     ALLOWED=(
       "${GH_READ[@]}" "${GRAFANA[@]}" 'Bash(gh issue list *)' 'Bash(gh pr list *)'
       'Bash(gh run view *)' 'Bash(gh run list *)'
-      # The prompt's subprocess check (#266): with the scrub it prints nothing, exit 1.
-      'Bash(printenv ANTHROPIC_API_KEY)'
+      # The prompt's key check (#266): prints only `absent` or `present`, never the value.
+      'Bash(scripts/oncall-key-check.sh)'
       "Edit(/$out/decision.json)" "Edit(/$out/comment.md)" "Edit(/$out/pr.md)"
       # A fix: its branch, its commits (scripts/oncall-commit.sh only), the tests and
       # linters that cover it, and the code.

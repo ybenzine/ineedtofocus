@@ -516,10 +516,13 @@ def test_the_prompt_says_what_is_untrusted_and_that_sessions_only_write_files(
     assert "/tmp/oncall/comment.md" in prompt and "/tmp/oncall/decision.json" in prompt
     assert "wait <alert>" not in prompt  # waits are workflow steps
     assert "Don't write `Closes`" in prompt
-    # The subprocess check (#266): one exact command, reported in the comment, never copied.
-    assert "Run `printenv ANTHROPIC_API_KEY` once" in prompt
-    assert "`Subprocess check: printenv ANTHROPIC_API_KEY printed nothing (exit 1).`" in prompt
-    assert "never copy it anywhere" in prompt
+    # The key check (#266): the non-printing script, its word only in the comment, on every
+    # incident (one template for every status), and no command that prints the value.
+    assert "Run `scripts/oncall-key-check.sh` once" in prompt
+    assert "`Claude key check: <the word it printed>`, and nothing else from it" in prompt
+    assert "printenv" not in prompt and "ANTHROPIC_API_KEY" not in prompt
+    resolved = make_prompt(tmp_path, event(status="resolved", resolved_at="2026-10-25T08:43:46Z"))
+    assert "Run `scripts/oncall-key-check.sh` once" in resolved
 
 
 def test_a_resolved_prompt_asks_for_the_summary(tmp_path: Path) -> None:
@@ -707,8 +710,8 @@ def test_files_that_dont_pass_become_stalled(
         (good, None, "no comment.md"),
         (good, "  \n", "comment.md is empty"),
         (good, "x" * (o.MAX_COMMENT + 1), "longer than"),
-        # A key the session saw never reaches a public comment (#266).
-        (good, "Subprocess check: printenv printed sk-ant-api03-x (exit 0).", "token-shaped"),
+        # Defence in depth (#266): token-shaped text in comment.md is refused.
+        (good, "Saw sk-ant-api03-x in a log.", "token-shaped"),
         (good, "Grafana said glsa_abc", "token-shaped"),
     ):
         outputs = decide(tmp_path, monkeypatch, decision, comment)

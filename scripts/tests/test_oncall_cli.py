@@ -38,6 +38,8 @@ import yaml  # type: ignore[import-untyped]  # no stubs in the locked env
 REPO = Path(__file__).resolve().parents[2]
 WRAPPER = REPO / "scripts" / "oncall-claude.sh"
 COMMIT = REPO / "scripts" / "oncall-commit.sh"
+KEY_CHECK = REPO / "scripts" / "oncall-key-check.sh"
+SANDBOX = REPO / "scripts" / "oncall-sandbox.sh"
 PINNED = yaml.safe_load((REPO / ".github" / "workflows" / "oncall.yml").read_text())["env"][
     "CLAUDE_CODE_VERSION"
 ]
@@ -84,7 +86,7 @@ def allowed(session: str, out: str) -> list[str]:
         "Bash(gh pr list *)",
         "Bash(gh run view *)",
         "Bash(gh run list *)",
-        "Bash(printenv ANTHROPIC_API_KEY)",
+        "Bash(scripts/oncall-key-check.sh)",
         f"Edit(/{out}/decision.json)",
         f"Edit(/{out}/comment.md)",
         f"Edit(/{out}/pr.md)",
@@ -140,6 +142,7 @@ def checkout(root: Path) -> Path:
     (root / "scripts").mkdir()
     shutil.copy(WRAPPER, root / "scripts" / "oncall-claude.sh")
     shutil.copy(COMMIT, root / "scripts" / "oncall-commit.sh")
+    shutil.copy(KEY_CHECK, root / "scripts" / "oncall-key-check.sh")
     # The review's agent comes from `oncall.py reviewer-agent`; Python resolves the link,
     # so it imports its modules from the repo.
     (root / "scripts" / "oncall.py").symlink_to(REPO / "scripts" / "oncall.py")
@@ -550,8 +553,18 @@ def claude() -> str:
     if found:
         said = subprocess.run([found, "--version"], capture_output=True, text=True, timeout=60)
         version = said.stdout.strip()
+    reason = ""
     if not version.startswith(f"{PINNED} "):
         reason = f"needs Claude Code {PINNED} on PATH (found: {version or 'none'})"
+    elif sys.platform.startswith("linux"):
+        # With the env scrub, the CLI runs each command in bubblewrap on Linux and won't
+        # start without it and socat (#266): scripts/oncall-sandbox.sh install.
+        done = subprocess.run(
+            ["bash", str(SANDBOX), "check"], capture_output=True, text=True, timeout=60
+        )
+        if done.returncode != 0:
+            reason = f"needs the Linux sandbox (scripts/oncall-sandbox.sh): {done.stdout.strip()}"
+    if reason:
         if os.environ.get("ONCALL_CLI_CHECK") == "required":
             pytest.fail(reason)
         pytest.skip(reason)
@@ -712,8 +725,13 @@ def probes(session: str, work: Path, out: Path) -> list[tuple[dict[str, Any], bo
         bash('gh issue view "$GRAFANA_READONLY_TOKEN"'),
         bash("gh pr view ${GH_TOKEN}"),
         bash("cat /etc/hosts"),
-        # Only the respond session's one exact check (#266), and no other variable.
+        # No command that prints a secret's value: the respond session's key check is a
+        # script that prints only `absent` or `present` (#266).
+        bash("printenv ANTHROPIC_API_KEY"),
         bash("printenv"),
+        bash("echo $ANTHROPIC_API_KEY"),
+        bash("scripts/oncall-key-check.sh -x"),
+        bash("bash -x scripts/oncall-key-check.sh"),
         bash("printenv GRAFANA_READONLY_TOKEN"),
         bash("printenv GH_TOKEN"),
         bash("printenv ANTHROPIC_API_KEY GRAFANA_READONLY_TOKEN"),
@@ -751,7 +769,7 @@ def probes(session: str, work: Path, out: Path) -> list[tuple[dict[str, Any], bo
         ]
         no = [
             *common_no,
-            bash("printenv ANTHROPIC_API_KEY"),
+            bash("scripts/oncall-key-check.sh"),
             bash("make test-scripts"),
             bash("gh pr checkout 12"),
             bash("python3 scripts/oncall_grafana.py journey dev"),
@@ -768,7 +786,7 @@ def probes(session: str, work: Path, out: Path) -> list[tuple[dict[str, Any], bo
         ]
         no = [
             *common_no,
-            bash("printenv ANTHROPIC_API_KEY"),
+            bash("scripts/oncall-key-check.sh"),
             bash("make test-scripts"),
             bash("git switch -c oncall/7-probe"),
             write(out / "decision.json"),
@@ -786,8 +804,8 @@ def probes(session: str, work: Path, out: Path) -> list[tuple[dict[str, Any], bo
             bash("gh run list --workflow ci.yml --branch main --event push --limit 5"),
             bash("gh run list --workflow deploy-prod.yml --limit 5"),
             bash("gh pr list --state merged --limit 10"),
-            # The prompt's subprocess check (#266): allowed, and it finds nothing.
-            bash("printenv ANTHROPIC_API_KEY"),
+            # The prompt's key check (#266): allowed, and it finds no key.
+            bash("scripts/oncall-key-check.sh"),
             write(out / "decision.json"),
             write(out / "comment.md"),
             write(out / "pr.md"),
@@ -908,11 +926,15 @@ def test_the_pinned_cli_allows_each_session_exactly_its_tools(
         elif command.startswith("python3 scripts/oncall_grafana.py "):
             assert f"{no_secrets} token-file=readable" in said[n], (command, said[n])
             checked += 1
-        elif command == "printenv ANTHROPIC_API_KEY":
-            # Nothing, exit 1: what the dev drill's session reports.
-            assert "sk-ant" not in said[n] and "Exit code 1" in said[n], said[n]
+        elif command == "scripts/oncall-key-check.sh":
+            # `absent`, exit 1: what the dev drill's session reports.
+            assert "absent" in said[n] and "Exit code 1" in said[n], said[n]
+            assert "present" not in said[n], said[n]
             checked += 1
     assert checked >= 3, checked
+    # No probe's result carries a secret's value, allowed or refused.
+    for value in (env["ANTHROPIC_API_KEY"], env["GRAFANA_READONLY_TOKEN"], "glsa_oc266_fake"):
+        assert not [s for s in said.values() if value in s], value
     # The agent definition's model and effort reach the API (#35's AC, #232).
     meta = frontmatter(session)
     assert FakeAPI.asked, "no main-loop request"
@@ -932,3 +954,127 @@ def test_the_pinned_cli_allows_each_session_exactly_its_tools(
             check=True,
         ).stdout.split()
         assert log[:2] == ["fix:", "probe"] and "backend/tests/unit/test_probe.py" in log, log
+
+
+# --- scripts/oncall-key-check.sh: the non-printing key check (#266) ---------------------
+
+KEY = "sk-ant-oc266-key-check-fake"
+
+
+@pytest.mark.parametrize(
+    ("value", "word", "code"),
+    [(None, "absent", 1), ("", "absent", 1), (KEY, "present", 0), (" ", "present", 0)],
+)
+def test_the_key_check_prints_only_absent_or_present(
+    value: str | None, word: str, code: int
+) -> None:
+    env = {"PATH": "/usr/bin:/bin"}
+    if value is not None:
+        env["ANTHROPIC_API_KEY"] = value
+    done = subprocess.run(
+        ["bash", str(KEY_CHECK)], env=env, capture_output=True, text=True, timeout=30
+    )
+    assert (done.returncode, done.stdout, done.stderr) == (code, f"{word}\n", "")
+    assert KEY not in done.stdout + done.stderr
+
+
+def test_the_key_check_has_no_way_to_print_the_value() -> None:
+    """Its only output is one of the two words: no `set -x`, no echo of the variable."""
+    code = [
+        line.strip()
+        for line in KEY_CHECK.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert not [line for line in code if "set -" in line or "printenv" in line], code
+    assert [line for line in code if line.startswith(("echo", "printf"))] == [
+        "echo present",
+        "echo absent",
+    ]
+
+
+# --- The Linux sandbox, for real, on the CI runner (#266) -------------------------------
+
+
+def test_the_sandboxed_session_reaches_github_and_grafana_and_can_write(
+    tmp_path: Path, claude: str, api: str
+) -> None:
+    """With the scrub, Claude Code runs each command in bubblewrap on Linux. On the
+    ubuntu-24.04 runner (ci.yml sets ONCALL_SANDBOX_CHECK=required after
+    scripts/oncall-sandbox.sh install), a respond session in the real checkout runs, through
+    that sandbox: the key check, a real `gh` call to api.github.com with the job's read-only
+    token, the Grafana script against Grafana Cloud over TLS (with a fake token, so it gets
+    a 401: reached, not authorised), and a real `make test-backend-unit`, which writes its
+    caches. The fake Messages API keeps it free. The only real secret is the job's own
+    read-only token, and no output shows it."""
+    if os.environ.get("ONCALL_SANDBOX_CHECK") != "required":
+        pytest.skip("runs on the CI runner only (ONCALL_SANDBOX_CHECK=required)")
+    gh_token = os.environ.get("ONCALL_SANDBOX_GH_TOKEN", "")
+    assert gh_token, "ci.yml passes the job's read-only token as ONCALL_SANDBOX_GH_TOKEN"
+    root = tmp_path.resolve()
+    token_file = root / "runner-temp" / "oncall-grafana" / "token"
+    token_file.parent.mkdir(parents=True, mode=0o700)
+    token_file.write_text("oc266notatoken\n")
+    token_file.chmod(0o600)
+    (root / "home").mkdir()
+    prompt = root / "prompt.md"
+    prompt.write_text("Probe the sandbox.\n")
+    dropped = ("GRAFANA_READONLY_TOKEN", "ONCALL_SANDBOX_GH_TOKEN", "GRAFANA_URL")
+    env = {k: v for k, v in os.environ.items() if k not in dropped}
+    env.update(
+        {
+            "HOME": str(root / "home"),
+            "ANTHROPIC_BASE_URL": api,
+            "ANTHROPIC_API_KEY": KEY,
+            "GH_TOKEN": gh_token,
+            "GH_REPO": "ybenzine/ineedtofocus",
+            "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
+            "ONCALL_GRAFANA_DIR": str(token_file.parent),
+            "ONCALL_OUT": str(root / "oncall"),
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            "DISABLE_AUTOUPDATER": "1",
+        }
+    )
+    commands = [
+        "scripts/oncall-key-check.sh",
+        "gh issue view 266 --json number --jq .number",
+        "python3 scripts/oncall_grafana.py alerts dev",
+        "make test-backend-unit",
+    ]
+    FakeAPI.calls = [bash(c) for c in commands]
+    FakeAPI.results = {}
+    done = subprocess.run(
+        [
+            "bash",
+            "scripts/oncall-claude.sh",
+            "respond",
+            "10",
+            "1",
+            str(prompt),
+            str(root / "r.json"),
+        ],
+        cwd=REPO,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    for gone in ("bubblewrap is required", "Sandbox is required", "failed to initialize"):
+        assert gone not in done.stdout + done.stderr, done.stderr
+    result = json.loads((root / "r.json").read_text())
+    assert result.get("subtype") == "success" and not result["permission_denials"], result
+    said = [json.dumps(FakeAPI.results[f"toolu_{i:03d}"].get("content")) for i in range(4)]
+    for value in (KEY, gh_token):
+        assert not [s for s in said if value in s], "a secret reached a command's output"
+    # What each command returned, in the job's summary (#266's evidence); no secret, above.
+    report = "\n".join(f"- `{c}`: `{s[:200]}`" for c, s in zip(commands, said, strict=True))
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as f:
+            f.write(f"### On-call session sandbox (#266)\n\n{report}\n\n")
+    key, gh, grafana, make = said
+    assert "absent" in key and "present" not in key, key
+    assert "266" in gh and "HTTP" not in gh and "error" not in gh.lower(), gh
+    # Grafana Cloud answered, over TLS: the fake token is refused, not unreachable.
+    assert re.search(r"-> HTTP 40[13]", grafana), grafana
+    assert "oc266notatoken" not in grafana
+    assert " passed" in make and "Read-only file system" not in make, make

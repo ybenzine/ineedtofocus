@@ -41,6 +41,7 @@
 #   reads, removed after each session (#266).
 # - Every session runs with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1: the commands it runs get
 #   no secret-named variable, so code a session wrote and ran can't read the Claude key.
+#   On Linux it also runs each of them in bubblewrap, set up by scripts/oncall-sandbox.sh.
 # - Nothing here can approve a deployment or start deploy-prod. The on-call App has no
 #   Actions or Workflows permission; only the rollback job can start a workflow.
 # - Cost: turn, dollar and step-time caps on every session; at most 4 runs with an agent
@@ -258,6 +259,10 @@ jobs:
           save-cache: false
       - name: Install Claude Code
         run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      - name: Set up the session's sandbox
+        # The env scrub runs each of the session's commands in bubblewrap on Linux; without
+        # it and socat the session wouldn't start (#266).
+        run: scripts/oncall-sandbox.sh install
       - name: Write the Grafana token file
         # For scripts/oncall_grafana.py, since the session's commands get no secret in
         # their environment (#266). Under $RUNNER_TEMP, outside the checkout, mode 600;
@@ -586,6 +591,10 @@ jobs:
           package-manager-cache: false
       - name: Install Claude Code
         run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      - name: Set up the session's sandbox
+        # The env scrub runs each of the session's commands in bubblewrap on Linux; without
+        # it and socat the session wouldn't start (#266).
+        run: scripts/oncall-sandbox.sh install
       - name: Run the reviewer agent
         timeout-minutes: 15
         env:
@@ -877,6 +886,10 @@ jobs:
           package-manager-cache: false
       - name: Install Claude Code
         run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      - name: Set up the session's sandbox
+        # The env scrub runs each of the session's commands in bubblewrap on Linux; without
+        # it and socat the session wouldn't start (#266).
+        run: scripts/oncall-sandbox.sh install
       - name: Write the Grafana token file
         # As in the respond job (#266).
         env:

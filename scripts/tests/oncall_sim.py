@@ -9,6 +9,8 @@ what the fake `gh`, `claude` and `uv` answer, and what the sessions leave behind
   `infra/` and `.claude/agents/` linked in. git is real, so a fix branch really is bundled,
   fetched, checked and pushed (to that origin).
 - `upload-artifact` / `download-artifact`: copies between the jobs' directories.
+- `scripts/oncall-sandbox.sh install` (apt packages, an AppArmor profile): taken as done.
+  ci.yml runs it for real, and test_oncall_cli.py checks the sandbox on the runner (#266).
 - `gh`: answers from the scenario's files, logs every call (with the token it was given)
   and keeps every posted comment.
 - `claude`: answers the flag probe like the pinned CLI, saves the prompt and runs the
@@ -32,6 +34,7 @@ import yaml  # type: ignore[import-untyped]  # no stubs in the locked env
 REPO = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO / ".github" / "workflows" / "oncall.yml"
 WORKFLOW_TOKEN = "ghs_workflow_token_of_this_run"
+SANDBOX_SETUP = "scripts/oncall-sandbox.sh install"
 
 FAKE_GH = r"""#!/usr/bin/env bash
 # Fake gh: canned answers from $SIM, a log line per call with the token it was given.
@@ -372,6 +375,11 @@ class Simulation:
             shutil.copytree(source, with_["path"], dirs_exist_ok=True)
             return True, {}
         assert not uses, f"unsimulated action {uses}"
+        if step.get("run") == SANDBOX_SETUP:
+            # apt packages and an AppArmor profile on the runner (#266): like setup-node,
+            # the machine's business, so taken as done. The fake claude needs no sandbox.
+            (job_dir / "sandbox-setup").touch()
+            return True, {}
         env = dict(env_base)
         for line in (job_dir / "github-env").read_text().splitlines():
             if "=" in line:

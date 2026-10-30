@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import http.server
 import json
+import os
 import threading
 import urllib.parse
 from collections.abc import Iterator
@@ -153,6 +154,15 @@ def test_mode_0600_or_narrower_is_read(tmp_path: Path, mode: int) -> None:
 def test_a_mode_wider_than_0600_is_refused(tmp_path: Path, mode: int) -> None:
     path = token_file(tmp_path / "t", mode=mode)
     with pytest.raises(og.GrafanaError, match=f"mode {mode:04o}, wider than 0600") as e:
+        og.token_from_file(path)
+    assert TOKEN not in str(e.value)
+
+
+def test_someone_elses_file_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    path = token_file(tmp_path / "t")
+    owner = path.stat().st_uid
+    monkeypatch.setattr(os, "getuid", lambda: owner + 1)
+    with pytest.raises(og.GrafanaError, match="isn't this user's: refused") as e:
         og.token_from_file(path)
     assert TOKEN not in str(e.value)
 

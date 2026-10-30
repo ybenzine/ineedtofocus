@@ -687,8 +687,9 @@ def check_comment(path: Path) -> None:
         raise Invalid(f"comment.md is longer than {MAX_COMMENT} characters")
     if MARKER_TEXT.search(text):
         raise Invalid("comment.md holds the workflow's own record (<!-- oncall:…)")
-    # A key a session saw (its prompt's subprocess check prints one if the scrub fails,
-    # #266) never reaches a public comment.
+    # Defence in depth (#266): token-shaped text in the comment is refused. It doesn't
+    # screen the decision's cause, pr.md or the respond artifact; what keeps the key out
+    # of the session is the env scrub and the non-printing key check.
     if SECRET_SHAPES.search(text):
         raise Invalid("comment.md holds token-shaped text (a key or a token)")
 

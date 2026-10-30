@@ -1232,6 +1232,43 @@ def test_every_session_runs_with_the_env_scrub(jobs: dict[str, Any]) -> None:
         assert step["env"].get("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB") == "1", name
 
 
+def test_every_session_and_the_cli_check_get_the_linux_sandbox(jobs: dict[str, Any]) -> None:
+    """On Linux the scrub runs each command in bubblewrap, and Claude Code won't start a
+    session without it and socat (#266). Each session job sets it up before its session,
+    as ci.yml does before the tests that run the pinned CLI, with no secret in the step."""
+    for name in SESSION_JOBS:
+        steps = jobs[name]["steps"]
+        (setup,) = [s for s in steps if s.get("run") == "scripts/oncall-sandbox.sh install"]
+        (session,) = runs_claude(jobs[name])
+        assert steps.index(setup) < steps.index(session), name
+        assert "env" not in setup and "if" not in setup, name
+    ci = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text())
+    steps = ci["jobs"]["backend-unit"]["steps"]
+    (setup,) = [s for s in steps if s.get("run") == "scripts/oncall-sandbox.sh install"]
+    (tests,) = [s for s in steps if "make test-scripts" in str(s.get("run", ""))]
+    assert steps.index(setup) < steps.index(tests)
+    assert tests["env"]["ONCALL_SANDBOX_CHECK"] == "required"
+    assert tests["env"]["ONCALL_SANDBOX_GH_TOKEN"] == "${{ github.token }}"
+    assert ci["jobs"]["backend-unit"].get("permissions", ci["permissions"]) == {"contents": "read"}
+
+
+def test_the_sandbox_script_pins_its_packages() -> None:
+    """Upstream versions pinned, the Ubuntu revision free: the archive keeps only the
+    newest security update, so an exact pin would stop every session the day one ships.
+    The AppArmor allowance is for /usr/bin/bwrap only."""
+    text = (REPO / "scripts" / "oncall-sandbox.sh").read_text()
+    assert re.search(r"^BWRAP_VERSION=0\.9\.0$", text, re.MULTILINE)
+    assert re.search(r"^SOCAT_VERSION=1\.8\.0\.0$", text, re.MULTILINE)
+    assert '"bubblewrap=$BWRAP_VERSION-*" "socat=$SOCAT_VERSION-*"' in text
+    assert "profile oncall-bwrap /usr/bin/bwrap flags=(unconfined) {\n  userns,\n}" in text
+    assert "apparmor_restrict_unprivileged_userns" in text
+    assert "sysctl" not in text  # the restriction stays on for everything else
+    usage = subprocess.run(
+        ["bash", str(REPO / "scripts" / "oncall-sandbox.sh")], capture_output=True, text=True
+    )
+    assert usage.returncode == 2 and "usage:" in usage.stderr
+
+
 def test_no_session_step_holds_the_grafana_token(jobs: dict[str, Any]) -> None:
     """The scrub strips it from the session's commands anyway; the Grafana script reads it
     from a file instead (#266). The Claude key is the only secret in a session's step."""

@@ -116,9 +116,17 @@ jobs:
           package-manager-cache: false
       - name: Install Claude Code, the on-call workflow's pinned version
         run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      # With CLAUDE_CODE_SUBPROCESS_ENV_SCRUB, the CLI runs each session command in
+      # bubblewrap on Linux (#266): the same setup as oncall.yml's session jobs.
+      - name: Set up the on-call sessions' sandbox
+        run: scripts/oncall-sandbox.sh install
       - name: Repo script tests (scripts/tests)
         env:
           ONCALL_CLI_CHECK: required
+          # A real session's commands, through that sandbox on this runner: gh with this
+          # job's read-only token, Grafana Cloud over TLS, make (test_oncall_cli.py, #266).
+          ONCALL_SANDBOX_CHECK: required
+          ONCALL_SANDBOX_GH_TOKEN: ${{ github.token }}
         run: make test-scripts JUNIT_DIR=reports
       - name: Summarise the script test report
         if: ${{ !cancelled() }}
