@@ -66,7 +66,9 @@ export default function AudioControls({
     <>
       {source === 'rain' && (
         <div className="timer-volume">
-          <label htmlFor={volumeId}>Rain volume</label>
+          <label htmlFor={volumeId} className="sr-only">
+            Rain volume
+          </label>
           <RangeInput
             id={volumeId}
             min={0}

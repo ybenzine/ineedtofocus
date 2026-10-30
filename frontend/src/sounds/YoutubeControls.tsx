@@ -83,7 +83,9 @@ export default function YoutubeControls({
             <YoutubeLabel kind={link.target.kind} title={nowTitle} />
           </p>
           <div className="timer-volume">
-            <label htmlFor={volumeId}>YouTube volume</label>
+            <label htmlFor={volumeId} className="sr-only">
+              YouTube volume
+            </label>
             <RangeInput
               id={volumeId}
               min={0}

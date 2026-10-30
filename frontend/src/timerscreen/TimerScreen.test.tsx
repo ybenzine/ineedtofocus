@@ -83,6 +83,24 @@ describe('TimerScreen (AC9.1)', () => {
     expect(screen.getByRole('timer')).toHaveTextContent('23:59')
   })
 
+  it('shows the length under the time: of 25:00 for a countdown, of the phase for Pomodoro (#327)', async () => {
+    await mount({ mode: 'countdown', minutes: 25 })
+    expect(screen.getByText('of 25:00')).toBeInTheDocument()
+  })
+
+  it('shows the Pomodoro break length under the time and keeps the mode for screen readers (#327)', async () => {
+    await mount(pomodoro())
+    expect(screen.getByText('of 25:00')).toBeInTheDocument()
+    expect(screen.getByText('Pomodoro.')).toHaveClass('sr-only')
+    await advance(26 * MINUTE_MS)
+    expect(screen.getByText('of 05:00')).toBeInTheDocument()
+  })
+
+  it('shows "elapsed" under an unlimited timer (#327)', async () => {
+    await mount({ mode: 'unlimited', reminderMinutes: null }, null)
+    expect(screen.getByText('elapsed')).toBeInTheDocument()
+  })
+
   it('counts an unlimited timer up and has no Block line', async () => {
     await mount({ mode: 'unlimited', reminderMinutes: null }, null)
     await advance(65_000)
