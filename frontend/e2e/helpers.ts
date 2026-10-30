@@ -125,3 +125,12 @@ export async function expectNoSidewaysScroll(page: Page): Promise<void> {
   }))
   expect(scrollWidth).toBeLessThanOrEqual(innerWidth)
 }
+
+/**
+ * Puts a YouTube link, with a saved title, in the signed-in user's recent links (AC8.6, #326), as
+ * the timer screen would after the player reported the title.
+ */
+export async function seedRecentYoutubeLink(page: Page, url: string, title: string): Promise<void> {
+  const response = await page.request.post('/api/youtube-links', { data: { url, title } })
+  expect(response.ok()).toBe(true)
+}

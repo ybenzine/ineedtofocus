@@ -7,6 +7,7 @@ import {
   newEmail,
   openHistoryFromSummary,
   openScreen,
+  seedRecentYoutubeLink,
   signUp,
   startCountdown,
 } from './helpers'
@@ -17,6 +18,10 @@ import {
 // dialogs), and reduced motion.
 
 const TAP = 44
+
+/** A saved title longer than the 20 characters a recent link shows (#326, #325). */
+const LONG_TITLE = 'Lofi hip hop radio - beats to relax and study to'
+const RECENT_URL = 'https://youtu.be/dQw4w9WgXcQ'
 
 /** axe, at WCAG 2.2 AA plus best practice: fails on any serious or critical violation. */
 async function expectNoSeriousViolations(page: Page): Promise<void> {
@@ -115,6 +120,7 @@ for (const scheme of SCHEMES) {
       await expect(page.getByRole('alert').first()).toBeVisible()
       await expectNoSeriousViolations(page)
       await signUp(page, newEmail())
+      await seedRecentYoutubeLink(page, RECENT_URL, LONG_TITLE)
 
       // Setup, with each mode and each audio source open.
       await expectTheme(page)
@@ -126,6 +132,10 @@ for (const scheme of SCHEMES) {
       await page.getByRole('radio', { name: 'Countdown' }).check()
       for (const source of ['Rain', 'YouTube']) {
         await page.getByRole('radio', { name: source }).check()
+        if (source === 'YouTube') {
+          // The recent link carries a trimmed title; its full text is the accessible name.
+          await expect(page.getByRole('button', { name: LONG_TITLE })).toBeVisible()
+        }
         await expectNoSeriousViolations(page)
       }
       await page.getByRole('radio', { name: 'None' }).check()
@@ -250,10 +260,12 @@ async function visitEveryScreen(
   await expect(page.getByRole('alert').first()).toBeVisible()
   await check('sign up with errors')
   await signUp(page, newEmail())
+  await seedRecentYoutubeLink(page, RECENT_URL, LONG_TITLE)
   await check('setup')
   await page.getByRole('radio', { name: 'Pomodoro' }).check()
   await check('setup, Pomodoro')
   await page.getByRole('radio', { name: 'YouTube' }).check()
+  await expect(page.getByRole('button', { name: LONG_TITLE })).toBeVisible()
   await check('setup, YouTube')
   await page.getByRole('radio', { name: 'None' }).check()
   await page.getByRole('radio', { name: 'Countdown' }).check()

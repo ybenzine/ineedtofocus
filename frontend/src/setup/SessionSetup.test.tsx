@@ -24,6 +24,7 @@ describe('SessionSetup', () => {
       tag: 'work',
       goal: null,
       audio: 'none',
+      youtubeLink: null,
     })
   })
 

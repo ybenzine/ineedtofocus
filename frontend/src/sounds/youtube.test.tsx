@@ -20,7 +20,7 @@ import {
   type YtPlayer,
   type YtPlayerOptions,
 } from './ytApi.ts'
-import { INVALID_LINK_MESSAGE, NO_ID_MESSAGE } from './YoutubeControls.tsx'
+import { INVALID_LINK_MESSAGE, NO_ID_MESSAGE } from './youtubeRecent.ts'
 
 const LINK_LABEL = /^(Another )?YouTube link$/
 const ID = 'dQw4w9WgXcQ'

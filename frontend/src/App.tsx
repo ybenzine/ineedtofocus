@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertPlayer } from './sounds/alerts.ts'
 import AudioControls from './sounds/AudioControls.tsx'
-import { LocalAudioSourceStore, type AudioSourceStore } from './sounds/audioSource.ts'
+import {
+  getDefaultLinkStore,
+  LocalAudioSourceStore,
+  type AudioSourceStore,
+  type YoutubeLinkStore,
+} from './sounds/audioSource.ts'
+import { httpYoutubeLinksApi, type YoutubeLinksApi } from './sounds/youtubeLinksApi.ts'
+import type { LoadYoutubeApi } from './sounds/ytApi.ts'
 import { RainPlayer } from './sounds/rain.ts'
 import { useAccount } from './auth/AccountContext.tsx'
 import AccountBar from './auth/AccountBar.tsx'
@@ -60,6 +67,12 @@ export interface AppProps {
   rain?: RainPlayer
   /** Injectable for tests; remembers the chosen audio source across reloads. */
   audioStore?: AudioSourceStore
+  /** Injectable for tests; the YouTube link store, recent-links API and IFrame loader (#18). */
+  youtube?: {
+    linkStore?: YoutubeLinkStore
+    api?: YoutubeLinksApi
+    loadApi?: LoadYoutubeApi
+  }
 }
 
 export const PENDING_RETRY_MS = 10_000
@@ -121,6 +134,7 @@ function AppBody({
   alerts,
   rain,
   audioStore,
+  youtube,
   pendingRetryMs = PENDING_RETRY_MS,
   parkedDrainMs = PARKED_DRAIN_MS,
 }: AppProps & { settings: SettingsStore }) {
@@ -306,6 +320,14 @@ function AppBody({
     setNotice(null)
     await timer.start({ config: request.config, tag: request.tag, goal: request.goal })
     sourceStore.save(request.audio)
+    if (request.audio === 'youtube' && request.youtubeLink !== null) {
+      // The timer screen's player picks the link up from the store (it is also what a reload
+      // restores, AC6.4). Marking it used is best effort; a title follows once the player knows it.
+      const linkStore = youtube?.linkStore ?? getDefaultLinkStore()
+      const linksApi = youtube?.api ?? httpYoutubeLinksApi
+      linkStore.save(request.youtubeLink)
+      linksApi.use(request.youtubeLink).catch(() => undefined)
+    }
     setAudio(request.audio)
     setView({ name: 'timer' })
   }
@@ -348,6 +370,7 @@ function AppBody({
               paused={paused}
               rain={rainPlayer}
               onSourceChange={changeAudio}
+              youtube={youtube}
             />
           )}
         />
@@ -412,6 +435,7 @@ function AppBody({
         preferences={prefs}
         defaultReminderMinutes={values.default_reminder_minutes}
         onStart={start}
+        youtubeApi={youtube?.api}
       />
     </main>
   )

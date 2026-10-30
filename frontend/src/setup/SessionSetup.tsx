@@ -13,6 +13,9 @@ import {
 import { onAppleMobile, SETUP_SILENT_HINT } from '../sounds/appleMobile.ts'
 import { OfflineRainSuggestion } from '../sounds/AudioControls.tsx'
 import { useOnline } from '../sounds/useOnline.ts'
+import YoutubeSetup from '../sounds/YoutubeSetup.tsx'
+import { checkYoutubeLink } from '../sounds/youtubeLink.ts'
+import type { YoutubeLinksApi } from '../sounds/youtubeLinksApi.ts'
 import { AUDIO_SOURCES, GOAL_MAX_LENGTH, tagLabel, type AudioSource } from './options.ts'
 import type { PreferencesStore } from './preferences.ts'
 
@@ -30,6 +33,8 @@ export interface SessionRequest {
   /** Trimmed; `null` when left empty. */
   goal: string | null
   audio: AudioSource
+  /** The normalised YouTube link, set exactly when `audio` is `youtube` (#325). */
+  youtubeLink: string | null
 }
 
 export interface SessionSetupProps {
@@ -37,6 +42,8 @@ export interface SessionSetupProps {
   /** Pre-selected reminder for the unlimited timer (AC12.4); off when absent. */
   defaultReminderMinutes?: ReminderMinutes | null
   onStart: (request: SessionRequest) => void | Promise<void>
+  /** Injectable for tests; the recent YouTube links. */
+  youtubeApi?: YoutubeLinksApi
 }
 
 /** Whole numbers only; anything else becomes NaN so range validation rejects it. */
@@ -83,12 +90,14 @@ export default function SessionSetup({
   preferences,
   defaultReminderMinutes = null,
   onStart,
+  youtubeApi,
 }: SessionSetupProps) {
   const [remembered] = useState(() => preferences.load())
   const [mode, setMode] = useState<Mode>('countdown')
   const [tag, setTag] = useState<Tag>(remembered.tag)
   const [goal, setGoal] = useState('')
   const [audio, setAudio] = useState<AudioSource>('none')
+  const [youtubeText, setYoutubeText] = useState('')
   const online = useOnline()
   const [countdown, setCountdown] = useState('25')
   const [focus, setFocus] = useState(String(remembered.pomodoro.focusMinutes))
@@ -110,6 +119,7 @@ export default function SessionSetup({
     tag,
     goal,
     audio,
+    youtubeText,
     countdown,
     focus,
     shortBreak,
@@ -125,6 +135,7 @@ export default function SessionSetup({
       tag,
       goal,
       audio,
+      youtubeText,
       countdown,
       focus,
       shortBreak,
@@ -158,9 +169,16 @@ export default function SessionSetup({
   // A hidden long-break field can't be fixed by the user; don't block Start on it.
   if (mode === 'pomodoro' && !longBreakOn) errors.delete('longBreakMinutes')
 
+  // YouTube needs a link that will play before the session can start (#325).
+  const youtubeCheck = audio === 'youtube' ? checkYoutubeLink(youtubeText) : null
+  const youtubeLink = youtubeCheck?.ok ? youtubeCheck.link.url : null
+  const needsLink = audio === 'youtube' && youtubeLink === null
+  const hintId = `${groupId}-youtube-hint`
+  const blocked = errors.size > 0 || needsLink
+
   async function submit(event: FormEvent) {
     event.preventDefault()
-    if (errors.size > 0 || starting) return
+    if (blocked || starting) return
     // With the long break off its length is not the user's to fix: use the remembered one.
     const toStart: TimerConfig =
       config.mode === 'pomodoro' && !longBreakOn
@@ -169,7 +187,13 @@ export default function SessionSetup({
     setStarting(true)
     setFailure(null)
     try {
-      await onStart({ config: toStart, tag, goal: goal.trim() === '' ? null : goal.trim(), audio })
+      await onStart({
+        config: toStart,
+        tag,
+        goal: goal.trim() === '' ? null : goal.trim(),
+        audio,
+        youtubeLink,
+      })
       if (toStart.mode === 'pomodoro') preferences.save({ tag, pomodoro: toStart })
       else preferences.save({ ...preferences.load(), tag })
     } catch (error) {
@@ -330,8 +354,18 @@ export default function SessionSetup({
           ))}
         </div>
         {audio === 'rain' && onAppleMobile() && <p className="field-hint">{SETUP_SILENT_HINT}</p>}
+        {audio === 'youtube' && online && (
+          <YoutubeSetup
+            text={youtubeText}
+            onTextChange={setYoutubeText}
+            hintId={hintId}
+            api={youtubeApi}
+          />
+        )}
         {audio === 'youtube' && !online && (
-          <OfflineRainSuggestion onUseRain={() => setAudio('rain')} />
+          <div id={hintId}>
+            <OfflineRainSuggestion onUseRain={() => setAudio('rain')} />
+          </div>
         )}
       </fieldset>
 
@@ -340,7 +374,12 @@ export default function SessionSetup({
           {failure}
         </p>
       )}
-      <button type="submit" className="primary" disabled={errors.size > 0 || starting}>
+      <button
+        type="submit"
+        className="primary"
+        disabled={blocked || starting}
+        aria-describedby={needsLink ? hintId : undefined}
+      >
         Start
       </button>
     </form>

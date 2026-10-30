@@ -2,21 +2,17 @@
 // and the video plays in a small visible player, looping while the timer runs (AC8.2). A link or
 // video that doesn't work only shows a message; the session is unaffected (AC8.5).
 
-import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
+import { useId, useState, type FormEvent } from 'react'
 import { useSettingsStore, useSettingsState } from '../settings/SettingsContext.ts'
-import { LocalYoutubeLinkStore, type YoutubeLinkStore } from './audioSource.ts'
+import { getDefaultLinkStore, type YoutubeLinkStore } from './audioSource.ts'
 import YoutubePlayer from './youtubePlayer.tsx'
 import { loadYoutubeApi, type LoadYoutubeApi } from './ytApi.ts'
 import { checkYoutubeLink, parseYoutubeLink, type YoutubeLink } from './youtubeLink.ts'
-import { httpYoutubeLinksApi, type RecentLink, type YoutubeLinksApi } from './youtubeLinksApi.ts'
+import { httpYoutubeLinksApi, type YoutubeLinksApi } from './youtubeLinksApi.ts'
+import RecentLinkList from './RecentLinkList.tsx'
+import { linkErrorMessage, savedTitle, useRecentLinks } from './youtubeRecent.ts'
 import YoutubeLabel from './YoutubeLabel.tsx'
 import RangeInput from '../RangeInput.tsx'
-
-export const INVALID_LINK_MESSAGE =
-  "That doesn't look like a YouTube link. Paste a link from youtube.com or youtu.be."
-
-export const NO_ID_MESSAGE =
-  "This link doesn't point to a video or playlist. Paste the link to a video, short or playlist."
 
 export interface YoutubeControlsProps {
   /** The timer is paused. */
@@ -24,14 +20,6 @@ export interface YoutubeControlsProps {
   linkStore?: YoutubeLinkStore
   api?: YoutubeLinksApi
   loadApi?: LoadYoutubeApi
-}
-
-let defaultLinkStore: YoutubeLinkStore | null = null
-
-/** Created on first use, so importing this module doesn't touch localStorage. */
-function getDefaultLinkStore(): YoutubeLinkStore {
-  defaultLinkStore ??= new LocalYoutubeLinkStore()
-  return defaultLinkStore
 }
 
 export default function YoutubeControls({
@@ -52,49 +40,9 @@ export default function YoutubeControls({
   })
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [recent, setRecent] = useState<{ link: YoutubeLink; title: string | null }[]>([])
+  const { recent, remember } = useRecentLinks(api)
   // The title the player reported for the link now playing.
   const [playing, setPlaying] = useState<{ url: string; title: string } | null>(null)
-
-  // Set once a link has been used: a slower first fetch must not overwrite that newer list.
-  const usedSinceMount = useRef(false)
-
-  function showRecent(items: RecentLink[]) {
-    // One entry per video or playlist id, the newest (first) one: the server's rule (#249).
-    const seen = new Set<string>()
-    const shown: { link: YoutubeLink; title: string | null }[] = []
-    for (const item of items) {
-      const parsed = parseYoutubeLink(item.url)
-      if (parsed === null) continue
-      const key = `${parsed.target.kind}:${parsed.target.id}`
-      if (seen.has(key)) continue
-      seen.add(key)
-      shown.push({ link: parsed, title: item.title })
-    }
-    setRecent(shown.slice(0, 5))
-  }
-
-  useEffect(() => {
-    const abort = new AbortController()
-    api.list(abort.signal).then(
-      (items) => {
-        if (!usedSinceMount.current) showRecent(items)
-      },
-      () => undefined,
-    )
-    return () => abort.abort()
-  }, [api])
-
-  // Remembering the link is best effort: playback never waits for it.
-  function remember(url: string, title?: string) {
-    api.use(url, title).then(
-      (items) => {
-        usedSinceMount.current = true
-        showRecent(items)
-      },
-      () => undefined,
-    )
-  }
 
   function choose(chosen: YoutubeLink) {
     setError(null)
@@ -107,20 +55,13 @@ export default function YoutubeControls({
 
   // The label of the link now playing: the player's own title, else the one saved with it.
   const nowTitle =
-    link === null
-      ? null
-      : playing?.url === link.url
-        ? playing.title
-        : (recent.find(
-            (item) =>
-              item.link.target.kind === link.target.kind && item.link.target.id === link.target.id,
-          )?.title ?? null)
+    link === null ? null : playing?.url === link.url ? playing.title : savedTitle(recent, link)
 
   function submit(event: FormEvent) {
     event.preventDefault()
     const result = checkYoutubeLink(text)
     if (result.ok) choose(result.link)
-    else setError(result.reason === 'no-id' ? NO_ID_MESSAGE : INVALID_LINK_MESSAGE)
+    else setError(linkErrorMessage(result))
   }
 
   return (
@@ -181,17 +122,7 @@ export default function YoutubeControls({
           Play
         </button>
       </form>
-      {recent.length > 0 && (
-        <ul className="youtube-recent" aria-label="Recent YouTube links">
-          {recent.map((item) => (
-            <li key={item.link.url}>
-              <button type="button" className="secondary" onClick={() => choose(item.link)}>
-                <YoutubeLabel kind={item.link.target.kind} title={item.title} />
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+      <RecentLinkList recent={recent} onChoose={choose} />
     </div>
   )
 }
