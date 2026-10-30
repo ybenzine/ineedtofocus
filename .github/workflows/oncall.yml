@@ -35,8 +35,13 @@
 # - The payload is untrusted. Scripts read it from $GITHUB_EVENT_PATH, never through `${{ }}`
 #   in a `run:` script.
 # - Secrets come only from the `oncall` environment (main only, no reviewer), each to the
-#   steps that need it: the Claude key and Grafana token to the sessions, REVIEWER_APP_KEY
-#   to post-review, ONCALL_APP_KEY to the push, PR and merge steps.
+#   steps that need it: the Claude key to the sessions, REVIEWER_APP_KEY to post-review,
+#   ONCALL_APP_KEY to the push, PR and merge steps. The Grafana token goes to the wait step
+#   and to a mode-600 file under $RUNNER_TEMP that the on-call sessions' Grafana script
+#   reads, removed after each session (#266).
+# - Every session runs with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1: the commands it runs get
+#   no secret-named variable, so code a session wrote and ran can't read the Claude key.
+#   On Linux it also runs each of them in bubblewrap, set up by scripts/oncall-sandbox.sh.
 # - Nothing here can approve a deployment or start deploy-prod. The on-call App has no
 #   Actions or Workflows permission; only the rollback job can start a workflow.
 # - Cost: turn, dollar and step-time caps on every session; at most 4 runs with an agent
@@ -254,16 +259,35 @@ jobs:
           save-cache: false
       - name: Install Claude Code
         run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      - name: Set up the session's sandbox
+        # The env scrub runs each of the session's commands in bubblewrap on Linux; without
+        # it and socat the session wouldn't start (#266).
+        run: scripts/oncall-sandbox.sh install
+      - name: Write the Grafana token file
+        # For scripts/oncall_grafana.py, since the session's commands get no secret in
+        # their environment (#266). Under $RUNNER_TEMP, outside the checkout, mode 600;
+        # removed right after the session, whatever its outcome.
+        env:
+          GRAFANA_READONLY_TOKEN: ${{ secrets.GRAFANA_READONLY_TOKEN }}
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/oncall-grafana"
+          (umask 077 && printf '%s\n' "$GRAFANA_READONLY_TOKEN" > "$RUNNER_TEMP/oncall-grafana/token")
       - name: Run the on-call agent
         # A step timeout fails the step (a job timeout would cancel it): act still runs,
         # finds no decision and posts the ⛔ Needs Yacine:. This job's and step's names are
         # how the daily cap tells a session started (scripts/oncall.py SESSION_STEP).
+        # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: the commands the session runs (make, python3,
+        # gh…) don't inherit the Claude key or any other secret-named variable (#266).
         timeout-minutes: 35
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GRAFANA_READONLY_TOKEN: ${{ secrets.GRAFANA_READONLY_TOKEN }}
           GH_TOKEN: ${{ github.token }}
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1"
+          ONCALL_GRAFANA_DIR: ${{ runner.temp }}/oncall-grafana
         run: scripts/oncall-claude.sh respond 60 10 "$ONCALL_OUT/prompt.md" "$RUNNER_TEMP/agent.json"
+      - name: Remove the Grafana token file
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/oncall-grafana"
       - name: Summarise the session
         # Claude Code's result: subtype, turns, cost and the refused tool calls, named
         # safely (#232). The transcript stays on the runner: it holds untrusted and Grafana
@@ -567,10 +591,15 @@ jobs:
           package-manager-cache: false
       - name: Install Claude Code
         run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      - name: Set up the session's sandbox
+        # The env scrub runs each of the session's commands in bubblewrap on Linux; without
+        # it and socat the session wouldn't start (#266).
+        run: scripts/oncall-sandbox.sh install
       - name: Run the reviewer agent
         timeout-minutes: 15
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1" # no secret in its commands' env (#266)
         run: scripts/oncall-claude.sh review 40 5 "$ONCALL_OUT/review-prompt.md" "$RUNNER_TEMP/reviewer.json"
       - name: Summarise the session
         # Claude Code's result: subtype, turns, cost and the refused tool calls, named
@@ -857,13 +886,28 @@ jobs:
           package-manager-cache: false
       - name: Install Claude Code
         run: npm install --global "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
+      - name: Set up the session's sandbox
+        # The env scrub runs each of the session's commands in bubblewrap on Linux; without
+        # it and socat the session wouldn't start (#266).
+        run: scripts/oncall-sandbox.sh install
+      - name: Write the Grafana token file
+        # As in the respond job (#266).
+        env:
+          GRAFANA_READONLY_TOKEN: ${{ secrets.GRAFANA_READONLY_TOKEN }}
+        run: |
+          install -d -m 700 "$RUNNER_TEMP/oncall-grafana"
+          (umask 077 && printf '%s\n' "$GRAFANA_READONLY_TOKEN" > "$RUNNER_TEMP/oncall-grafana/token")
       - name: Run the on-call agent
         timeout-minutes: 15
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GRAFANA_READONLY_TOKEN: ${{ secrets.GRAFANA_READONLY_TOKEN }}
           GH_TOKEN: ${{ github.token }}
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1" # no secret in its commands' env (#266)
+          ONCALL_GRAFANA_DIR: ${{ runner.temp }}/oncall-grafana
         run: scripts/oncall-claude.sh follow-up 40 6 "$ONCALL_OUT/follow-up-prompt.md" "$RUNNER_TEMP/agent.json"
+      - name: Remove the Grafana token file
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/oncall-grafana"
       - name: Summarise the session
         # Claude Code's result: subtype, turns, cost and the refused tool calls, named
         # safely (#232). The transcript stays on the runner: it holds untrusted and Grafana
