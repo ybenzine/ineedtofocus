@@ -80,7 +80,8 @@ export default function YoutubeControls({
             }}
           />
           <p className="youtube-now-playing">
-            <YoutubeLabel kind={link.target.kind} title={nowTitle} />
+            {/* The timer's audio card header already shows the YouTube mark (#359). */}
+            <YoutubeLabel kind={link.target.kind} title={nowTitle} showIcon={false} />
           </p>
           <div className="timer-volume">
             <label htmlFor={volumeId} className="sr-only">

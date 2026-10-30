@@ -27,14 +27,16 @@ export function YoutubeIcon() {
 export interface YoutubeLabelProps {
   kind: 'video' | 'playlist'
   title?: string | null
+  /** Show the YouTube mark (default). Off where the mark already sits next to the label. */
+  showIcon?: boolean
 }
 
-export default function YoutubeLabel({ kind, title }: YoutubeLabelProps) {
+export default function YoutubeLabel({ kind, title, showIcon = true }: YoutubeLabelProps) {
   const full = youtubeLabelText(kind, title)
   const short = trimYoutubeTitle(full)
   return (
     <span className="youtube-label" title={full}>
-      <YoutubeIcon />
+      {showIcon && <YoutubeIcon />}
       {short === full ? (
         <span>{full}</span>
       ) : (

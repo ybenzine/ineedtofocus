@@ -13,6 +13,8 @@ import {
   type ActiveSessionStore,
   type TimerUpdate,
 } from '../timer/index.ts'
+import YoutubeControls from '../sounds/YoutubeControls.tsx'
+import { MemoryYoutubeLinkStore } from '../sounds/audioSource.ts'
 import SessionSummary from './SessionSummary.tsx'
 import TimerScreen from './TimerScreen.tsx'
 
@@ -556,5 +558,39 @@ describe('a timer that runs only in memory (#245)', () => {
       window.dispatchEvent(new StorageEvent('storage', { key: ACTIVE_SESSION_KEY }))
     })
     expect(screen.getByRole('status')).toBeEmptyDOMElement()
+  })
+})
+
+describe('the YouTube audio card (#359)', () => {
+  it('shows the YouTube mark once, with the source and the title each read once', async () => {
+    const controller = new TimerController({
+      store: new MemoryActiveSessionStore(),
+      saveRecord: () => {},
+    })
+    await controller.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'study', goal: null })
+    const linkStore = new MemoryYoutubeLinkStore()
+    linkStore.save('https://youtu.be/dQw4w9WgXcQ')
+    const api = { list: async () => [], use: async () => [] }
+    render(
+      <SettingsContext.Provider value={settings}>
+        <TimerScreen
+          controller={controller}
+          audio="youtube"
+          onEnded={vi.fn()}
+          audioControls={
+            <YoutubeControls
+              paused={false}
+              linkStore={linkStore}
+              api={api}
+              loadApi={() => new Promise(() => {})}
+            />
+          }
+        />
+      </SettingsContext.Provider>,
+    )
+    const card = screen.getByRole('region', { name: 'Background audio' })
+    expect(card.querySelectorAll('.youtube-icon')).toHaveLength(1)
+    expect(screen.getAllByText('YouTube')).toHaveLength(1)
+    expect(screen.getAllByText('YouTube video')).toHaveLength(1)
   })
 })
