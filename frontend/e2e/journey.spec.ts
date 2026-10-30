@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 import {
   expectNoSidewaysScroll,
   finishCountdown,
@@ -124,6 +124,12 @@ test('archive a session, restore it, then delete all archived', async ({ page })
   await expect(page.getByText('No sessions in this period.')).toBeVisible()
 })
 
+const colorOf = (page: Page, selector: string) =>
+  page
+    .locator(selector)
+    .first()
+    .evaluate((el) => getComputedStyle(el).color)
+
 test('YouTube is chosen on New session: Start waits for a link, a recent link is offered, the timer keeps it', async ({
   page,
 }) => {
@@ -136,6 +142,21 @@ test('YouTube is chosen on New session: Start waits for a link, a recent link is
   )
 
   await page.getByRole('radio', { name: 'YouTube' }).check()
+  // One play glyph per recent-link row (one seeded link), no YouTube mark (#344).
+  await expect(page.locator('.play-glyph')).toHaveCount(1)
+  await expect(page.locator('.youtube-icon')).toHaveCount(0)
+  // The glyph follows the theme: it matches the row's text in the light and the dark theme.
+  const seen = new Set<string>()
+  for (const scheme of ['dark', 'light'] as const) {
+    await page.emulateMedia({ colorScheme: scheme })
+    await expect
+      .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+      .toBe(scheme)
+    const glyph = await colorOf(page, '.play-glyph')
+    expect(glyph).toBe(await colorOf(page, '.youtube-label'))
+    seen.add(glyph)
+  }
+  expect(seen.size).toBe(2)
   const start = page.getByRole('button', { name: 'Start' })
   await expect(start).toBeDisabled()
   await expect(page.getByText(/Paste a YouTube link/)).toBeVisible()
@@ -156,8 +177,18 @@ test('YouTube is chosen on New session: Start waits for a link, a recent link is
   // The player itself is YouTube's: this test doesn't depend on it playing.
   const audioCard = page.getByRole('region', { name: 'Background audio' })
   await expect(audioCard).toBeVisible()
-  // The YouTube mark shows once in the card (#359).
-  await expect(audioCard.locator('.youtube-icon')).toHaveCount(1)
+  // The play glyph shows once in the card (#359, #344), in the same colour as the "YouTube" label
+  // in both themes.
+  await expect(audioCard.locator('.play-glyph')).toHaveCount(1)
+  await expect(page.locator('.youtube-icon')).toHaveCount(0)
+  // The timer screen is always dark (AC9.1): the glyph matches the "YouTube" label under both.
+  for (const scheme of ['dark', 'light'] as const) {
+    await page.emulateMedia({ colorScheme: scheme })
+    await expect
+      .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+      .toBe('dark')
+    expect(await colorOf(page, '.play-glyph')).toBe(await colorOf(page, '.timer-audio-name'))
+  }
 
   // A reload restores the session with the same link (AC6.4).
   await page.reload()

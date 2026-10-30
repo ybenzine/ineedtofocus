@@ -10,7 +10,7 @@ import {
   type TimerSnapshot,
   type TimerUpdate,
 } from '../timer/index.ts'
-import { YoutubeIcon } from '../sounds/YoutubeLabel.tsx'
+import { PlayGlyph } from '../sounds/YoutubeLabel.tsx'
 import { formatCountdown, formatElapsed } from './format.ts'
 import { useKeepAwakeSetting, useWakeLock, wakeLockSupported } from './wakeLock.ts'
 
@@ -64,9 +64,9 @@ function totalText(snapshot: TimerSnapshot): string {
   return minutes === null ? 'elapsed' : `of ${formatCountdown(minutes * 60_000)}`
 }
 
-/** The audio card's icon: a rain cloud, the YouTube mark, or a muted speaker. Decorative. */
+/** The audio card's icon: a rain cloud, a play glyph, or a muted speaker. Decorative. */
 function AudioIcon({ source }: { source: AudioSource }) {
-  if (source === 'youtube') return <YoutubeIcon />
+  if (source === 'youtube') return <PlayGlyph />
   return (
     <svg
       className="timer-audio-icon"

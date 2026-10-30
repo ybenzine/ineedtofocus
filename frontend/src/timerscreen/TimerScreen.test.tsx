@@ -593,7 +593,7 @@ describe('the YouTube audio card (#359)', () => {
     const card = screen.getByRole('region', { name: 'Background audio' })
     await advance(0) // the recent list loads
     expect(within(card).getByRole('button', { name: 'Soft rain' })).toBeInTheDocument()
-    expect(card.querySelectorAll('.youtube-icon')).toHaveLength(1)
+    expect(card.querySelectorAll('.play-glyph')).toHaveLength(1)
     expect(screen.getAllByText('YouTube')).toHaveLength(1)
     // The playing link is named once (now playing), not again in the recent list.
     expect(within(card).queryByRole('button', { name: 'Quiet piano' })).toBeNull()
