@@ -9,6 +9,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app import __version__
+from app.account import router as account_router
 from app.auth import router as auth_router
 from app.config import Settings, get_settings
 from app.db import ReadinessCheck, create_engine, database_check
@@ -76,6 +77,7 @@ def create_app(
     fix_openapi(app)
     app.include_router(health_router)
     app.include_router(auth_router)
+    app.include_router(account_router)
     app.include_router(sessions_router)
     app.include_router(settings_router)
     app.include_router(history_router)

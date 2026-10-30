@@ -48,6 +48,19 @@
         "title": "CountdownConfig",
         "type": "object"
       },
+      "DeleteAccountRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Password",
+            "type": "string"
+          }
+        },
+        "title": "DeleteAccountRequest",
+        "type": "object"
+      },
       "DeletedCount": {
         "properties": {
           "deleted": {
@@ -127,6 +140,71 @@
           "error"
         ],
         "title": "ErrorResponse",
+        "type": "object"
+      },
+      "ExportAccount": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email",
+          "created_at"
+        ],
+        "title": "ExportAccount",
+        "type": "object"
+      },
+      "ExportOut": {
+        "description": "Everything stored for the account, except the password hash and sign-in records.",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/ExportAccount"
+          },
+          "exported_at": {
+            "format": "date-time",
+            "title": "Exported At",
+            "type": "string"
+          },
+          "format_version": {
+            "description": "1; bumped when the shape changes",
+            "title": "Format Version",
+            "type": "integer"
+          },
+          "sessions": {
+            "description": "Every session, archived ones included, oldest first",
+            "items": {
+              "$ref": "#/components/schemas/SessionOut"
+            },
+            "title": "Sessions",
+            "type": "array"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/SettingsOut"
+          },
+          "youtube_links": {
+            "items": {
+              "$ref": "#/components/schemas/YoutubeLinkOut"
+            },
+            "title": "Youtube Links",
+            "type": "array"
+          }
+        },
+        "required": [
+          "format_version",
+          "exported_at",
+          "account",
+          "settings",
+          "sessions",
+          "youtube_links"
+        ],
+        "title": "ExportOut",
         "type": "object"
       },
       "HistoryOut": {
@@ -1112,6 +1190,102 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/account/delete": {
+      "post": {
+        "description": "Permanently delete the account after re-entering the password (AC1.7).\n\nA wrong password is 403, not 401: the frontend treats 401 as an expired sign-in. Failed\nattempts share the sign-in limiter (per client and email, and per client).",
+        "operationId": "delete_account_api_account_delete_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteAccountRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Incorrect password; nothing was deleted"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many attempts; see the Retry-After header"
+          }
+        },
+        "summary": "Delete Account",
+        "tags": [
+          "account"
+        ]
+      }
+    },
+    "/api/account/export": {
+      "get": {
+        "description": "Download the whole account as JSON (AC1.6).",
+        "operationId": "export_account_api_account_export_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          }
+        },
+        "summary": "Export Account",
+        "tags": [
+          "account"
+        ]
+      }
+    },
     "/api/auth/me": {
       "get": {
         "description": "The signed-in user.",
