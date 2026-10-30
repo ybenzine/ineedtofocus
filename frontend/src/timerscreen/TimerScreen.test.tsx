@@ -108,6 +108,18 @@ describe('TimerScreen (AC9.1)', () => {
     expect(screen.queryByText(/Block/)).not.toBeInTheDocument()
   })
 
+  it('scales only 8-character times to the ring (#358)', async () => {
+    await mount({ mode: 'unlimited', reminderMinutes: null }, null)
+    vi.setSystemTime(T0 + 90 * 60_000)
+    await advance(1000)
+    expect(screen.getByRole('timer')).toHaveTextContent('1:30:0')
+    expect(screen.getByRole('timer')).not.toHaveClass('timer-clock-long')
+    vi.setSystemTime(T0 + 10 * 3_600_000)
+    await advance(1000)
+    expect(screen.getByRole('timer')).toHaveTextContent('10:00:0')
+    expect(screen.getByRole('timer')).toHaveClass('timer-clock-long')
+  })
+
   it('ac3_4 shows the Pomodoro phase and "Block 2 of 4", staying on the block during a break', async () => {
     await mount(pomodoro())
     expect(screen.getByText('Block 1 of 4')).toBeInTheDocument()

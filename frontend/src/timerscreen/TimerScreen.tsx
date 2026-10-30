@@ -221,7 +221,13 @@ export default function TimerScreen({
       </div>
 
       <div className="timer-ring">
-        <div className="timer-clock" role="timer" aria-label="Time">
+        <div
+          className={
+            clockText(snapshot).length >= 8 ? 'timer-clock timer-clock-long' : 'timer-clock'
+          }
+          role="timer"
+          aria-label="Time"
+        >
           {clockText(snapshot)}
         </div>
         <p className="timer-of">{total}</p>

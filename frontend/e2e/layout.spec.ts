@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 import {
   expectNoSidewaysScroll,
@@ -100,3 +101,56 @@ test.describe('at 1280 px', () => {
     await expectCentred(page)
   })
 })
+
+// An Unlimited session past 10 h reads 10:00:00 to 12:00:00 (#358): the time must stay inside the
+// ring's 260 px content box (280 px, 10 px stroke), and shorter times keep 64 px.
+for (const width of [320, 390, 1280]) {
+  for (const scheme of ['dark', 'light'] as const) {
+    test.describe(`an Unlimited timer past 10 h at ${width} px, ${scheme}`, () => {
+      test.use({ viewport: { width, height: 800 }, colorScheme: scheme })
+
+      test('the time fits inside the ring', async ({ page }) => {
+        await installClock(page)
+        await signUp(page, newEmail())
+        await page.getByRole('radio', { name: 'Unlimited' }).check()
+        await page.getByRole('button', { name: 'Start' }).click()
+        const clock = page.getByRole('timer', { name: 'Time' })
+        await expect(clock).toBeVisible()
+        await expect(clock).toHaveCSS('font-size', '64px')
+
+        for (const [ms, text] of [
+          [10 * 3_600_000 + 2000, '10:00:0'],
+          [1_000 * (1 * 3600 + 59 * 60 + 30), '11:59:'],
+        ] as const) {
+          await page.clock.fastForward(ms)
+          await expect(clock).toContainText(text)
+          const time = await clock.boundingBox()
+          const ring = await page.locator('.timer-ring').boundingBox()
+          expect(time).not.toBeNull()
+          expect(ring).not.toBeNull()
+          // The text's own width, not the (wider) block it sits in.
+          const textBox = await clock.evaluate((el) => {
+            const range = document.createRange()
+            range.selectNodeContents(el)
+            const r = range.getBoundingClientRect()
+            return { left: r.left, right: r.right }
+          })
+          const inner = 10 + 2 // stroke width; the content box starts here
+          expect(textBox.left).toBeGreaterThanOrEqual((ring?.x ?? 0) + inner - 2)
+          expect(textBox.right).toBeLessThanOrEqual((ring?.x ?? 0) + (ring?.width ?? 0) - inner + 2)
+          expect(textBox.right - textBox.left).toBeLessThanOrEqual(260)
+          await expect(clock).toHaveCSS('font-variant-numeric', 'tabular-nums')
+          const size = parseFloat(await clock.evaluate((el) => getComputedStyle(el).fontSize))
+          expect(size).toBeLessThan(64)
+        }
+        await expectNoSidewaysScroll(page)
+        const results = await new AxeBuilder({ page })
+          .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
+          .analyze()
+        expect(
+          results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical'),
+        ).toEqual([])
+      })
+    })
+  }
+}
