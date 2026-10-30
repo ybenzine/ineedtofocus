@@ -758,7 +758,6 @@ main.focus-screen {
   border-radius: 999px;
   background: var(--surface);
   color: var(--text);
-  text-transform: capitalize;
 }
 
 .timer-goal {
@@ -911,7 +910,6 @@ main.focus-screen {
 
 .history-tags button {
   border-radius: 999px;
-  text-transform: capitalize;
 }
 
 .history-range {
@@ -1136,7 +1134,7 @@ main.focus-screen {
   gap: 0.5rem;
 }
 
-/* A YouTube link: the play-button icon, then the (trimmed) title (#326). */
+/* A YouTube link: the play glyph, then the (trimmed) title (#326). */
 .youtube-label {
   display: inline-flex;
   align-items: center;
@@ -1144,7 +1142,7 @@ main.focus-screen {
   min-width: 0;
 }
 
-.youtube-icon {
+.play-glyph {
   flex: none;
 }
 

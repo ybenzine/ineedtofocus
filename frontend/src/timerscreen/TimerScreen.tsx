@@ -2,7 +2,7 @@
 // pause / resume / stop / skip-break controls. The controller owns the timer; this only shows it.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import type { AudioSource } from '../setup/options.ts'
+import { tagLabel, type AudioSource } from '../setup/options.ts'
 import {
   ACTIVE_SESSION_KEY,
   type TimerController,
@@ -10,7 +10,7 @@ import {
   type TimerSnapshot,
   type TimerUpdate,
 } from '../timer/index.ts'
-import { YoutubeIcon } from '../sounds/YoutubeLabel.tsx'
+import { PlayGlyph } from '../sounds/YoutubeLabel.tsx'
 import { formatCountdown, formatElapsed } from './format.ts'
 import { useKeepAwakeSetting, useWakeLock, wakeLockSupported } from './wakeLock.ts'
 
@@ -64,9 +64,9 @@ function totalText(snapshot: TimerSnapshot): string {
   return minutes === null ? 'elapsed' : `of ${formatCountdown(minutes * 60_000)}`
 }
 
-/** The audio card's icon: a rain cloud, the YouTube mark, or a muted speaker. Decorative. */
+/** The audio card's icon: a rain cloud, a play glyph, or a muted speaker. Decorative. */
 function AudioIcon({ source }: { source: AudioSource }) {
-  if (source === 'youtube') return <YoutubeIcon />
+  if (source === 'youtube') return <PlayGlyph />
   return (
     <svg
       className="timer-audio-icon"
@@ -234,7 +234,7 @@ export default function TimerScreen({
       </div>
 
       <p className="timer-meta">
-        <span className="timer-tag">{snapshot.tag}</span>
+        <span className="timer-tag">{tagLabel(snapshot.tag)}</span>
         {snapshot.goal && <span className="timer-goal">{snapshot.goal}</span>}
       </p>
 

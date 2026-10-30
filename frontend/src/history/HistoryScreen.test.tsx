@@ -158,10 +158,22 @@ describe('HistoryScreen', () => {
     api.sessions = [synced(), synced({ tag: 'work' }), synced({ tag: 'nap' })]
     renderScreen(api)
     await screen.findByText('Focus time')
-    fireEvent.click(screen.getByRole('button', { name: 'study' }))
-    fireEvent.click(screen.getByRole('button', { name: 'work' }))
+    // The filter buttons are named by the tag labels, not the lowercase keys.
+    const filter = within(screen.getByRole('group', { name: 'Tags' }))
+    expect(filter.getAllByRole('button').map((b) => b.textContent)).toEqual([
+      'All tags',
+      'Work',
+      'Study',
+      'Nap',
+      'Read',
+      'Meditation',
+      'Exercise',
+    ])
+    expect(filter.queryByRole('button', { name: 'study' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Study' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Work' }))
     await waitFor(() => expect(api.queries.at(-1)?.tags).toEqual(['study', 'work']))
-    await waitFor(() => expect(screen.getAllByText('study').length).toBeGreaterThan(0))
+    await waitFor(() => expect(document.querySelectorAll('.history-row .timer-tag').length).toBe(2))
     expect(document.querySelectorAll('.history-row')).toHaveLength(2)
     fireEvent.click(screen.getByRole('button', { name: 'All tags' }))
     await waitFor(() => expect(api.queries.at(-1)?.tags).toEqual([]))
@@ -235,7 +247,7 @@ describe('HistoryScreen', () => {
       await screen.findByText('Focus time')
       expect(screen.queryByText(/not saved to your account/)).not.toBeInTheDocument()
       // The server decides what a tag filter shows; the edited session isn't added under 'read'.
-      fireEvent.click(screen.getByRole('button', { name: 'read' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Read' }))
       await screen.findByText('No sessions with these tags in this period.')
       store.close()
     })

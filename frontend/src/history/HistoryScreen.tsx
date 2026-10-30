@@ -568,7 +568,7 @@ export default function HistoryScreen({
             aria-pressed={tags.includes(tag)}
             onClick={() => toggleTag(tag)}
           >
-            {tag}
+            {tagLabel(tag)}
           </button>
         ))}
       </div>
@@ -710,7 +710,7 @@ function Results({
             <ul className="history-tag-list">
               {data.tags.map((t) => (
                 <li key={t.tag}>
-                  <span className="timer-tag">{t.tag}</span>
+                  <span className="timer-tag">{tagLabel(t.tag)}</span>
                   <span>{formatDuration(t.focusSeconds)}</span>
                 </li>
               ))}
@@ -836,7 +836,7 @@ function SessionRow({
       </p>
       <p className="history-row-main">
         <span>{MODE_LABEL[session.mode]}</span>
-        <span className="timer-tag">{session.tag}</span>
+        <span className="timer-tag">{tagLabel(session.tag)}</span>
         <span>{formatDuration(session.focusSeconds)}</span>
         <span>{STATUS_LABEL[session.status]}</span>
       </p>
