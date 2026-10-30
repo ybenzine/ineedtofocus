@@ -61,7 +61,13 @@ async function setup({ online, sessions = 0 }: { online: boolean; sessions?: num
   const user = { id: 'u1', email: 'a@b.co', created_at: '2026-10-23T00:00:00Z' }
   render(
     <AccountContext.Provider
-      value={{ user, expired: false, leaveExpired: () => undefined, signOut }}
+      value={{
+        user,
+        expired: false,
+        leaveExpired: () => undefined,
+        signOut,
+        accountDeleted: async () => undefined,
+      }}
     >
       <AccountBar controller={controller} />
     </AccountContext.Provider>,

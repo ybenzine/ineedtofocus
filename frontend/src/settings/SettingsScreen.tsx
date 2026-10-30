@@ -8,6 +8,7 @@ import { REMINDER_OPTIONS } from '../timer/index.ts'
 import { wakeLockSupported } from '../timerscreen/wakeLock.ts'
 import type { ReminderSetting, ThemeSetting } from './api.ts'
 import { useSettingsState, useSettingsStore } from './SettingsContext.ts'
+import AccountSection from '../auth/AccountSection.tsx'
 import RangeInput from '../RangeInput.tsx'
 
 const THEME_CHOICES: { value: ThemeSetting; label: string }[] = [
@@ -126,6 +127,8 @@ export default function SettingsScreen({ player }: { player: AlertPlayer }) {
       <p role="status" className="field-hint">
         {waiting ? "Saved on this device. It will sync when you're back online." : ''}
       </p>
+
+      <AccountSection />
     </div>
   )
 }
