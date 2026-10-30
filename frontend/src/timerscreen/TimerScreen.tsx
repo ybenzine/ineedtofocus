@@ -10,6 +10,7 @@ import {
   type TimerSnapshot,
   type TimerUpdate,
 } from '../timer/index.ts'
+import { YoutubeIcon } from '../sounds/YoutubeLabel.tsx'
 import { formatCountdown, formatElapsed } from './format.ts'
 import { useKeepAwakeSetting, useWakeLock, wakeLockSupported } from './wakeLock.ts'
 
@@ -45,6 +46,54 @@ function clockText(snapshot: TimerSnapshot): string {
   if (snapshot.pomodoro) return formatCountdown(snapshot.pomodoro.phaseRemainingMs)
   if (snapshot.remainingMs !== null) return formatCountdown(snapshot.remainingMs)
   return formatElapsed(snapshot.focusMs)
+}
+
+/** "of 25:00": the length of the countdown or Pomodoro phase; "elapsed" for an unlimited timer. */
+function totalText(snapshot: TimerSnapshot): string {
+  const { config, pomodoro } = snapshot
+  let minutes: number | null = null
+  if (config.mode === 'countdown') minutes = config.minutes
+  else if (config.mode === 'pomodoro' && pomodoro) {
+    minutes =
+      pomodoro.phase === 'focus'
+        ? config.focusMinutes
+        : pomodoro.phase === 'break'
+          ? config.breakMinutes
+          : config.longBreakMinutes
+  }
+  return minutes === null ? 'elapsed' : `of ${formatCountdown(minutes * 60_000)}`
+}
+
+/** The audio card's icon: a rain cloud, the YouTube mark, or a muted speaker. Decorative. */
+function AudioIcon({ source }: { source: AudioSource }) {
+  if (source === 'youtube') return <YoutubeIcon />
+  return (
+    <svg
+      className="timer-audio-icon"
+      aria-hidden="true"
+      focusable="false"
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      {source === 'rain' ? (
+        <>
+          <path d="M20 16.6A5 5 0 0 0 18 7h-1.3A8 8 0 1 0 4 15.3" />
+          <path d="M8 19v2M8 13v2M16 19v2M16 13v2M12 21v2M12 15v2" />
+        </>
+      ) : (
+        <>
+          <path d="M11 5 6 9H2v6h4l5 4z" />
+          <path d="m22 9-6 6M16 9l6 6" />
+        </>
+      )}
+    </svg>
+  )
 }
 
 /** Shown while the timer runs only in memory; clears once the write to the device lands (#245). */
@@ -151,23 +200,32 @@ export default function TimerScreen({
   const inBreak = pomodoro !== null && pomodoro.phase !== 'focus'
   const label = pomodoro ? PHASE_LABEL[pomodoro.phase] : 'Focus'
 
+  const total = totalText(snapshot)
+
   return (
     <section className={`timer-screen${inBreak ? ' on-break' : ''}`} aria-label="Focus timer">
-      <p className="timer-mode">{MODE_LABEL[snapshot.mode]}</p>
-
-      <h1 className="timer-phase" aria-live="polite" tabIndex={-1} ref={headingRef}>
-        {snapshot.paused ? `${label}, paused` : label}
-      </h1>
-
-      <div className="timer-clock" role="timer" aria-label="Time">
-        {clockText(snapshot)}
+      <div className="timer-top">
+        <h1 className="timer-phase" aria-live="polite" tabIndex={-1} ref={headingRef}>
+          {snapshot.paused ? `${label}, paused` : label}
+        </h1>
+        {pomodoro ? (
+          <p className="timer-progress">
+            <span className="sr-only">{MODE_LABEL[snapshot.mode]}. </span>
+            <span>
+              Block {pomodoro.block} of {pomodoro.totalBlocks}
+            </span>
+          </p>
+        ) : (
+          <p className="timer-mode">{MODE_LABEL[snapshot.mode]}</p>
+        )}
       </div>
 
-      {pomodoro && (
-        <p className="timer-progress">
-          Block {pomodoro.block} of {pomodoro.totalBlocks}
-        </p>
-      )}
+      <div className="timer-ring">
+        <div className="timer-clock" role="timer" aria-label="Time">
+          {clockText(snapshot)}
+        </div>
+        <p className="timer-of">{total}</p>
+      </div>
 
       <p className="timer-meta">
         <span className="timer-tag">{snapshot.tag}</span>
@@ -178,71 +236,74 @@ export default function TimerScreen({
         {unsaved ? UNSAVED_NOTICE : ''}
       </p>
 
-      <div className="timer-controls">
-        {snapshot.paused ? (
-          <button
-            type="button"
-            className="primary"
-            onClick={() => void run(() => controller.resume())}
-          >
-            Resume
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="primary"
-            onClick={() => void run(() => controller.pause())}
-          >
-            Pause
-          </button>
-        )}
-        {inBreak && (
-          <button
-            type="button"
-            className="secondary"
-            onClick={() => void run(() => controller.skipBreak())}
-          >
-            Skip break
-          </button>
-        )}
-        <button
-          type="button"
-          className="secondary danger"
-          onClick={() => void run(() => controller.stop())}
-        >
-          Stop
-        </button>
-      </div>
-
       {error && (
         <p role="alert" className="field-error">
           {error}
         </p>
       )}
 
-      <section className="timer-audio" aria-label="Background audio">
-        <p>{AUDIO_LABEL[audio]}</p>
-        {typeof audioControls === 'function'
-          ? audioControls({ paused: snapshot.paused })
-          : audioControls}
-      </section>
+      <div className="timer-bottom">
+        <section className="timer-audio" aria-label="Background audio">
+          <AudioIcon source={audio} />
+          <p className="timer-audio-name">{AUDIO_LABEL[audio]}</p>
+          {typeof audioControls === 'function'
+            ? audioControls({ paused: snapshot.paused })
+            : audioControls}
+        </section>
 
-      <div className="timer-awake">
-        <label className="choice">
-          <input
-            type="checkbox"
-            checked={keepAwake}
-            disabled={!wakeLockSupported()}
-            aria-describedby="keep-awake-hint"
-            onChange={(event) => setKeepAwake(event.target.checked)}
-          />
-          Keep screen awake
-        </label>
-        <p id="keep-awake-hint" className="field-hint">
-          {wakeLockSupported()
-            ? 'Stops the screen from turning off during the session.'
-            : 'Not supported on this device or browser.'}
-        </p>
+        <div className="timer-controls">
+          {snapshot.paused ? (
+            <button
+              type="button"
+              className="primary"
+              onClick={() => void run(() => controller.resume())}
+            >
+              Resume
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="primary"
+              onClick={() => void run(() => controller.pause())}
+            >
+              Pause
+            </button>
+          )}
+          <button
+            type="button"
+            className="secondary danger"
+            onClick={() => void run(() => controller.stop())}
+          >
+            Stop
+          </button>
+          {inBreak && (
+            <button
+              type="button"
+              className="secondary timer-skip"
+              onClick={() => void run(() => controller.skipBreak())}
+            >
+              Skip break
+            </button>
+          )}
+        </div>
+
+        <div className="timer-awake">
+          <label className="choice">
+            <input
+              type="checkbox"
+              checked={keepAwake}
+              disabled={!wakeLockSupported()}
+              aria-describedby="keep-awake-hint"
+              onChange={(event) => setKeepAwake(event.target.checked)}
+            />
+            Keep screen awake
+          </label>
+          <p id="keep-awake-hint" className="field-hint">
+            {wakeLockSupported()
+              ? 'Stops the screen from turning off during the session.'
+              : 'Not supported on this device or browser.'}
+          </p>
+        </div>
       </div>
     </section>
   )

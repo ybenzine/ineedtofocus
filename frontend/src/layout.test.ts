@@ -86,3 +86,18 @@ describe('fieldset legends are pills (#330)', () => {
     expect(legend).toMatch(/max-width:\s*100%/)
   })
 })
+
+describe('timer screen follows the mockup (#327)', () => {
+  it('draws a static 280 px ring: 10 px surface stroke, 2 px border inset', () => {
+    const ring = rule('.timer-ring')
+    expect(ring).toMatch(/width:\s*17\.5rem/)
+    expect(ring).toMatch(/border:\s*10px solid var\(--surface\)/)
+    expect(ring).toMatch(/inset 0 0 0 2px var\(--border\)/)
+  })
+
+  it('makes Pause and Stop 52 px tall with a 14 px radius', () => {
+    const buttons = rule('.timer-controls button')
+    expect(buttons).toMatch(/min-height:\s*3\.25rem/)
+    expect(buttons).toMatch(/border-radius:\s*0\.875rem/)
+  })
+})
