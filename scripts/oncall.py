@@ -687,6 +687,10 @@ def check_comment(path: Path) -> None:
         raise Invalid(f"comment.md is longer than {MAX_COMMENT} characters")
     if MARKER_TEXT.search(text):
         raise Invalid("comment.md holds the workflow's own record (<!-- oncall:…)")
+    # A key a session saw (its prompt's subprocess check prints one if the scrub fails,
+    # #266) never reaches a public comment.
+    if SECRET_SHAPES.search(text):
+        raise Invalid("comment.md holds token-shaped text (a key or a token)")
 
 
 def decision(directory: str, values: dict[str, str]) -> int:

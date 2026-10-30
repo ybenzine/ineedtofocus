@@ -8,6 +8,7 @@ import json
 import threading
 import urllib.parse
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, ClassVar
 
 import grafana_alerts as ga
@@ -19,7 +20,13 @@ TOKEN = "glsa_test_token_not_real"
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("GRAFANA_URL", "GRAFANA_READONLY_TOKEN", *og.UID_OVERRIDES.values()):
+    for name in (
+        "GRAFANA_URL",
+        "GRAFANA_READONLY_TOKEN",
+        og.TOKEN_DIR,
+        "GITHUB_WORKSPACE",
+        *og.UID_OVERRIDES.values(),
+    ):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -84,8 +91,123 @@ def test_only_https_or_this_machine(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_the_cloud_needs_the_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(og.GrafanaError, match="GRAFANA_READONLY_TOKEN is not set"):
+    with pytest.raises(og.GrafanaError, match=r"GRAFANA_READONLY_TOKEN is not set.*ONCALL_GRAFANA"):
         og.get("/api/health")
+
+
+# --- The on-call sessions' token file (#266) ------------------------------------------
+
+
+def token_file(directory: Path, content: str = TOKEN + "\n", mode: int = 0o600) -> Path:
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = directory / og.TOKEN_FILE
+    path.write_text(content)
+    path.chmod(mode)
+    return path
+
+
+class FakeCloud:
+    """Stands in for Grafana Cloud's opener: records each request, answers no series."""
+
+    def __init__(self) -> None:
+        self.seen: list[Any] = []
+
+    def __enter__(self) -> FakeCloud:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        pass
+
+    def read(self) -> bytes:
+        return b'{"status": "success", "data": {"result": []}}'
+
+    def open(self, request: Any, timeout: float) -> FakeCloud:
+        self.seen.append(request)
+        return self
+
+
+def test_a_session_reads_the_token_from_its_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No GRAFANA_READONLY_TOKEN in the environment (the scrub strips it): the token comes
+    from `token` in ONCALL_GRAFANA_DIR and goes in the header, over https."""
+    token_file(tmp_path / "runner" / "oncall-grafana")
+    monkeypatch.setenv(og.TOKEN_DIR, str(tmp_path / "runner" / "oncall-grafana"))
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path / "work"))
+    cloud = FakeCloud()
+    monkeypatch.setattr(ga._OPENER, "open", cloud.open)
+    assert og.prom("up") == []
+    (request,) = cloud.seen
+    assert request.get_header("Authorization") == f"Bearer {TOKEN}"
+    # A person's own token, in the environment, comes first.
+    monkeypatch.setenv("GRAFANA_READONLY_TOKEN", "glsa_a_persons_own")
+    assert og.token() == "glsa_a_persons_own"
+
+
+@pytest.mark.parametrize("mode", [0o600, 0o400])
+def test_mode_0600_or_narrower_is_read(tmp_path: Path, mode: int) -> None:
+    assert og.token_from_file(token_file(tmp_path / "t", mode=mode)) == TOKEN
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o640, 0o604, 0o660, 0o606, 0o700, 0o610, 0o666])
+def test_a_mode_wider_than_0600_is_refused(tmp_path: Path, mode: int) -> None:
+    path = token_file(tmp_path / "t", mode=mode)
+    with pytest.raises(og.GrafanaError, match=f"mode {mode:04o}, wider than 0600") as e:
+        og.token_from_file(path)
+    assert TOKEN not in str(e.value)
+
+
+def test_a_missing_file_is_refused_clearly(tmp_path: Path) -> None:
+    with pytest.raises(og.GrafanaError, match=r"no Grafana token file at .*writes it before"):
+        og.token_from_file(tmp_path / "oncall-grafana" / "token")
+
+
+def test_a_file_in_the_checkout_or_the_workspace_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(og, "CHECKOUT", tmp_path / "checkout")
+    in_checkout = token_file(tmp_path / "checkout" / "tmp")
+    with pytest.raises(og.GrafanaError, match="inside the checkout"):
+        og.token_from_file(in_checkout)
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path / "workspace"))
+    in_workspace = token_file(tmp_path / "workspace" / "a" / "b")
+    with pytest.raises(og.GrafanaError, match="inside the checkout"):
+        og.token_from_file(in_workspace)
+    # Through a link too: the check is on the resolved path.
+    (tmp_path / "elsewhere").symlink_to(tmp_path / "workspace" / "a")
+    with pytest.raises(og.GrafanaError, match="inside the checkout"):
+        og.token_from_file(tmp_path / "elsewhere" / "b" / "token")
+    assert og.token_from_file(token_file(tmp_path / "runner")) == TOKEN
+
+
+def test_a_link_a_directory_or_an_odd_content_is_refused(tmp_path: Path) -> None:
+    real = token_file(tmp_path / "real")
+    link = tmp_path / "link"
+    link.mkdir(mode=0o700)
+    (link / "token").symlink_to(real)
+    with pytest.raises(og.GrafanaError, match="is a symlink"):
+        og.token_from_file(link / "token")
+    (tmp_path / "dir" / "token").mkdir(parents=True, mode=0o700)
+    with pytest.raises(og.GrafanaError, match="not a regular file"):
+        og.token_from_file(tmp_path / "dir" / "token")
+    for content in ("", "  \n", f"{TOKEN} {TOKEN}\n", f"{TOKEN}\nsecond\n"):
+        path = token_file(tmp_path / "odd", content=content)
+        with pytest.raises(og.GrafanaError, match="doesn't hold one token") as e:
+            og.token_from_file(path)
+        assert TOKEN not in str(e.value)
+
+
+def test_the_cli_exits_non_zero_and_never_prints_the_token_from_a_bad_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv(og.TOKEN_DIR, str(tmp_path / "oncall-grafana"))
+    assert og.main(["journey", "dev"]) == 1
+    assert "error: no Grafana token file at" in capsys.readouterr().err
+    token_file(tmp_path / "oncall-grafana", mode=0o644)
+    assert og.main(["journey", "dev"]) == 1
+    out = capsys.readouterr()
+    assert "wider than 0600: refused" in out.err
+    assert TOKEN not in out.out + out.err
 
 
 def test_the_token_never_goes_over_plain_http(

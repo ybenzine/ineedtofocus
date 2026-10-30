@@ -84,6 +84,7 @@ def allowed(session: str, out: str) -> list[str]:
         "Bash(gh pr list *)",
         "Bash(gh run view *)",
         "Bash(gh run list *)",
+        "Bash(printenv ANTHROPIC_API_KEY)",
         f"Edit(/{out}/decision.json)",
         f"Edit(/{out}/comment.md)",
         f"Edit(/{out}/pr.md)",
@@ -142,10 +143,25 @@ def checkout(root: Path) -> Path:
     # The review's agent comes from `oncall.py reviewer-agent`; Python resolves the link,
     # so it imports its modules from the repo.
     (root / "scripts" / "oncall.py").symlink_to(REPO / "scripts" / "oncall.py")
-    (root / "scripts" / "oncall_grafana.py").write_text(
-        'import sys\nprint("grafana ok", *sys.argv[1:])\n'
-    )
+    (root / "scripts" / "oncall_grafana.py").write_text(GRAFANA_STUB)
     return root
+
+
+# What a session's commands see (#266): which secret variables reached them (never their
+# values), and for the Grafana stub whether its token file is there.
+SEEN = (
+    "for v in ANTHROPIC_API_KEY GRAFANA_READONLY_TOKEN GH_TOKEN; do\n"
+    '  if [[ -n ${!v:-} ]]; then printf " %s=set" "$v"; else printf " %s=unset" "$v"; fi\n'
+    "done\necho\n"
+)
+GRAFANA_STUB = """import os, sys
+from pathlib import Path
+seen = [f"{v}={'set' if os.environ.get(v) else 'unset'}"
+        for v in ("ANTHROPIC_API_KEY", "GRAFANA_READONLY_TOKEN")]
+token = Path(os.environ.get("ONCALL_GRAFANA_DIR", "/nonexistent"), "token")
+found = "readable" if token.is_file() and token.read_text().strip() else "missing"
+print("grafana ok", *sys.argv[1:], *seen, f"token-file={found}")
+"""
 
 
 def run_wrapper(
@@ -184,7 +200,12 @@ def test_each_session_gets_its_own_allow_list_on_the_command_line(
     work = checkout(tmp_path.resolve() / "work")
     out = tmp_path.resolve() / "oncall"
     args_file = tmp_path / "args"
-    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path), "ARGS_FILE": str(args_file)}
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "HOME": str(tmp_path),
+        "ARGS_FILE": str(args_file),
+        "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
+    }
     done = run_wrapper(session, work, out, env)
     assert done.returncode == 0, done.stdout + done.stderr
     argv = args_file.read_text().splitlines()
@@ -237,6 +258,27 @@ def test_each_session_gets_its_own_allow_list_on_the_command_line(
         ):
             assert rule in denied
     assert "::notice title=Session permissions::" in done.stdout
+
+
+@pytest.mark.parametrize("scrub", [None, "", "0", "true", "yes"])
+def test_no_session_starts_without_the_env_scrub(tmp_path: Path, scrub: str | None) -> None:
+    """The workflow's session steps set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 (#266). Anything
+    else, and the wrapper stops before claude runs: the commands a session runs would
+    inherit the Claude key."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "claude").write_text(FAKE_CLAUDE)
+    (bin_dir / "claude").chmod(0o755)
+    work = checkout(tmp_path.resolve() / "work")
+    args_file = tmp_path / "args"
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(tmp_path), "ARGS_FILE": str(args_file)}
+    if scrub is not None:
+        env["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = scrub
+    for session in SESSIONS:
+        done = run_wrapper(session, work, tmp_path.resolve() / "oncall", env)
+        assert done.returncode == 2, done.stdout + done.stderr
+        assert "::error title=No env scrub::" in done.stdout + done.stderr
+        assert not args_file.exists(), "claude ran"
 
 
 def test_the_wrapper_refuses_an_unknown_session_and_a_wrong_directory(tmp_path: Path) -> None:
@@ -644,6 +686,12 @@ def test_the_wrapper_refuses_what_check_fix_refuses() -> None:
         assert f"'Edit(./{path})'" in wrapper, path
 
 
+def grafana_token(work: Path) -> Path:
+    """Where the workflow writes the Grafana token file: under $RUNNER_TEMP, outside the
+    checkout (#266)."""
+    return work.parent / "runner-temp" / "oncall-grafana" / "token"
+
+
 def probes(session: str, work: Path, out: Path) -> list[tuple[dict[str, Any], bool]]:
     """(tool call, allowed?) for a session. The commands its prompt and runbook name, then
     what it mustn't do, including what the project settings would allow if they applied."""
@@ -664,6 +712,12 @@ def probes(session: str, work: Path, out: Path) -> list[tuple[dict[str, Any], bo
         bash('gh issue view "$GRAFANA_READONLY_TOKEN"'),
         bash("gh pr view ${GH_TOKEN}"),
         bash("cat /etc/hosts"),
+        # Only the respond session's one exact check (#266), and no other variable.
+        bash("printenv"),
+        bash("printenv GRAFANA_READONLY_TOKEN"),
+        bash("printenv GH_TOKEN"),
+        bash("printenv ANTHROPIC_API_KEY GRAFANA_READONLY_TOKEN"),
+        {"tool": "Read", "input": {"file_path": str(grafana_token(work))}},
         *(bash(c) for c in READ_OUTSIDE_NO),
         # Only scripts/oncall-commit.sh stages and commits, in the respond session.
         *(bash(c) for c in COMMIT_NO),
@@ -697,6 +751,7 @@ def probes(session: str, work: Path, out: Path) -> list[tuple[dict[str, Any], bo
         ]
         no = [
             *common_no,
+            bash("printenv ANTHROPIC_API_KEY"),
             bash("make test-scripts"),
             bash("gh pr checkout 12"),
             bash("python3 scripts/oncall_grafana.py journey dev"),
@@ -713,6 +768,7 @@ def probes(session: str, work: Path, out: Path) -> list[tuple[dict[str, Any], bo
         ]
         no = [
             *common_no,
+            bash("printenv ANTHROPIC_API_KEY"),
             bash("make test-scripts"),
             bash("git switch -c oncall/7-probe"),
             write(out / "decision.json"),
@@ -730,6 +786,8 @@ def probes(session: str, work: Path, out: Path) -> list[tuple[dict[str, Any], bo
             bash("gh run list --workflow ci.yml --branch main --event push --limit 5"),
             bash("gh run list --workflow deploy-prod.yml --limit 5"),
             bash("gh pr list --state merged --limit 10"),
+            # The prompt's subprocess check (#266): allowed, and it finds nothing.
+            bash("printenv ANTHROPIC_API_KEY"),
             write(out / "decision.json"),
             write(out / "comment.md"),
             write(out / "pr.md"),
@@ -772,12 +830,17 @@ def test_the_pinned_cli_allows_each_session_exactly_its_tools(
     bin_dir = root / "bin"
     bin_dir.mkdir()
     for name, text in (
-        ("gh", '#!/usr/bin/env bash\necho "gh ok $*"\n'),
-        ("make", '#!/usr/bin/env bash\necho "make ok $*"\n'),
+        ("gh", f'#!/usr/bin/env bash\nprintf "gh ok %s" "$*"\n{SEEN}'),
+        ("make", f'#!/usr/bin/env bash\nprintf "make ok %s" "$*"\n{SEEN}'),
         ("python3", f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n'),
     ):
         (bin_dir / name).write_text(text)
         (bin_dir / name).chmod(0o755)
+    # The workflow's token file (#266): mode 600, under $RUNNER_TEMP, outside the checkout.
+    token_file = grafana_token(work)
+    token_file.parent.mkdir(parents=True, mode=0o700)
+    token_file.write_text("glsa_oc266_fake\n")
+    token_file.chmod(0o600)
     git = shutil.which("git")
     assert git
     path = [str(bin_dir), str(Path(claude).parent), str(Path(git).parent), "/usr/bin", "/bin"]
@@ -789,11 +852,15 @@ def test_the_pinned_cli_allows_each_session_exactly_its_tools(
         "HOME": str(home),
         "ANTHROPIC_BASE_URL": api,
         "ANTHROPIC_API_KEY": "sk-ant-oc232-fake",
+        # Not in a session step's env since #266; here to show the scrub strips it anyway.
         "GRAFANA_READONLY_TOKEN": "glsa_oc232_fake",
         "GH_TOKEN": "ghs_oc232fake",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         "DISABLE_AUTOUPDATER": "1",
         "GIT_CONFIG_NOSYSTEM": "1",
+        # As the workflow's session steps set them (#266).
+        "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1",
+        "ONCALL_GRAFANA_DIR": str(token_file.parent),
     }
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=work, env=env, check=True)
     # The identity in the checkout's own config, as the respond job's "Write the prompt"
@@ -805,6 +872,7 @@ def test_the_pinned_cli_allows_each_session_exactly_its_tools(
     table = probes(session, work, out)
     FakeAPI.asked = []
     wrong = []
+    said: dict[int, str] = {}  # what each allowed call returned, by its place in the table
     # In order, in runs of at most 60 calls: a session's turn cap is at most 99.
     for start in range(0, len(table), 60):
         chunk = table[start : start + 60]
@@ -815,13 +883,36 @@ def test_the_pinned_cli_allows_each_session_exactly_its_tools(
         assert result.get("subtype") == "success", (result, done.stderr)
         # The project's allow rules don't apply: the session's permissions are the wrapper's.
         assert "this workspace has not been trusted" in done.stderr
+        # The scrub is on (#266). It forces the permission mode to default, which in -p
+        # mode refuses what the allow list doesn't cover, as dontAsk does: the table holds.
+        assert "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set" in done.stderr
         denied = {d["tool_use_id"] for d in result["permission_denials"]}
         for i, (call, ok) in enumerate(chunk):
             tool_id = f"toolu_{i:03d}"
             assert tool_id in FakeAPI.results, f"the CLI never ran {call}"
             if ok == (tool_id in denied):
                 wrong.append(("refused" if ok else "allowed", call["tool"], call["input"]))
+            said[start + i] = json.dumps(FakeAPI.results[tool_id].get("content"))
     assert not wrong, wrong
+    # What the session's commands got in their environment (#266): no Claude key and no
+    # Grafana token; the Grafana script reads its token file; gh keeps its read-only token.
+    no_secrets = "ANTHROPIC_API_KEY=unset GRAFANA_READONLY_TOKEN=unset"
+    checked = 0
+    for n, (call, ok) in enumerate(table):
+        command = call["input"].get("command", "") if call["tool"] == "Bash" else ""
+        if not ok or not command:
+            continue
+        if command.startswith(("make ", "gh ")):
+            assert f"{no_secrets} GH_TOKEN=set" in said[n], (command, said[n])
+            checked += 1
+        elif command.startswith("python3 scripts/oncall_grafana.py "):
+            assert f"{no_secrets} token-file=readable" in said[n], (command, said[n])
+            checked += 1
+        elif command == "printenv ANTHROPIC_API_KEY":
+            # Nothing, exit 1: what the dev drill's session reports.
+            assert "sk-ant" not in said[n] and "Exit code 1" in said[n], said[n]
+            checked += 1
+    assert checked >= 3, checked
     # The agent definition's model and effort reach the API (#35's AC, #232).
     meta = frontmatter(session)
     assert FakeAPI.asked, "no main-loop request"

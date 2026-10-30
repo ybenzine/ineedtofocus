@@ -46,6 +46,15 @@ esac
 [[ $turns =~ ^[1-9][0-9]?$ && $budget =~ ^[1-9][0-9]?$ ]] || { echo "bad caps" >&2; exit 2; }
 [[ -s $prompt ]] || { echo "no prompt at $prompt" >&2; exit 2; }
 [[ -f .claude/agents/$agent.md ]] || { echo "run from the checkout's root" >&2; exit 2; }
+# The commands a session runs get no secret-named variable (#266): the workflow's session
+# steps set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1, so code a session wrote and ran with
+# `make test-*` can't read the Claude key. Without it, no session starts. With it, the CLI
+# prints "Permission mode forced to default": in -p mode that refuses whatever the allow
+# list doesn't cover, like dontAsk (test_oncall_cli.py checks it on the pinned CLI).
+[[ ${CLAUDE_CODE_SUBPROCESS_ENV_SCRUB:-} == 1 ]] || {
+  echo "::error title=No env scrub::an on-call session needs CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1 (#266)"
+  exit 2
+}
 # The definition's effort: in -p mode Claude Code doesn't apply an agent's `effort:` (it
 # sends medium), so it's passed as a flag. Its `model:` does apply (#232, tested).
 effort=$(sed -n 's/^effort: *//p' ".claude/agents/$agent.md" | head -n 1)
@@ -75,6 +84,8 @@ case $session in
     ALLOWED=(
       "${GH_READ[@]}" "${GRAFANA[@]}" 'Bash(gh issue list *)' 'Bash(gh pr list *)'
       'Bash(gh run view *)' 'Bash(gh run list *)'
+      # The prompt's subprocess check (#266): with the scrub it prints nothing, exit 1.
+      'Bash(printenv ANTHROPIC_API_KEY)'
       "Edit(/$out/decision.json)" "Edit(/$out/comment.md)" "Edit(/$out/pr.md)"
       # A fix: its branch, its commits (scripts/oncall-commit.sh only), the tests and
       # linters that cover it, and the code.

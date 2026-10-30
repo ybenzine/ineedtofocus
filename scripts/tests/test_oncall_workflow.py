@@ -115,7 +115,12 @@ def test_each_secret_goes_only_to_the_steps_that_need_it(jobs: dict[str, Any]) -
     }
     assert holders["REVIEWER_APP_KEY"] == {("post-review", "Post it through the reviewer App")}
     assert {j for j, _ in holders["ANTHROPIC_API_KEY"]} == set(SESSION_JOBS)
-    assert {j for j, _ in holders["GRAFANA_READONLY_TOKEN"]} == {"respond", "wait", "follow-up"}
+    # The sessions' Grafana token goes through a file, never their step's env (#266).
+    assert holders["GRAFANA_READONLY_TOKEN"] == {
+        ("respond", "Write the Grafana token file"),
+        ("wait", "Wait (read-only Grafana)"),
+        ("follow-up", "Write the Grafana token file"),
+    }
     assert set(holders) == {
         "ONCALL_APP_KEY",
         "REVIEWER_APP_KEY",
@@ -1189,3 +1194,131 @@ def test_simulated_failed_merge_asks_once(tmp_path: Path, grafana: str) -> None:
     assert len(merge_comments) == 1, merge_comments
     assert "a step of the merge job failed" in merge_comments[0]
     assert not [b for _, b in sim.comments() if "isn't set up" in b]
+
+
+# --- No secret in a session's commands (#266) ---------------------------------------------
+
+MIN_CLI = (2, 1, 310)  # the first Claude Code with CLAUDE_CODE_SUBPROCESS_ENV_SCRUB tested here
+TOKEN_DIR = "${{ runner.temp }}/oncall-grafana"
+
+
+def version_at_least(version: str, minimum: tuple[int, ...] = MIN_CLI) -> bool:
+    """`major.minor.patch` compared as numbers: 2.1.31 is older than 2.1.310."""
+    m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
+    return m is not None and tuple(int(p) for p in m.groups()) >= minimum
+
+
+def test_the_version_check_compares_numbers() -> None:
+    for ok in ("2.1.310", "2.1.311", "2.2.0", "3.0.0", "2.1.1000"):
+        assert version_at_least(ok), ok
+    for old in ("2.1.309", "2.1.31", "2.0.999", "1.9.999", "2.1", "2.1.310-beta", "latest", ""):
+        assert not version_at_least(old), old
+
+
+def test_the_pinned_cli_has_the_env_scrub(workflow: dict[Any, Any]) -> None:
+    """CLAUDE_CODE_SUBPROCESS_ENV_SCRUB needs Claude Code 2.1.310 or later."""
+    assert version_at_least(workflow["env"]["CLAUDE_CODE_VERSION"])
+
+
+def test_every_session_runs_with_the_env_scrub(jobs: dict[str, Any]) -> None:
+    """The on-call, reviewer and follow-up sessions: the commands each runs get no Claude
+    key and no other secret-named variable. scripts/oncall-claude.sh refuses to start
+    without it too (test_oncall_cli.py)."""
+    sessions = {name: runs_claude(job) for name, job in jobs.items() if runs_claude(job)}
+    assert set(sessions) == set(SESSION_JOBS)
+    for name, steps in sessions.items():
+        (step,) = steps
+        # The string "1": a YAML 1 or true would reach the runner as "1" or "true".
+        assert step["env"].get("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB") == "1", name
+
+
+def test_no_session_step_holds_the_grafana_token(jobs: dict[str, Any]) -> None:
+    """The scrub strips it from the session's commands anyway; the Grafana script reads it
+    from a file instead (#266). The Claude key is the only secret in a session's step."""
+    for name in SESSION_JOBS:
+        (step,) = runs_claude(jobs[name])
+        assert secrets_in(step) == {"ANTHROPIC_API_KEY"}, name
+        assert "GRAFANA_READONLY_TOKEN" not in step["env"], name
+        if name == "review":
+            assert "ONCALL_GRAFANA_DIR" not in step["env"]
+        else:
+            assert step["env"]["ONCALL_GRAFANA_DIR"] == TOKEN_DIR, name
+
+
+def test_the_grafana_token_file_is_written_before_and_removed_after_the_session(
+    jobs: dict[str, Any],
+) -> None:
+    """Under $RUNNER_TEMP (outside $GITHUB_WORKSPACE), mode 600 in a mode-700 directory,
+    and removed right after the session whatever happened: `if: always()`."""
+    for name in ("respond", "follow-up"):
+        steps = jobs[name]["steps"]
+        names = [s.get("name") for s in steps]
+        (session,) = runs_claude(jobs[name])
+        at = steps.index(session)
+        write = steps[names.index("Write the Grafana token file")]
+        remove = steps[names.index("Remove the Grafana token file")]
+        assert steps.index(write) < at < steps.index(remove), name
+        assert steps.index(remove) == at + 1, name  # nothing else runs while it's there
+        assert write["env"] == {"GRAFANA_READONLY_TOKEN": "${{ secrets.GRAFANA_READONLY_TOKEN }}"}
+        assert write["run"] == (
+            'install -d -m 700 "$RUNNER_TEMP/oncall-grafana"\n'
+            "(umask 077 && printf '%s\\n' \"$GRAFANA_READONLY_TOKEN\" > "
+            '"$RUNNER_TEMP/oncall-grafana/token")\n'
+        )
+        assert "if" not in write
+        assert remove["if"] == "always()"
+        assert remove["run"] == 'rm -rf "$RUNNER_TEMP/oncall-grafana"'
+        assert "env" not in remove
+    for name, job in jobs.items():
+        if name not in ("respond", "follow-up"):
+            assert "oncall-grafana" not in yaml.safe_dump(job), name
+
+
+# A session script for the simulation: what the session's Grafana script sees.
+TOKEN_PROBE = r"""
+python3 - <<'EOF'
+import json, os, stat, sys
+from pathlib import Path
+sys.path.insert(0, "scripts")
+import oncall_grafana as og
+path = Path(os.environ["ONCALL_GRAFANA_DIR"], "token")
+seen = {
+    "env": "GRAFANA_READONLY_TOKEN" in os.environ,
+    "mode": oct(stat.S_IMODE(path.stat().st_mode)),
+    "dir_mode": oct(stat.S_IMODE(path.parent.stat().st_mode)),
+    "matches": og.token() == "glsa-fake",
+    "path": str(path),
+}
+Path(os.environ["SIM"], "token-seen.json").write_text(json.dumps(seen))
+EOF
+"""
+
+
+@pytest.mark.parametrize("exit_code", ["0", "1"])
+def test_simulated_session_reads_the_grafana_token_from_a_file_that_goes_away(
+    tmp_path: Path, grafana: str, exit_code: str
+) -> None:
+    """The respond job as the workflow runs it: the session's Grafana script gets the token
+    from the mode-600 file, with no GRAFANA_READONLY_TOKEN in its environment, and the file
+    is gone when the job ends, after a session that failed too (#266)."""
+    sim = simulation(tmp_path, grafana, dispatch())
+    sim.write("issues.json", [incident_issue(77)])
+    sim.write("claude-exit-oncall", exit_code)
+    sim.session(
+        "oncall",
+        TOKEN_PROBE
+        + write_files(decision_json=decision(action="escalate"), comment_md="⛔ Needs Yacine: x"),
+    )
+    jobs = sim.run()
+    assert jobs["respond"]["result"] == ("success" if exit_code == "0" else "failure")
+    seen = json.loads((sim.sim / "token-seen.json").read_text())
+    assert seen["env"] is False and seen["matches"] is True, seen
+    assert seen["mode"] == "0o600" and seen["dir_mode"] == "0o700", seen
+    runner = jobs["respond"]["dir"] / "runner"
+    assert Path(seen["path"]).parent == runner / "oncall-grafana"
+    assert not (runner / "oncall-grafana").exists()
+    (session,) = sim.sessions()
+    lines = (session / "full-env").read_text().splitlines()
+    assert "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1" in lines
+    assert f"ONCALL_GRAFANA_DIR={runner}/oncall-grafana" in lines
+    assert not [line for line in lines if "glsa-fake" in line]

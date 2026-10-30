@@ -15,10 +15,16 @@
 Grafana: `GRAFANA_URL` (default https://ineedtofocus.grafana.net), with the Viewer token in
 `GRAFANA_READONLY_TOKEN` (the `oncall` environment's secret, _docs/observability.md). The
 token goes only to an https:// Grafana, in a header, and is never printed; a redirect is
-never followed, since it would carry the token elsewhere. A local stack works too:
-`GRAFANA_URL=http://127.0.0.1:3000`, no token. Data source UIDs default to Grafana Cloud's
-built-in ones (grafana/otel-lgtm's locally); `GRAFANA_PROM_UID`, `GRAFANA_LOGS_UID` and
-`GRAFANA_TRACES_UID` override them.
+never followed, since it would carry the token elsewhere. In an on-call session the token
+isn't in the environment: CLAUDE_CODE_SUBPROCESS_ENV_SCRUB strips it from the commands a
+session runs, with the Claude key (#266). There it comes from the file `token` in
+`ONCALL_GRAFANA_DIR`, which the workflow writes under $RUNNER_TEMP before the session and
+removes after it. The file must be a regular file of this user's, mode 0600 or narrower,
+outside the checkout and $GITHUB_WORKSPACE; anything else is refused before it's read.
+The variable's name holds no TOKEN, KEY or SECRET, so the scrub keeps it. A local stack
+works too: `GRAFANA_URL=http://127.0.0.1:3000`, no token. Data source UIDs default to
+Grafana Cloud's built-in ones (grafana/otel-lgtm's locally); `GRAFANA_PROM_UID`,
+`GRAFANA_LOGS_UID` and `GRAFANA_TRACES_UID` override them.
 
 Every request is a GET. The output is compact JSON or one line per item, cut to a few
 hundred characters a line, so a noisy query can't flood the agent's context. Telemetry
@@ -30,14 +36,17 @@ few attributes (`SPAN_ATTRIBUTES`). The journey queries are the alert rules' own
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import re
+import stat
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from typing import Any
 
 import grafana_alerts as ga
@@ -50,6 +59,11 @@ ENVS = ("prod", "dev", "local")
 TRACE_ID = re.compile(r"[0-9a-f]{32}")
 LINE = 400  # characters per printed line
 LOG_LABELS = ("severity_text", "exception_type", "scope_name", "trace_id")
+# An on-call session's token file (#266): `token` in this directory. Never in the checkout,
+# which a session reads and commits from.
+TOKEN_DIR = "ONCALL_GRAFANA_DIR"
+TOKEN_FILE = "token"
+CHECKOUT = Path(__file__).resolve().parents[1]
 UID_OVERRIDES = {
     "metrics": "GRAFANA_PROM_UID",
     "logs": "GRAFANA_LOGS_UID",
@@ -94,16 +108,68 @@ def datasource(kind: str, url: str) -> str:
     return g.DATASOURCES["local" if _local(url) else "cloud"][kind]
 
 
+def _inside(path: Path, directory: str) -> bool:
+    root = Path(directory).resolve()
+    return path == root or root in path.parents
+
+
+def token_from_file(path: Path) -> str:
+    """The token in an on-call session's token file (#266), checked before it's read: a
+    regular file of this user's, mode 0600 or narrower, outside the checkout and
+    $GITHUB_WORKSPACE. No error quotes the file's content."""
+    where = path.resolve()
+    workspace = os.environ.get("GITHUB_WORKSPACE", "")
+    if _inside(where, str(CHECKOUT)) or (workspace and _inside(where, workspace)):
+        raise GrafanaError(f"the Grafana token file {path} is inside the checkout: refused")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        raise GrafanaError(
+            f"no Grafana token file at {path} (the on-call workflow writes it before the session)"
+        ) from None
+    except OSError as e:
+        if e.errno == errno.ELOOP:
+            raise GrafanaError(f"the Grafana token file {path} is a symlink: refused") from None
+        raise GrafanaError(f"can't open the Grafana token file {path}: {e.strerror}") from None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise GrafanaError(f"the Grafana token file {path} is not a regular file: refused")
+        if info.st_uid != os.getuid():
+            raise GrafanaError(f"the Grafana token file {path} isn't this user's: refused")
+        mode = stat.S_IMODE(info.st_mode)
+        if mode & ~0o600:
+            raise GrafanaError(
+                f"the Grafana token file {path} has mode {mode:04o}, wider than 0600: refused"
+            )
+        token = os.read(fd, 4096).decode("utf-8", "replace").strip()
+    finally:
+        os.close(fd)
+    if not token or any(c.isspace() for c in token):
+        raise GrafanaError(f"the Grafana token file {path} doesn't hold one token")
+    return token
+
+
+def token() -> str:
+    """The Viewer token: GRAFANA_READONLY_TOKEN, else an on-call session's token file."""
+    from_env = os.environ.get("GRAFANA_READONLY_TOKEN", "")
+    if from_env:
+        return from_env
+    directory = os.environ.get(TOKEN_DIR, "")
+    if not directory:
+        raise GrafanaError(
+            f"GRAFANA_READONLY_TOKEN is not set (the oncall environment's), and no {TOKEN_DIR}"
+        )
+    return token_from_file(Path(directory) / TOKEN_FILE)
+
+
 def get(api: str, params: dict[str, str] | None = None) -> Any:
     """GET `api` on the Grafana, with the token over https only. JSON back."""
     url = base_url()
     full = f"{url}{api}" + (f"?{urllib.parse.urlencode(params)}" if params else "")
     headers = {"Accept": "application/json"}
-    token = os.environ.get("GRAFANA_READONLY_TOKEN", "")
     if not _local(url):
-        if not token:
-            raise GrafanaError("GRAFANA_READONLY_TOKEN is not set (the oncall environment's)")
-        headers["Authorization"] = f"Bearer {token}"
+        headers["Authorization"] = f"Bearer {token()}"
     request = urllib.request.Request(full, headers=headers, method="GET")
     try:
         with ga._OPENER.open(request, timeout=30) as r:
