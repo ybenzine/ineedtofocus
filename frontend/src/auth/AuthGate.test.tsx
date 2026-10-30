@@ -850,6 +850,28 @@ describe('landing screen after sign-in (#357)', () => {
     expect(await screen.findByText('path /')).toBeInTheDocument()
   })
 
+  it('resets the URL to / as soon as the deletion is confirmed', async () => {
+    renderAt('/settings', makeApi({ me: vi.fn().mockResolvedValue(user) }))
+    expect(await screen.findByText('path /settings')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('simulate deletion'))
+    expect(await screen.findByText('Your account was deleted.')).toBeInTheDocument()
+    expect(window.location.pathname).toBe('/')
+  })
+
+  it('after a reload following a deletion, the next sign-in opens New session', async () => {
+    const first = renderAt('/settings', makeApi({ me: vi.fn().mockResolvedValue(user) }))
+    fireEvent.click(await screen.findByText('simulate deletion'))
+    await screen.findByText('Your account was deleted.')
+    first.unmount() // the reload: in-memory state is gone, the URL is what is left
+    render(
+      <AuthGate api={makeApi()}>
+        <Where />
+      </AuthGate>,
+    )
+    await submitAs('Sign in')
+    expect(await screen.findByText('path /')).toBeInTheDocument()
+  })
+
   it('sign-out then sign-in to the same account keeps the screen', async () => {
     renderAt('/settings', makeApi({ me: vi.fn().mockResolvedValue(user) }))
     fireEvent.click(await screen.findByText('simulate sign out'))
