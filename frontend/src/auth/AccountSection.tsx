@@ -171,7 +171,11 @@ export default function AccountSection({
   }
 
   const sessions =
-    count === null ? 'your sessions' : `your ${count} session${count === 1 ? '' : 's'}`
+    count === null
+      ? 'your sessions (archived ones included), '
+      : count === 0
+        ? ''
+        : `your ${count} session${count === 1 ? '' : 's'} (archived ones included), `
   const fieldProblem = problem === 'Incorrect password'
 
   return (
@@ -211,8 +215,8 @@ export default function AccountSection({
           }}
         >
           <p id={`${id}-warning`}>
-            This permanently deletes your account, {sessions} (archived ones included), your
-            settings and recent YouTube links, on every device. This can&apos;t be undone.
+            This permanently deletes your account, {sessions}your settings and recent YouTube links,
+            on every device. This can&apos;t be undone.
           </p>
           <button
             type="button"

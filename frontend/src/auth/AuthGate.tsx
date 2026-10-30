@@ -223,7 +223,12 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
           if (result === 'done') return null
           return result === 'server' ? SERVER_SIGN_OUT_MESSAGE : OFFLINE_SIGN_OUT_MESSAGE
         }}
-        onSignedIn={async (next) => {
+        onSignedIn={async (next, signedUp) => {
+          // A new account, or the next sign-in after a deletion, starts on New session
+          // whatever screen the URL still names.
+          if ((signedUp || deleted) && window.location.pathname !== '/') {
+            window.history.replaceState(null, '', '/')
+          }
           await claimLocalData(next)
           cacheUser(next)
           setDeleted(false)
