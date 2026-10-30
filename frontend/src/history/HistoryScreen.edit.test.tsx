@@ -176,7 +176,7 @@ describe('editing a session (AC11.1)', () => {
     await waitFor(() => {
       const items = document.querySelectorAll('.history-tag-list li')
       expect(items).toHaveLength(1)
-      expect(items[0]).toHaveTextContent('nap')
+      expect(items[0]).toHaveTextContent('Nap')
     })
   })
 

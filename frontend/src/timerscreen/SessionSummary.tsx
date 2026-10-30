@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import type { FinishOutcome } from '../timer/index.ts'
+import { tagLabel } from '../setup/options.ts'
 import { formatDuration } from './format.ts'
 
 import { HISTORY_PATH } from '../nav/screens.ts'
@@ -52,7 +53,7 @@ export default function SessionSummary({
               </>
             )}
             <dt>Tag</dt>
-            <dd className="timer-tag">{outcome.record.tag}</dd>
+            <dd className="timer-tag">{tagLabel(outcome.record.tag)}</dd>
             {outcome.record.goal && (
               <>
                 <dt>Goal</dt>
