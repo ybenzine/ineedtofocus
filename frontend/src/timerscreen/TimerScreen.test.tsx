@@ -110,11 +110,13 @@ describe('TimerScreen (AC9.1)', () => {
 
   it('scales only 8-character times to the ring (#358)', async () => {
     await mount({ mode: 'unlimited', reminderMinutes: null }, null)
-    await advance(90 * 60_000)
-    expect(screen.getByRole('timer')).toHaveTextContent('1:30:00')
+    vi.setSystemTime(T0 + 90 * 60_000)
+    await advance(1000)
+    expect(screen.getByRole('timer')).toHaveTextContent('1:30:0')
     expect(screen.getByRole('timer')).not.toHaveClass('timer-clock-long')
-    await advance(8.5 * 60 * 60_000)
-    expect(screen.getByRole('timer')).toHaveTextContent('10:00:00')
+    vi.setSystemTime(T0 + 10 * 3_600_000)
+    await advance(1000)
+    expect(screen.getByRole('timer')).toHaveTextContent('10:00:0')
     expect(screen.getByRole('timer')).toHaveClass('timer-clock-long')
   })
 
