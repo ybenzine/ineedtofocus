@@ -4,7 +4,7 @@ import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'rea
 import { notifySessionExpired, signedInUserId } from '../auth/localData.ts'
 import { HttpArchiveApi, type ArchiveApi } from '../archive/api.ts'
 import { useSettingsState } from '../settings/SettingsContext.ts'
-import { GOAL_MAX_LENGTH } from '../setup/options.ts'
+import { GOAL_MAX_LENGTH, tagLabel } from '../setup/options.ts'
 import { HttpSessionsApi, type SessionEdit, type SessionsApi } from '../sync/api.ts'
 import { clearArchivedOnDevice, reconcileMissing } from '../sync/reconcile.ts'
 import type { SessionStore } from '../sync/sessionStore.ts'
@@ -970,7 +970,7 @@ function EditForm({
         >
           {TAGS.map((t) => (
             <option key={t} value={t}>
-              {t}
+              {tagLabel(t)}
             </option>
           ))}
         </select>

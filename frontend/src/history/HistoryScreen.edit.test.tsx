@@ -101,6 +101,32 @@ async function syncedSession(overrides: Partial<SessionRecord> = {}, onDevice = 
 }
 
 describe('editing a session (AC11.1)', () => {
+  it('shows capitalized tag names in the Tag dropdown, with lowercase values', async () => {
+    await syncedSession({ goal: 'Cap goal', tag: 'work' })
+    renderScreen()
+    await screen.findByText('Cap goal')
+
+    fireEvent.click(screen.getByRole('button', { name: /^Edit session/ }))
+    const select = screen.getByLabelText('Tag') as HTMLSelectElement
+    const options = Array.from(select.options)
+    expect(options.map((o) => o.textContent)).toEqual([
+      'Work',
+      'Study',
+      'Nap',
+      'Read',
+      'Meditation',
+      'Exercise',
+    ])
+    expect(options.map((o) => o.value)).toEqual([
+      'work',
+      'study',
+      'nap',
+      'read',
+      'meditation',
+      'exercise',
+    ])
+  })
+
   it('changes tag and goal, shows them at once and sends them as a PATCH', async () => {
     const record = await syncedSession({ goal: 'Old goal', tag: 'work' })
     renderScreen()
