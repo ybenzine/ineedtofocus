@@ -36,6 +36,14 @@ export class LocalYoutubeLinkStore implements YoutubeLinkStore {
   }
 }
 
+let defaultLinkStore: YoutubeLinkStore | null = null
+
+/** Created on first use, so importing this module doesn't touch localStorage. */
+export function getDefaultLinkStore(): YoutubeLinkStore {
+  defaultLinkStore ??= new LocalYoutubeLinkStore()
+  return defaultLinkStore
+}
+
 export class MemoryYoutubeLinkStore implements YoutubeLinkStore {
   #url: string | null = null
 
