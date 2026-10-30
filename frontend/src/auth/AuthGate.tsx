@@ -22,6 +22,8 @@ interface Props {
   api?: AuthApi
 }
 
+export const ACCOUNT_DELETED_NOTICE = 'Your account was deleted.'
+
 export const OFFLINE_SIGN_OUT_NOTICE =
   "You're signed out on this device. Your account will be fully signed out the next time this device is online."
 
@@ -44,6 +46,7 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
   const [user, setUser] = useState<User | null>(null)
   const [checking, setChecking] = useState(() => !hasPendingLogout())
   const [logoutPending, setLogoutPending] = useState(hasPendingLogout)
+  const [deleted, setDeleted] = useState(false)
   // The sign-in expired while a timer runs: the app (and its timer) stays up, signed out on the
   // device, until the app calls `leaveExpired` once no timer runs.
   const [expired, setExpired] = useState(false)
@@ -193,6 +196,11 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
         setUser(null)
         return null
       },
+      accountDeleted: async () => {
+        await clearLocalUserData()
+        setDeleted(true)
+        setUser(null)
+      },
     }
   }, [user, api, expired])
 
@@ -207,7 +215,9 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
     return (
       <AuthScreen
         api={api}
-        notice={logoutPending ? OFFLINE_SIGN_OUT_NOTICE : ''}
+        notice={[deleted && ACCOUNT_DELETED_NOTICE, logoutPending && OFFLINE_SIGN_OUT_NOTICE]
+          .filter(Boolean)
+          .join(' ')}
         beforeSubmit={async () => {
           const result = await flushLogout()
           if (result === 'done') return null
@@ -216,6 +226,7 @@ export default function AuthGate({ children, api = httpAuthApi }: Props) {
         onSignedIn={async (next) => {
           await claimLocalData(next)
           cacheUser(next)
+          setDeleted(false)
           setUser(next)
         }}
       />

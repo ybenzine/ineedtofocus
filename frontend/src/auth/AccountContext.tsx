@@ -13,6 +13,12 @@ export interface Account {
    * error message if the user must stay signed in, or `null` once signed out.
    */
   signOut: () => Promise<string | null>
+  /**
+   * Call once the server confirmed the account's deletion (204), and not before: clears every
+   * app-owned store for the user through the sign-out registry, unsynced data included, and
+   * shows the sign-in screen with "Your account was deleted."
+   */
+  accountDeleted: () => Promise<void>
 }
 
 export const AccountContext = createContext<Account | null>(null)

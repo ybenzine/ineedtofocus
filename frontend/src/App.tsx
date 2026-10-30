@@ -420,7 +420,7 @@ function AppBody({
       <main>
         <AccountBar controller={timer} />
         <ScreenNav current="settings" onNavigate={goTo} />
-        <SettingsScreen player={player} />
+        <SettingsScreen player={player} controller={timer} />
       </main>
     )
   }

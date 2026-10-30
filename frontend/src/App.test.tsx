@@ -33,6 +33,7 @@ describe('App account bar', () => {
     user: { id: 'u', email: 'a@b.co', created_at: '' },
     expired: false,
     leaveExpired: () => undefined,
+    accountDeleted: async () => undefined,
     signOut: () => Promise.resolve(null),
   }
   function renderSignedIn(store = new MemoryActiveSessionStore()) {
@@ -138,6 +139,7 @@ describe('App sign-out guard with a timer only in memory (#245)', () => {
           user: { id: 'u', email: 'a@b.co', created_at: '' },
           expired: false,
           leaveExpired: () => undefined,
+          accountDeleted: async () => undefined,
           signOut,
         }}
       >
@@ -178,6 +180,7 @@ describe('App sign-out with a finished record held only in memory (#298)', () =>
           user: { id: 'u', email: 'a@b.co', created_at: '' },
           expired: false,
           leaveExpired: () => undefined,
+          accountDeleted: async () => undefined,
           signOut,
         }}
       >

@@ -557,6 +557,41 @@ main > p {
   min-height: 2.75rem;
 }
 
+/* Delete account: the warning, the Export link, the labelled field, then the actions. */
+.account-delete {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
+}
+
+/* Column layout: undo the sign-out bar's row sizing (full-width paragraph, 10rem-tall buttons). */
+.account-delete > p,
+.account-delete > button {
+  flex: none;
+}
+
+.account-delete-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.account-delete-field input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.account-delete-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.account-delete-actions button {
+  flex: 1 1 10rem;
+  min-height: 2.75rem;
+}
+
 /* Settings */
 .settings {
   display: grid;
