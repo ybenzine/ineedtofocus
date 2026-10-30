@@ -9,7 +9,9 @@
 #                    forced command focus-ci (#28-#30: the dev, prod and rollback-prod
 #                    profiles, the automatic revert with deliberately broken images,
 #                    rollback) behind the real sshd, with a fake docker CLI that records
-#                    every call.
+#                    every call; and the build provenance check (#177), with the real
+#                    cosign bootstrap.sh pinned, against recorded attestations served by
+#                    a fake ghcr.io (fake_registry.py, provenance/).
 #
 # A container has no systemd, so bootstrap.sh skips service management there; everything
 # else (packages, Docker's apt repo, users, sshd config, files and permissions) is the

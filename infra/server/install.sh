@@ -43,7 +43,8 @@
 #   5. Prints the installed revision and the forced command's sha256.
 #
 # It never touches the deploy keys (/etc/ssh/authorized_keys/deploy), the .env files,
-# the databases or the apps.
+# the databases or the apps. It stops before anything else if bootstrap.sh hasn't
+# installed the build provenance verifier (/opt/focus/sigstore, #177).
 #
 # Test-harness options (never needed on the server):
 #   --repo <url or path>   clone from somewhere else instead of GitHub
@@ -66,6 +67,8 @@ PINNED_RE='^[a-z0-9]+([._/-][a-z0-9]+)*:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}@sha256
 REQUIRED_FILES=(compose.sh compose.prod.yml compose.edge.yml env/prod.env env/dev.env
   caddy/Caddyfile otel-collector/config.yaml server/focus-ci.sh server/install.sh
   app/migration_info.py)
+# What bootstrap.sh installs for focus-ci's build provenance check (#177).
+VERIFIER_FILES=("$FOCUS_ROOT/sigstore/cosign" "$FOCUS_ROOT/sigstore/trusted_root.json")
 
 log() { printf '==> %s\n' "$*"; }
 die() {
@@ -181,6 +184,13 @@ main() {
   if [[ ! -d $FOCUS_ROOT/bin ]] || ! id -u deploy >/dev/null 2>&1; then
     die "run infra/server/bootstrap.sh first ($FOCUS_ROOT/bin or the deploy user is missing)"
   fi
+  # The forced command's deploys verify build provenance with these (#177): without
+  # them, every deploy would stop at step=provenance.
+  local tool
+  for tool in "${VERIFIER_FILES[@]}"; do
+    [[ -f $tool ]] ||
+      die "run infra/server/bootstrap.sh first: $tool is missing, and focus-ci's deploys need it to verify build provenance (#177)"
+  done
   if ! command -v git >/dev/null; then
     log "installing git"
     DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends git

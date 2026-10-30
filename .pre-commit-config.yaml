@@ -11,8 +11,10 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: \.md$
+        exclude: \.md$|^infra/server/tests/provenance/.*\.json$
       - id: end-of-file-fixer
+        # Recorded registry objects, addressed by their sha256 (#177): byte for byte.
+        exclude: ^infra/server/tests/provenance/.*\.json$
       - id: check-yaml
         # Compose's `!override` merge tag isn't plain YAML; `make test-prod-stack` loads it.
         exclude: ^infra/tests/compose\.edge\.smoke\.yml$

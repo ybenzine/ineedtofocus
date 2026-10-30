@@ -25,7 +25,8 @@
 #           approved commit; no attestation, no deploy request), deploys that digest,
 #           reads the record back, then runs
 #           scripts/smoke_deploy.py against https://ineedtofoc.us. The server refuses a
-#           sha and digest dev hasn't run successfully, re-tags :<sha> from the digest
+#           sha and digest dev hasn't run successfully, verifies the attestation itself
+#           (#177; the workflow's check is an early warning), re-tags :<sha> from the digest
 #           under the host's deploy lock and checks the running image afterwards. The key
 #           is deleted before the smoke test, the first repository code the job runs.
 #
@@ -291,10 +292,12 @@ jobs:
             { echo "::error::unexpected candidate answer"; exit 1; }
           echo "DIGEST=$digest" >> "$GITHUB_ENV"
           echo "dev_time=$(get source_time)" >> "$GITHUB_OUTPUT"
-      # What binds the approved commit to the bytes (#128): dev's log only says which
+      # What ties the approved commit to the bytes (#128): dev's log only says which
       # digest the dev key asked for; this proves ci.yml's publish built that digest from
-      # the approved commit. Runs gh from the runner image, no repository code. The same
-      # `run` block as deploy-dev's (test_ci_workflow.py keeps them identical).
+      # the approved commit. Runs gh from the runner image, no repository code. An early
+      # warning: focus-ci prod runs the same check on the server, and that one binds
+      # (#177). The same `run` block as deploy-dev's (test_ci_workflow.py keeps them
+      # identical).
       - name: Verify the image's build provenance (publish on main, this commit)
         id: provenance
         if: steps.config.outputs.configured == 'true'

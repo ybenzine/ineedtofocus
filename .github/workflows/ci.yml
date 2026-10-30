@@ -22,7 +22,7 @@
 #   deploy-dev  (#28) deploys exactly that digest to focus-dev over SSH, then smoke-tests
 #               https://dev.ineedtofoc.us. `needs: publish`, so a red main never reaches
 #               dev. Verifies the digest's attestation first, as deploy-prod.yml does
-#               (#128). Runs in the `dev` environment, whose SSH key the server pins to the
+#               (#128), and focus-ci on the server again (#177). Runs in the `dev` environment, whose SSH key the server pins to the
 #               forced command /opt/focus/bin/focus-ci dev (infra/server/focus-ci.sh).
 #               Skips with a notice while that environment's secrets aren't set. If the
 #               new release fails its checks after starting, the server starts the
@@ -443,7 +443,9 @@ jobs:
           printf '### Deploy to dev: skipped\n\n%s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
       # Before the key is even written: dev's releases.log only records bytes publish
       # attested, so prod's check (deploy-prod.yml, the same script) never meets a digest
-      # dev ran without one. Keep the two `run` blocks identical (test_ci_workflow.py).
+      # dev ran without one. An early warning: focus-ci verifies the same on the server,
+      # and its check is what binds (#177). Keep the two `run` blocks identical
+      # (test_ci_workflow.py).
       - name: Verify the image's build provenance (publish on main, this commit)
         id: provenance
         if: steps.config.outputs.configured == 'true'
