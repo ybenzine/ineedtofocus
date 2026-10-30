@@ -92,6 +92,8 @@ describe('SessionSetup with YouTube', () => {
     pickYoutube()
     const long = await screen.findByRole('button', { name: LONG_TITLE })
     expect(screen.getByRole('button', { name: 'YouTube video' })).toBeInTheDocument()
+    // New session keeps the YouTube mark on each link (#326, #359).
+    expect(long.querySelector('svg[aria-hidden="true"]')).not.toBeNull()
     expect(long).toHaveAttribute('aria-pressed', 'false')
     fireEvent.click(long)
     expect(long).toHaveAttribute('aria-pressed', 'true')
