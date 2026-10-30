@@ -125,7 +125,12 @@ export default function YoutubeControls({
           Play
         </button>
       </form>
-      <RecentLinkList recent={recent} onChoose={choose} />
+      {/* The audio card shows the mark once, and the playing link is already named above (#359). */}
+      <RecentLinkList
+        recent={recent.filter((item) => item.link.url !== link?.url)}
+        onChoose={choose}
+        showIcon={false}
+      />
     </div>
   )
 }

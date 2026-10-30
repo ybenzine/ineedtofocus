@@ -9,9 +9,16 @@ export interface RecentLinkListProps {
   onChoose: (link: YoutubeLink) => void
   /** The url of the link now chosen, marked as pressed. */
   selectedUrl?: string
+  /** Show the YouTube mark on each link (default). */
+  showIcon?: boolean
 }
 
-export default function RecentLinkList({ recent, onChoose, selectedUrl }: RecentLinkListProps) {
+export default function RecentLinkList({
+  recent,
+  onChoose,
+  selectedUrl,
+  showIcon = true,
+}: RecentLinkListProps) {
   if (recent.length === 0) return null
   return (
     <ul className="youtube-recent" aria-label="Recent YouTube links">
@@ -23,7 +30,7 @@ export default function RecentLinkList({ recent, onChoose, selectedUrl }: Recent
             aria-pressed={selectedUrl === undefined ? undefined : selectedUrl === item.link.url}
             onClick={() => onChoose(item.link)}
           >
-            <YoutubeLabel kind={item.link.target.kind} title={item.title} />
+            <YoutubeLabel kind={item.link.target.kind} title={item.title} showIcon={showIcon} />
           </button>
         </li>
       ))}
