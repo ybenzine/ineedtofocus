@@ -54,6 +54,18 @@ test('export contains the session, deleting the account signs the device out, th
   expect(label && field && label.y + label.height <= field.y + 1).toBe(true)
   expect(label && field && Math.abs(label.x - field.x) <= 2).toBe(true)
   await expectNoSidewaysScroll(page)
+  // The column layout leaves no blank space: the Export button is one control tall and the
+  // warning is as tall as its text.
+  const exportBox = await dialog.getByRole('button', { name: 'Export my data' }).boundingBox()
+  expect(exportBox && exportBox.height >= 43 && exportBox.height <= 50).toBe(true)
+  const warning = dialog.locator('p').first()
+  const textHeight = await warning.evaluate((el) => {
+    const range = document.createRange()
+    range.selectNodeContents(el)
+    return range.getBoundingClientRect().height
+  })
+  const warningBox = await warning.boundingBox()
+  expect(warningBox && warningBox.height - textHeight <= 4).toBe(true)
   await dialog.getByLabel('Password').fill('not the password')
   await dialog.getByRole('button', { name: 'Delete account' }).click()
   await expect(dialog.getByRole('alert')).toHaveText('Incorrect password')

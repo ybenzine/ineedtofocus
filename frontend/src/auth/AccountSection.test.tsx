@@ -279,6 +279,29 @@ describe('Account section: delete (AC1.7, AC7, AC8)', () => {
     expect(exportData).toHaveBeenCalledTimes(1)
   })
 
+  it('export hands over a stuck finished record before syncing', async () => {
+    const order: string[] = []
+    const controller = {
+      retryPending: vi.fn(async () => {
+        order.push('retryPending')
+        return true
+      }),
+    } as unknown as TimerController
+    const hook = registerHook()
+    hook.trySync.mockImplementation(async () => {
+      order.push('trySync')
+    })
+    render(
+      <AuthGate api={makeAuthApi()}>
+        <AccountSection api={makeAccountApi()} controller={controller} />
+      </AuthGate>,
+    )
+    await screen.findByRole('heading', { name: 'Account' })
+    fireEvent.click(screen.getByRole('button', { name: 'Export my data' }))
+    await waitFor(() => expect(clicked).toHaveLength(1))
+    expect(order).toEqual(['retryPending', 'trySync'])
+  })
+
   it('marks the password field invalid on a wrong password', async () => {
     await renderSection(
       makeAccountApi({ deleteAccount: vi.fn().mockRejectedValue(new AccountError('forbidden')) }),

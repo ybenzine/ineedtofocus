@@ -564,6 +564,12 @@ main > p {
   align-items: stretch;
 }
 
+/* Column layout: undo the sign-out bar's row sizing (full-width paragraph, 10rem-tall buttons). */
+.account-delete > p,
+.account-delete > button {
+  flex: none;
+}
+
 .account-delete-field {
   display: flex;
   flex-direction: column;
