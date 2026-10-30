@@ -144,6 +144,59 @@ describe('TimerScreen (AC9.1)', () => {
   })
 })
 
+describe('TimerScreen layout order (AC9.4)', () => {
+  function query(selector: string): Element {
+    const found = document.querySelector(selector)
+    if (!found) throw new Error(`missing ${selector}`)
+    return found
+  }
+
+  function expectOrder(...nodes: Element[]) {
+    for (let i = 0; i < nodes.length - 1; i++) {
+      const [a, b] = [nodes[i], nodes[i + 1]]
+      if (!a || !b) throw new Error('missing node')
+      expect(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
+  }
+
+  function expectControlsAboveAudio() {
+    const meta = query('.timer-meta')
+    const controls = query('.timer-controls')
+    const status = screen.getByRole('status')
+    const audio = screen.getByRole('region', { name: 'Background audio' })
+    const bottom = query('.timer-bottom')
+    const awake = query('.timer-awake')
+    expectOrder(meta, controls, status, bottom, audio, awake)
+    expect(bottom.contains(controls)).toBe(false)
+    expect(bottom.contains(status)).toBe(false)
+    expect(controls.contains(screen.getByRole('button', { name: /^(Pause|Resume)$/ }))).toBe(true)
+    expect(controls.contains(screen.getByRole('button', { name: 'Stop' }))).toBe(true)
+  }
+
+  it('puts Pause and Stop above the audio card in a countdown, running and paused', async () => {
+    await mount({ mode: 'countdown', minutes: 25 })
+    expectControlsAboveAudio()
+    await click('Pause')
+    expectControlsAboveAudio()
+  })
+
+  it('puts the controls above the audio card in Pomodoro focus and break, with Skip break', async () => {
+    await mount(pomodoro())
+    expectControlsAboveAudio()
+    await advance(26 * MINUTE_MS)
+    expectControlsAboveAudio()
+    const controls = query('.timer-controls')
+    expect(controls.contains(screen.getByRole('button', { name: 'Skip break' }))).toBe(true)
+  })
+
+  it('puts the controls above the audio card in an unlimited timer', async () => {
+    await mount({ mode: 'unlimited', reminderMinutes: null }, null)
+    expectControlsAboveAudio()
+    await click('Pause')
+    expectControlsAboveAudio()
+  })
+})
+
 describe('TimerScreen controls', () => {
   it('pauses and resumes, and the clock stops while paused', async () => {
     const { controller } = await mount({ mode: 'countdown', minutes: 25 })
