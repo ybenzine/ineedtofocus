@@ -58,6 +58,7 @@ def test_ac2_export_is_complete_and_scoped(ada: TestClient, bob: TestClient) -> 
     assert r.headers["content-disposition"] == (
         f'attachment; filename="ineedtofocus-export-{today}.json"'
     )
+    assert r.headers["cache-control"] == "no-store"
     body = r.json()
     assert list(body) == [
         "format_version",
@@ -126,33 +127,34 @@ def test_ac3_delete_cascades_clears_cookie_and_allows_signup(
         _populate(bob, "Bob goal", "https://youtu.be/BOBBOBBOB11", "2026-10-22T09:00:00Z")
         old_token = c.cookies[COOKIE]
 
+        ada_id = c.get("/api/auth/me").json()["id"]
+        bob_id = bob.get("/api/auth/me").json()["id"]
+        tables = ("user_settings", "auth_sessions", "focus_sessions", "youtube_recent_links")
+
+        def counts(user_id: str) -> dict[str, int]:
+            out = {}
+            for t in tables:
+                sql = f"SELECT count(*) FROM {t} WHERE user_id = '{user_id}'"
+                out[t] = run(_scalar(test_db_url, sql))[0][0]
+            return out
+
+        before = counts(ada_id)
+        assert all(n > 0 for n in before.values()), before
+        assert before["auth_sessions"] == 2 and before["focus_sessions"] == 2
+        bob_before = counts(bob_id)
+        assert all(n > 0 for n in bob_before.values()), bob_before
+
         r = _delete(c)
         assert r.status_code == 204 and r.content == b""
         set_cookie = r.headers["set-cookie"].lower()
         assert set_cookie.startswith(f"{COOKIE}=") and "max-age=0" in set_cookie
         assert "httponly" in set_cookie and "samesite=lax" in set_cookie and "path=/" in set_cookie
 
-        for table in ("users", "user_settings", "auth_sessions", "focus_sessions"):
-            (row,) = run(_scalar(test_db_url, f"SELECT count(*) FROM {table}"))
-            assert row[0] > 0  # Bob's rows remain
-        for table, col in (
-            ("user_settings", "user_id"),
-            ("auth_sessions", "user_id"),
-            ("focus_sessions", "user_id"),
-            ("youtube_recent_links", "user_id"),
-        ):
-            (row,) = run(
-                _scalar(
-                    test_db_url,
-                    f"SELECT count(*) FROM {table} WHERE {col} IN "
-                    "(SELECT id FROM users WHERE email = 'ada@example.com')",
-                )
-            )
-            assert row[0] == 0
-        ada_rows = _scalar(test_db_url, "SELECT count(*) FROM users WHERE email LIKE 'ada@%'")
-        assert run(ada_rows) == [(0,)]
-        assert run(_scalar(test_db_url, "SELECT count(*) FROM focus_sessions")) == [(1,)]
-        assert run(_scalar(test_db_url, "SELECT count(*) FROM youtube_recent_links")) == [(1,)]
+        assert counts(ada_id) == dict.fromkeys(tables, 0)
+        assert run(_scalar(test_db_url, f"SELECT count(*) FROM users WHERE id = '{ada_id}'")) == [
+            (0,)
+        ]
+        assert counts(bob_id) == bob_before  # the other account is untouched
 
         # The old cookie, here and on the other device, is 401 everywhere.
         c.cookies.set(COOKIE, old_token)
