@@ -136,6 +136,9 @@ test('YouTube is chosen on New session: Start waits for a link, a recent link is
   )
 
   await page.getByRole('radio', { name: 'YouTube' }).check()
+  // One play glyph per recent-link row (one seeded link), no YouTube mark (#344).
+  await expect(page.locator('.play-glyph')).toHaveCount(1)
+  await expect(page.locator('.youtube-icon')).toHaveCount(0)
   const start = page.getByRole('button', { name: 'Start' })
   await expect(start).toBeDisabled()
   await expect(page.getByText(/Paste a YouTube link/)).toBeVisible()
@@ -156,8 +159,23 @@ test('YouTube is chosen on New session: Start waits for a link, a recent link is
   // The player itself is YouTube's: this test doesn't depend on it playing.
   const audioCard = page.getByRole('region', { name: 'Background audio' })
   await expect(audioCard).toBeVisible()
-  // The YouTube mark shows once in the card (#359).
-  await expect(audioCard.locator('.youtube-icon')).toHaveCount(1)
+  // The play glyph shows once in the card (#359, #344), in the same colour as the "YouTube" label
+  // in both themes.
+  await expect(audioCard.locator('.play-glyph')).toHaveCount(1)
+  await expect(page.locator('.youtube-icon')).toHaveCount(0)
+  for (const scheme of ['dark', 'light'] as const) {
+    await page.emulateMedia({ colorScheme: scheme })
+    await expect
+      .poll(() => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme))
+      .toBe(scheme)
+    const colorOf = (selector: string) =>
+      page.locator(selector).evaluate((el) => getComputedStyle(el).color)
+    const colours = {
+      glyph: await colorOf('.play-glyph'),
+      label: await colorOf('.timer-audio-name'),
+    }
+    expect(colours.glyph).toBe(colours.label)
+  }
 
   // A reload restores the session with the same link (AC6.4).
   await page.reload()

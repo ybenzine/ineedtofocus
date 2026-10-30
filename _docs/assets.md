@@ -80,13 +80,3 @@ previews (AC5.3) play the same files.
 | `@fontsource-variable/inter` (npm), `inter-latin-wght-normal.woff2` | The app's text (Inter, 400-700, tabular figures for times) | [Inter](https://rsms.me/inter/) by Rasmus Andersson, packaged by Fontsource | SIL Open Font License 1.1 |
 
 `frontend/src/index.css` loads only the Latin subset through its own `@font-face`; the service worker precaches the `.woff2`. Other scripts fall back to `system-ui`.
-
-## YouTube icon (#326)
-
-| Where                                  | Used for                                                                            | Source                                                               |
-| -------------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `frontend/src/sounds/YoutubeLabel.tsx` | The small icon before a YouTube video or playlist title (recent links, now playing) | Hand-drawn inline SVG of YouTube's play-button mark; no file shipped |
-
-- **What it is:** a rounded red rectangle (28 x 20 viewBox, shown at 16 x 12 px) with a white right-pointing triangle, YouTube's play-button mark in its own colours, `#FF0000` and `#FFFFFF`. The colours are fixed brand colours, not theme tokens, so it looks the same in both themes (the named colours `red` and `white` are those two values; `colors.test.ts` scans SVG colour attributes and allows only these two, and only in `YoutubeLabel.tsx`).
-- **Use:** as [YouTube's brand guidelines](https://www.youtube.com/howyoutubeworks/resources/brand-resources/) allow for referring to YouTube content: the mark is unaltered apart from scale, it does not stand for the app's own brand and it is used only next to YouTube content (a link that plays in YouTube's own embedded player). It is `aria-hidden`; the text next to it carries the meaning.
-- **Source:** drawn from the published shape of the mark (rounded rectangle, centred white play triangle), not copied from a file, so there is no third-party file or licence to carry. If YouTube's brand resources change, replace the two shapes in `YoutubeIcon`.

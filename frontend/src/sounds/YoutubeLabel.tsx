@@ -1,26 +1,26 @@
-// A YouTube link as the user sees it (#326): a small YouTube icon, then the title trimmed to fit.
+// A YouTube link as the user sees it (#326): a small play glyph, then the title trimmed to fit.
 // The full title is the accessible name and the tooltip. Without a title it reads "YouTube video"
 // or "YouTube playlist", never the id. Reused wherever a link is shown. The icon can be turned
-// off (`showIcon`) where the mark already appears once nearby, as in the timer's audio card.
+// off (`showIcon`) where the glyph already appears once nearby, as in the timer's audio card.
 
 import { trimYoutubeTitle, youtubeLabelText } from './youtubeTitle.ts'
 
 /**
- * YouTube's play-button mark in its own colours, the same in both themes (see _docs/assets.md).
- * `red` and `white` are #FF0000 and #FFFFFF: brand colours, deliberately not theme tokens.
+ * A plain play glyph: one filled right-pointing triangle in the text colour (`currentColor`).
+ * It is not YouTube's mark and has no brand colours. Decorative: the text next to it carries
+ * the meaning.
  */
-export function YoutubeIcon() {
+export function PlayGlyph() {
   return (
     <svg
-      className="youtube-icon"
+      className="play-glyph"
       width="16"
-      height="12"
-      viewBox="0 0 28 20"
+      height="16"
+      viewBox="0 0 16 16"
       aria-hidden="true"
       focusable="false"
     >
-      <rect width="28" height="20" rx="6" fill="red" />
-      <path d="M11 5.5v9l8-4.5z" fill="white" />
+      <path d="M4 2v12l10-6z" fill="currentColor" />
     </svg>
   )
 }
@@ -28,7 +28,7 @@ export function YoutubeIcon() {
 export interface YoutubeLabelProps {
   kind: 'video' | 'playlist'
   title?: string | null
-  /** Show the YouTube mark (default). Off where the mark already sits next to the label. */
+  /** Show the play glyph (default). Off where the glyph already sits next to the label. */
   showIcon?: boolean
 }
 
@@ -37,7 +37,7 @@ export default function YoutubeLabel({ kind, title, showIcon = true }: YoutubeLa
   const short = trimYoutubeTitle(full)
   return (
     <span className="youtube-label" title={full}>
-      {showIcon && <YoutubeIcon />}
+      {showIcon && <PlayGlyph />}
       {short === full ? (
         <span>{full}</span>
       ) : (

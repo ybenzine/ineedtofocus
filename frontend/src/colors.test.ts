@@ -322,11 +322,7 @@ describe('no colour literals outside the token blocks (#213, #214)', () => {
     expect(css).toMatch(/background:\s*Highlight/)
   })
 
-  it('SVG colour attributes use only currentColor, none, a url() or the YouTube brand colours (#326)', () => {
-    // The brand colours are pinned, for the YouTube icon only: YouTube red and white.
-    const BRAND: Record<string, string[]> = {
-      'sounds/YoutubeLabel.tsx': ['red', 'white'],
-    }
+  it('SVG colour attributes use only currentColor, none, transparent, inherit or a url()', () => {
     const attribute =
       /\b(?:fill|stroke|stop-color|stopColor|flood-color|floodColor|color)=(?:"([^"]*)"|\{'([^']*)'\})/g
     const SAFE = new Set(['none', 'currentcolor', 'transparent', 'inherit'])
@@ -340,7 +336,6 @@ describe('no colour literals outside the token blocks (#213, #214)', () => {
           for (const m of withoutComments(readFileSync(path, 'utf8')).matchAll(attribute)) {
             const value = (m[1] ?? m[2] ?? '').trim().toLowerCase()
             if (SAFE.has(value) || value.startsWith('url(')) continue
-            if (BRAND[rel]?.includes(value)) continue
             offending.push(`${rel}: ${m[0]}`)
           }
         }
