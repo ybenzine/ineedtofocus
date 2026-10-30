@@ -38,6 +38,12 @@ test.describe('at 360 px', () => {
     await startCountdown(page, { minutes: 1, tag: 'work', goal: LONG_UNBROKEN })
     await expect(page.locator('.timer-goal')).toBeVisible()
     await expectNoSidewaysScroll(page)
+    // Pause and Stop sit above the audio card, not below it (AC9.4).
+    const controlsBox = await page.locator('.timer-controls').boundingBox()
+    const audioBox = await page.locator('.timer-audio').boundingBox()
+    expect(controlsBox).not.toBeNull()
+    expect(audioBox).not.toBeNull()
+    expect((controlsBox?.y ?? 0) + (controlsBox?.height ?? 0)).toBeLessThanOrEqual(audioBox?.y ?? 0)
     await page.clock.fastForward(62_000)
     await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
     await expectNoSidewaysScroll(page)

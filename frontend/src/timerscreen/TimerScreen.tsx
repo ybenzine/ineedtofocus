@@ -232,6 +232,42 @@ export default function TimerScreen({
         {snapshot.goal && <span className="timer-goal">{snapshot.goal}</span>}
       </p>
 
+      <div className="timer-controls">
+        {snapshot.paused ? (
+          <button
+            type="button"
+            className="primary"
+            onClick={() => void run(() => controller.resume())}
+          >
+            Resume
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="primary"
+            onClick={() => void run(() => controller.pause())}
+          >
+            Pause
+          </button>
+        )}
+        <button
+          type="button"
+          className="secondary danger"
+          onClick={() => void run(() => controller.stop())}
+        >
+          Stop
+        </button>
+        {inBreak && (
+          <button
+            type="button"
+            className="secondary timer-skip"
+            onClick={() => void run(() => controller.skipBreak())}
+          >
+            Skip break
+          </button>
+        )}
+      </div>
+
       <p role="status" className={unsaved ? 'timer-unsaved' : undefined}>
         {unsaved ? UNSAVED_NOTICE : ''}
       </p>
@@ -250,42 +286,6 @@ export default function TimerScreen({
             ? audioControls({ paused: snapshot.paused })
             : audioControls}
         </section>
-
-        <div className="timer-controls">
-          {snapshot.paused ? (
-            <button
-              type="button"
-              className="primary"
-              onClick={() => void run(() => controller.resume())}
-            >
-              Resume
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="primary"
-              onClick={() => void run(() => controller.pause())}
-            >
-              Pause
-            </button>
-          )}
-          <button
-            type="button"
-            className="secondary danger"
-            onClick={() => void run(() => controller.stop())}
-          >
-            Stop
-          </button>
-          {inBreak && (
-            <button
-              type="button"
-              className="secondary timer-skip"
-              onClick={() => void run(() => controller.skipBreak())}
-            >
-              Skip break
-            </button>
-          )}
-        </div>
 
         <div className="timer-awake">
           <label className="choice">
