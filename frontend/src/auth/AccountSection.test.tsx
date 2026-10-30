@@ -6,7 +6,7 @@ import { AccountError, type AccountApi } from './accountApi.ts'
 import AccountSection from './AccountSection.tsx'
 import { type AuthApi, type User } from './api.ts'
 import AuthGate, { ACCOUNT_DELETED_NOTICE } from './AuthGate.tsx'
-import { registerLocalDataHook, USER_KEY } from './localData.ts'
+import { registerLocalDataHook, SESSION_EXPIRED_EVENT, USER_KEY } from './localData.ts'
 
 const user: User = { id: 'u1', email: 'a@b.co', created_at: '2026-10-30T00:00:00Z' }
 const unregisters: (() => void)[] = []
@@ -54,7 +54,7 @@ async function renderSection(api: AccountApi) {
 
 function openConfirm() {
   fireEvent.click(screen.getByRole('button', { name: 'Delete account' }))
-  return screen.getByRole('alertdialog', { name: 'Confirm delete account' })
+  return screen.getByRole('dialog', { name: 'Confirm delete account' })
 }
 
 let clicked: string[]
@@ -157,11 +157,11 @@ describe('Account section: delete (AC1.7, AC7, AC8)', () => {
     await renderSection(makeAccountApi())
     openConfirm()
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Delete account' })).toHaveFocus()
     const dialog = openConfirm()
     fireEvent.keyDown(dialog, { key: 'Escape' })
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('is refused while a timer is running', async () => {
@@ -173,7 +173,7 @@ describe('Account section: delete (AC1.7, AC7, AC8)', () => {
     await renderSection(makeAccountApi())
     fireEvent.click(screen.getByRole('button', { name: 'Delete account' }))
     expect(screen.getByText('End your session before deleting your account.')).toBeInTheDocument()
-    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('on 204 clears the device through the registry and shows the deleted notice', async () => {
@@ -212,6 +212,71 @@ describe('Account section: delete (AC1.7, AC7, AC8)', () => {
     expect(localStorage.getItem(USER_KEY)).not.toBeNull()
     expect(screen.queryByText(ACCOUNT_DELETED_NOTICE)).not.toBeInTheDocument()
     expect(within(dialog).getByRole('button', { name: 'Delete account' })).toBeEnabled()
+  })
+
+  it('is refused while a timer is paused', async () => {
+    let now = 1_700_000_000_000
+    const controller = new TimerController({
+      store: new LocalActiveSessionStore(),
+      saveRecord: async () => undefined,
+      now: () => now,
+    })
+    await controller.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
+    now += 1000
+    await controller.pause()
+    await renderSection(makeAccountApi())
+    fireEvent.click(screen.getByRole('button', { name: 'Delete account' }))
+    expect(screen.getByText('End your session before deleting your account.')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('on 401 from delete tells the app the sign-in expired and clears nothing', async () => {
+    const hook = registerHook()
+    const expired = vi.fn()
+    window.addEventListener(SESSION_EXPIRED_EVENT, expired)
+    await renderSection(
+      makeAccountApi({
+        deleteAccount: vi.fn().mockRejectedValue(new AccountError('unauthorized')),
+      }),
+    )
+    const dialog = openConfirm()
+    fireEvent.change(within(dialog).getByLabelText('Password'), { target: { value: 'pw' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete account' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('sign-in expired')
+    window.removeEventListener(SESSION_EXPIRED_EVENT, expired)
+    expect(expired).toHaveBeenCalledTimes(1)
+    expect(hook.clear).not.toHaveBeenCalled()
+  })
+
+  it('on 401 from export tells the app the sign-in expired', async () => {
+    const expired = vi.fn()
+    window.addEventListener(SESSION_EXPIRED_EVENT, expired)
+    await renderSection(
+      makeAccountApi({ exportData: vi.fn().mockRejectedValue(new AccountError('unauthorized')) }),
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Export my data' }))
+    expect(await screen.findByText(/sign-in expired/)).toBeInTheDocument()
+    window.removeEventListener(SESSION_EXPIRED_EVENT, expired)
+    expect(expired).toHaveBeenCalledTimes(1)
+  })
+
+  it('disables the outer buttons while the confirmation is open and the in-dialog export while exporting', async () => {
+    let finish: (value: { blob: Blob; filename: string }) => void = () => undefined
+    const exportData = vi.fn(
+      () => new Promise<{ blob: Blob; filename: string }>((r) => (finish = r)),
+    )
+    await renderSection(makeAccountApi({ exportData }))
+    const dialog = openConfirm()
+    const outer = screen.getAllByRole('button', { name: 'Export my data' })
+    expect(outer).toHaveLength(2)
+    expect(outer[0]).toBeDisabled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Export my data' }))
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Export my data' })).toBeDisabled(),
+    )
+    finish({ blob: new Blob(['{}']), filename: 'ineedtofocus-export-2026-10-30.json' })
+    await waitFor(() => expect(clicked).toHaveLength(1))
+    expect(exportData).toHaveBeenCalledTimes(1)
   })
 
   it('marks the password field invalid on a wrong password', async () => {

@@ -4,7 +4,7 @@
 import { useId } from 'react'
 import SoundPreview from '../sounds/SoundPreview.tsx'
 import type { AlertPlayer } from '../sounds/alerts.ts'
-import { REMINDER_OPTIONS } from '../timer/index.ts'
+import { REMINDER_OPTIONS, type TimerController } from '../timer/index.ts'
 import { wakeLockSupported } from '../timerscreen/wakeLock.ts'
 import type { ReminderSetting, ThemeSetting } from './api.ts'
 import { useSettingsState, useSettingsStore } from './SettingsContext.ts'
@@ -19,7 +19,13 @@ const THEME_CHOICES: { value: ThemeSetting; label: string }[] = [
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
-export default function SettingsScreen({ player }: { player: AlertPlayer }) {
+export default function SettingsScreen({
+  player,
+  controller,
+}: {
+  player: AlertPlayer
+  controller?: TimerController
+}) {
   const store = useSettingsStore()
   const { values, pending, stalled } = useSettingsState()
   const id = useId()
@@ -128,7 +134,7 @@ export default function SettingsScreen({ player }: { player: AlertPlayer }) {
         {waiting ? "Saved on this device. It will sync when you're back online." : ''}
       </p>
 
-      <AccountSection />
+      <AccountSection controller={controller} />
     </div>
   )
 }

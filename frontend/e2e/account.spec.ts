@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import {
+  expectNoSidewaysScroll,
   finishCountdown,
   installClock,
   newEmail,
@@ -15,11 +16,13 @@ test('export contains the session, deleting the account signs the device out, th
   page,
 }) => {
   const email = newEmail()
+  await page.setViewportSize({ width: 360, height: 740 })
   await installClock(page)
   await signUp(page, email)
   await finishCountdown(page, { minutes: 1, tag: 'study', goal: 'Account journey goal' })
   await expect.poll(() => serverSessionCount(page.request)).toBe(1)
 
+  await page.getByRole('button', { name: 'New session' }).click()
   await openScreen(page, 'Settings')
   const account = page.getByRole('group', { name: 'Account' })
 
@@ -42,9 +45,15 @@ test('export contains the session, deleting the account signs the device out, th
 
   // Delete: a wrong password is refused and nothing is deleted, the right one deletes.
   await account.getByRole('button', { name: 'Delete account' }).click()
-  const dialog = page.getByRole('alertdialog', { name: 'Confirm delete account' })
+  const dialog = page.getByRole('dialog', { name: 'Confirm delete account' })
   await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused()
   await expect(dialog.getByRole('button', { name: 'Delete account' })).toBeDisabled()
+  // At 360 px the label sits directly above its full-width field and nothing scrolls sideways.
+  const label = await dialog.getByText('Password', { exact: true }).boundingBox()
+  const field = await dialog.getByLabel('Password').boundingBox()
+  expect(label && field && label.y + label.height <= field.y + 1).toBe(true)
+  expect(label && field && Math.abs(label.x - field.x) <= 2).toBe(true)
+  await expectNoSidewaysScroll(page)
   await dialog.getByLabel('Password').fill('not the password')
   await dialog.getByRole('button', { name: 'Delete account' }).click()
   await expect(dialog.getByRole('alert')).toHaveText('Incorrect password')

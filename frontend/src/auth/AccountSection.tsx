@@ -2,7 +2,8 @@ import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { useAccount } from './AccountContext.tsx'
 import { AccountError, httpAccountApi, PASSWORD_MAX_LENGTH, type AccountApi } from './accountApi.ts'
 import { describeWait } from './api.ts'
-import { countUnsynced, hasActiveTimer, trySyncAll } from './localData.ts'
+import type { TimerController } from '../timer/index.ts'
+import { countUnsynced, hasActiveTimer, notifySessionExpired, trySyncAll } from './localData.ts'
 
 const EXPORT_OFFLINE_MESSAGE = 'Export needs a connection.'
 const DELETE_ACTIVE_TIMER_MESSAGE = 'End your session before deleting your account.'
@@ -54,7 +55,8 @@ function download({ blob, filename }: { blob: Blob; filename: string }) {
   document.body.append(link)
   link.click()
   link.remove()
-  URL.revokeObjectURL(url)
+  // Safari/iOS can cancel the download if the URL is revoked at once.
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
 }
 
 /**
@@ -62,7 +64,13 @@ function download({ blob, filename }: { blob: Blob; filename: string }) {
  * the password in an inline, non-modal confirmation; nothing on the device is cleared unless
  * the server answers 204.
  */
-export default function AccountSection({ api = httpAccountApi }: { api?: AccountApi }) {
+export default function AccountSection({
+  api = httpAccountApi,
+  controller,
+}: {
+  api?: AccountApi
+  controller?: TimerController
+}) {
   const account = useAccount()
   const id = useId()
   const [exportMessage, setExportMessage] = useState('')
@@ -77,8 +85,11 @@ export default function AccountSection({ api = httpAccountApi }: { api?: Account
   const cancelRef = useRef<HTMLButtonElement>(null)
   const passwordRef = useRef<HTMLInputElement>(null)
   const openerRef = useRef<HTMLButtonElement>(null)
+  const wasOpen = useRef(false)
 
   useEffect(() => {
+    if (!open && wasOpen.current) openerRef.current?.focus()
+    wasOpen.current = open
     if (!open) return
     cancelRef.current?.focus()
     let current = true
@@ -103,12 +114,14 @@ export default function AccountSection({ api = httpAccountApi }: { api?: Account
     }
     setExporting(true)
     try {
+      await controller?.retryPending()
       await trySyncAll()
       const left = await countUnsynced()
       const file = await api.exportData()
       download(file)
       setExportNote(exportUnsyncedNote(left.sessions, left.edits))
     } catch (error) {
+      if (error instanceof AccountError && error.kind === 'unauthorized') notifySessionExpired()
       setExportMessage(exportErrorMessage(error))
     } finally {
       setExporting(false)
@@ -131,7 +144,6 @@ export default function AccountSection({ api = httpAccountApi }: { api?: Account
     setOpen(false)
     setPassword('')
     setProblem('')
-    openerRef.current?.focus()
   }
 
   async function submit(event: FormEvent) {
@@ -148,6 +160,7 @@ export default function AccountSection({ api = httpAccountApi }: { api?: Account
       await api.deleteAccount(password)
     } catch (error) {
       // Nothing is cleared on the device: the account (and its sessions) still exist.
+      if (error instanceof AccountError && error.kind === 'unauthorized') notifySessionExpired()
       setProblem(deleteErrorMessage(error))
       setDeleting(false)
       if (error instanceof AccountError && error.kind === 'forbidden') passwordRef.current?.focus()
@@ -165,10 +178,17 @@ export default function AccountSection({ api = httpAccountApi }: { api?: Account
     <div className="field account-section" role="group" aria-labelledby={`${id}-title`}>
       <h2 id={`${id}-title`}>Account</h2>
       <div className="field-row">
-        <button type="button" onClick={() => void runExport()} disabled={exporting}>
+        <button type="button" onClick={() => void runExport()} disabled={exporting || open}>
           Export my data
         </button>
-        <button type="button" ref={openerRef} className="danger" onClick={openConfirm}>
+        <button
+          type="button"
+          ref={openerRef}
+          className="danger"
+          onClick={openConfirm}
+          disabled={open}
+          aria-expanded={open}
+        >
           Delete account
         </button>
       </div>
@@ -178,9 +198,10 @@ export default function AccountSection({ api = httpAccountApi }: { api?: Account
       {blocked && <p role="alert">{blocked}</p>}
       {open && (
         <form
-          role="alertdialog"
+          role="dialog"
           aria-label="Confirm delete account"
-          className="account-confirm"
+          aria-describedby={`${id}-warning`}
+          className="account-confirm account-delete"
           onSubmit={(event) => void submit(event)}
           onKeyDown={(event) => {
             if (event.key === 'Escape') {
@@ -189,36 +210,45 @@ export default function AccountSection({ api = httpAccountApi }: { api?: Account
             }
           }}
         >
-          <p>
+          <p id={`${id}-warning`}>
             This permanently deletes your account, {sessions} (archived ones included), your
             settings and recent YouTube links, on every device. This can&apos;t be undone.
           </p>
-          <button type="button" className="link-button" onClick={() => void runExport()}>
+          <button
+            type="button"
+            className="link-button"
+            onClick={() => void runExport()}
+            disabled={exporting}
+          >
             Export my data
           </button>
-          <label htmlFor={`${id}-password`}>Password</label>
-          <input
-            id={`${id}-password`}
-            ref={passwordRef}
-            type="password"
-            autoComplete="current-password"
-            maxLength={PASSWORD_MAX_LENGTH}
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            aria-invalid={fieldProblem ? true : undefined}
-            aria-describedby={problem ? `${id}-problem` : undefined}
-          />
+          <div className="account-delete-field">
+            <label htmlFor={`${id}-password`}>Password</label>
+            <input
+              id={`${id}-password`}
+              ref={passwordRef}
+              type="password"
+              autoComplete="current-password"
+              maxLength={PASSWORD_MAX_LENGTH}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              aria-invalid={fieldProblem ? true : undefined}
+              aria-describedby={problem ? `${id}-problem` : undefined}
+            />
+          </div>
           {problem && (
             <p id={`${id}-problem`} role="alert" className="field-error">
               {problem}
             </p>
           )}
-          <button type="button" ref={cancelRef} onClick={cancel}>
-            Cancel
-          </button>
-          <button type="submit" className="danger" disabled={password === '' || deleting}>
-            Delete account
-          </button>
+          <div className="account-delete-actions">
+            <button type="button" ref={cancelRef} onClick={cancel}>
+              Cancel
+            </button>
+            <button type="submit" className="danger" disabled={password === '' || deleting}>
+              Delete account
+            </button>
+          </div>
         </form>
       )}
     </div>
