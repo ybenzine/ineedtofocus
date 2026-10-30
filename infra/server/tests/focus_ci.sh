@@ -56,7 +56,8 @@
 #               candidate and the automatic revert never call it. Then the real cosign,
 #               bootstrap.sh's, against recorded attestations served by a fake GHCR
 #               (fake_registry.py, provenance/): this repository's attested image
-#               deploys to dev and prod, offline but for ghcr.io; a wrong sha, no
+#               deploys to dev and prod, offline but for ghcr.io (egress blocked: a
+#               catch-all DNS logs any other lookup); a wrong sha, no
 #               attestation, another workflow and ref, another repository's ci.yml on
 #               main, this repository's attestation moved onto other bytes, an
 #               unreachable registry and a broken trusted root are each refused before
@@ -1587,6 +1588,15 @@ for _ in $(seq 100); do
   sleep 0.1
 done
 check "sanity: the fake GHCR is up" [ -e "$REG/ready" ]
+# Egress blocked from here on: names resolve through /etc/hosts or the fake registry's
+# DNS, which refuses and logs every other one (dns.log), so cosign can reach nothing it
+# wasn't pointed at, and a lookup of anything else shows.
+touch "$REG/dns.log"
+cp /etc/resolv.conf /tmp/resolv.conf.saved
+echo "nameserver 127.0.0.1" >/etc/resolv.conf
+check "sanity: egress is blocked: another host can't be reached" \
+  bash -c '! curl -fsS --max-time 10 -o /dev/null https://example.com 2>/dev/null'
+check "sanity: and its lookup is logged" contains "$(cat "$REG/dns.log")" "example.com"
 put "$FAKE/cosign-real" /tmp/cosign.real
 check "sanity: the real cosign is bootstrap.sh's pinned v3.1.4" contains "$(/tmp/cosign.real version 2>&1)" "v3.1.4"
 
@@ -1621,17 +1631,23 @@ echo "$PHOTO_SHA" >"$FAKE/labels/$D_PHOTO"
 echo "$T_OURS" >"$FAKE/labels/$D_NONE"
 echo "$T_OURS" >"$FAKE/labels/$D_MOVED"
 
-rmark() { rmark=$(wc -l <"$REG/requests.log"); }
+rmark() {
+  rmark=$(wc -l <"$REG/requests.log")
+  dmark=$(wc -l <"$REG/dns.log")
+}
 new_requests() { tail -n "+$((rmark + 1))" "$REG/requests.log"; }
+new_lookups() { tail -n "+$((dmark + 1))" "$REG/dns.log"; }
 # registry_checks <description>: since rmark, cosign read from ghcr.io only (no TUF,
-# Rekor or Fulcio call: the bundle and the pinned trusted root are all it needs), and
-# only while focus-ci held the deploy lock.
+# Rekor or Fulcio call: the bundle and the pinned trusted root are all it needs), looked
+# up no other name (egress is blocked, see above), and only while focus-ci held the
+# deploy lock.
 registry_checks() {
   local requests
   requests=$(new_requests)
   check "$1: cosign read the attestation from ghcr.io" contains "$requests" "GET ghcr.io /v2/ybenzine/ineedtofocus/"
   check "$1: and called no other host (offline against the pinned trusted root)" \
     eq "$(printf '%s' "$requests" | grep -vc '^[A-Z]* ghcr\.io ' || true)" 0
+  check "$1: and looked up no other name" eq "$(new_lookups)" ""
   check "$1: every request under the deploy lock" eq "$(printf '%s' "$requests" | grep -vc ' lock=held$' || true)" 0
 }
 real_refused() { # <description> <sha> <digest> <cosign's reason>
@@ -1738,6 +1754,7 @@ check "the revert is logged ok" contains "$(new_history | sed -n 2p)" "action=re
 check "one provenance check, the new release's: none for the revert" eq "$(cosign_calls)" 1
 kill "$registry" 2>/dev/null || true
 wait "$registry" 2>/dev/null || true
+cp /tmp/resolv.conf.saved /etc/resolv.conf
 
 pkill -f "sshd -p $SSH_PORT" || true
 finish

@@ -18,6 +18,10 @@ gets the same objects.
 Each request is appended to <state dir>/requests.log as
 `<method> <host> <path> <status> lock=<held|free>`: whether /opt/focus/deploy.lock was
 held while it was served. While <state dir>/down exists, every request gets a 503.
+
+It also answers DNS on 127.0.0.1:53 (UDP), where the test points /etc/resolv.conf: every
+name not in /etc/hosts is refused with NXDOMAIN and appended to <state dir>/dns.log. So
+a call to any host the test didn't point here fails and shows, instead of going out.
 """
 
 from __future__ import annotations
@@ -27,8 +31,10 @@ import hashlib
 import http.server
 import json
 import re
+import socket
 import ssl
 import sys
+import threading
 from pathlib import Path
 
 LOCK = Path("/opt/focus/deploy.lock")
@@ -146,6 +152,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
     do_HEAD = do_GET
 
 
+def query_name(packet: bytes) -> str:
+    """The question's name of a DNS query, dotted ("?" when it can't be read)."""
+    labels: list[str] = []
+    at = 12  # after the header
+    while at < len(packet) and packet[at] != 0:
+        length = packet[at]
+        if length > 63:  # a compression pointer has no place in a question
+            return "?"
+        labels.append(packet[at + 1 : at + 1 + length].decode("ascii", "replace"))
+        at += 1 + length
+    return ".".join(labels) or "?"
+
+
+def serve_dns(state: Path) -> None:
+    """NXDOMAIN for every query, each one logged to <state>/dns.log."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind(("127.0.0.1", 53))
+    while True:
+        packet, client = sock.recvfrom(512)
+        if len(packet) < 12:
+            continue
+        with (state / "dns.log").open("a") as log:
+            log.write(query_name(packet) + "\n")
+        # The same ID and question; QR, RD and RA set, RCODE 3 (NXDOMAIN); no answers.
+        header = packet[:2] + b"\x81\x83" + packet[4:6] + b"\x00\x00\x00\x00\x00\x00"
+        sock.sendto(header + packet[12:], client)
+
+
 def main() -> None:
     state, cert, key = (Path(arg) for arg in sys.argv[1:4])
     Handler.state = state
@@ -153,6 +187,7 @@ def main() -> None:
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert, key)
     server.socket = context.wrap_socket(server.socket, server_side=True)
+    threading.Thread(target=serve_dns, args=(state,), daemon=True).start()
     (state / "ready").touch()
     server.serve_forever()
 
