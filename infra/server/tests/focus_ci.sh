@@ -49,6 +49,20 @@
 #               images and never fail the deploy; a malformed log of the other
 #               environment is named by path and line number only (#186); a digest
 #               reference the containerd store repeats is removed and printed once
+#   provenance  (#177) a deploy verifies the digest's build provenance with the pinned
+#               cosign, under the lock and before any docker call, in a clean
+#               environment; a missing or not-root-owned verifier or trusted root, or a
+#               failing tool, stops it at step=provenance with nothing changed. rollback,
+#               candidate and the automatic revert never call it. Then the real cosign,
+#               bootstrap.sh's, against recorded attestations served by a fake GHCR
+#               (fake_registry.py, provenance/): this repository's attested image
+#               deploys to dev and prod, offline but for ghcr.io (egress blocked: a
+#               catch-all DNS logs any other lookup); a wrong sha, no
+#               attestation, another workflow and ref, another repository's ci.yml on
+#               main, this repository's attestation moved onto other bytes, an
+#               unreachable registry and a broken trusted root are each refused before
+#               anything runs; prod refuses a digest dev ran without an attestation;
+#               rollback and the revert work with the registry down
 #   floor       (#165) each deploy reads its release's schema (the installed
 #               migration_info.py, fed to a one-shot container) before migrating, and
 #               logs schema=<head>; output it can't read stops it there. A contract
@@ -90,6 +104,13 @@ clean_env_only() {
   return 1
 }
 last_history() { tail -n1 "$HISTORY"; }
+# cosign_call <sha> <digest>: the build provenance check focus-ci runs (#177), as logged.
+cosign_call() {
+  printf ':: cosign verify-attestation --trusted-root /opt/focus/sigstore/trusted_root.json --type slsaprovenance1 --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity https://github.com/ybenzine/ineedtofocus/.github/workflows/ci.yml@refs/heads/main --certificate-github-workflow-repository ybenzine/ineedtofocus --certificate-github-workflow-ref refs/heads/main --certificate-github-workflow-trigger push --certificate-github-workflow-sha %s %s' \
+    "$1" "$REPO@$2"
+}
+# cosign_calls: how many build provenance checks ran since mark.
+cosign_calls() { new_calls | grep -c ' :: cosign ' || true; }
 # put <file> <line>: (re)write a fake-docker state file the deploy user also writes. Root
 # can't open a file the deploy user owns in the sticky $FAKE dirs (fs.protected_regular),
 # so it replaces it with a world-writable one of its own.
@@ -117,6 +138,12 @@ install -d -m 1777 "$FAKE" "$FAKE/labels" "$FAKE/fail" "$FAKE/broken"
 # removes images and tags whoever made them.
 install -d -m 0777 "$FAKE/local" "$FAKE/tags"
 install -m 0666 /dev/null "$FAKE/calls.log"
+# The build provenance verifier bootstrap.sh installed (#177): the real cosign moves
+# aside, and fake_cosign.sh, root-owned like it, takes its place until the recorded-
+# bundle tests at the end. It attests what fake_docker.sh's labels say was built.
+mv /opt/focus/sigstore/cosign /tmp/cosign.real
+install -m 0755 "$SRC/server/tests/fake_cosign.sh" /opt/focus/sigstore/cosign
+install -d -m 0755 "$FAKE/attested"
 
 # The images the real compose files pin besides the app's (#170): in the fake registry
 # but not on the host, like on a fresh Droplet.
@@ -200,6 +227,12 @@ check "typing anything but yes: stops" [ "$rc" -ne 0 ]
 check "typing no: says nothing was installed" contains "$out" "stopped: nothing installed"
 check "nothing installed so far" [ ! -e /opt/focus/infra ]
 check "no forced command so far" [ ! -e /opt/focus/bin/focus-ci ]
+mv /opt/focus/sigstore/trusted_root.json /tmp/trusted_root.json.saved
+install_at "$A"
+mv /tmp/trusted_root.json.saved /opt/focus/sigstore/trusted_root.json
+check "no trusted root from bootstrap.sh yet: install fails (#177)" eq "$rc" 1
+check "it says to run bootstrap.sh first" contains "$out" "run infra/server/bootstrap.sh first: /opt/focus/sigstore/trusted_root.json is missing"
+check "nothing installed without the verifier" [ ! -e /opt/focus/infra ]
 touch "$FAKE/fail/pull" # Docker Hub unreachable
 mark
 install_at "$A"
@@ -397,6 +430,9 @@ calls=$(new_calls)
 compose_args="compose -f /opt/focus/infra/compose.prod.yml --env-file /opt/focus/dev/.env --env-file /opt/focus/infra/env/dev.env"
 migrate=":: $compose_args run --rm --pull never app alembic upgrade head"
 start=":: $compose_args up -d --wait --wait-timeout 180 --pull never"
+check "verifies the digest's build provenance with the pinned cosign (#177)" contains "$calls" "$(cosign_call "$S1" "$D1")"
+check "as its first call, before any docker call" eq "$(new_calls | first_line | sed 's/^[^:]*:: /:: /')" "$(cosign_call "$S1" "$D1")"
+check "it says what was verified" contains "$out" "build provenance: .github/workflows/ci.yml on refs/heads/main attested $REPO@$D1 as built from $S1"
 check "pulls by digest" contains "$calls" ":: pull --quiet $REPO@$D1"
 check "lists the project's images (#170)" contains "$calls" "app_tag=$S1 :: $compose_args config --images"
 check "pulls Postgres' missing image by its pinned digest" contains "$calls" ":: pull --quiet $PG"
@@ -420,7 +456,7 @@ check "checks /healthz in the app" contains "$calls" "exec -T app python -c impo
 check "checks /readyz in the app" contains "$calls" "exec -T app python -c import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz'"
 check "the endpoint checks come after the running-image check" before "$calls" ":: inspect --format {{.Image}}" "/healthz"
 check "every compose call gets APP_TAG=<sha>" eq "$(grep ':: compose' <<<"$calls" | grep -vc "app_tag=$S1 ")" 0
-check "docker gets PATH, HOME and APP_TAG only (no LC_*, LANG or SSH_*)" clean_env_only "$calls"
+check "docker and cosign get PATH, HOME and APP_TAG only (no LC_*, LANG or SSH_*)" clean_env_only "$calls"
 check "runs as the deploy user" eq "$(grep -vc "uid=$(id -u deploy) " <<<"$calls")" 0
 check "record: tag" eq "$(value tag)" "$S1"
 check "record: digest" eq "$(value digest)" "$D1"
@@ -449,11 +485,14 @@ check "redeploying the current release succeeds" eq "$rc" 0
 check "redeploy keeps the rollback target" eq "$(value previous_tag)" "$S1"
 
 echo "--- Rollback"
+touch "$FAKE/fail/cosign" # the verifier (or GHCR, or Sigstore) is down: rollback doesn't need it (#177)
 mark
 ci rollback
+rm "$FAKE/fail/cosign"
 printf '%s\n' "$out" | sed 's/^/     | /'
 check "rollback succeeds" eq "$rc" 0
 calls=$(new_calls)
+check "rollback doesn't verify build provenance (a recorded, verified digest; #177)" not_contains "$calls" ":: cosign"
 check "rollback doesn't migrate" not_contains "$calls" "alembic"
 check "rollback doesn't pull an image the host has" not_contains "$calls" ":: pull"
 check "rollback starts the previous release" contains "$calls" "app_tag=$S1 :: $compose_args up -d --wait"
@@ -490,11 +529,55 @@ no_revert() { # <description>
   check "$1: no revert (the app was never touched)" not_contains "$(new_history)" "action=revert"
   check "$1: no up at all" not_contains "$(new_calls)" " up -d"
 }
+# The pull step's own checks, behind the provenance check (#177): an attestation for S2
+# whose image's label says S1 (only the label check stops it), and an attested digest
+# that's gone from the registry.
+echo "$S2" >"$FAKE/attested/$D3"
+echo "$S2" >"$FAKE/attested/$D4"
 deploy_fails "image built from another commit" pull "$S2" "$D3" "alembic"
 check "image built from another commit: says so" contains "$out" "was built from"
 no_revert "image built from another commit"
 deploy_fails "digest not in the registry" pull "$S2" "$D4" "alembic"
 no_revert "digest not in the registry"
+# Build provenance (#177), with the fake cosign; the real one's verdicts are tested at the
+# end. Each stops the deploy before any docker call.
+only_cosign() { # <description>
+  check "$1: the provenance check ran" eq "$(cosign_calls)" 1
+  check "$1: and nothing else: no docker call" eq "$(new_calls | grep -vc ' :: cosign ' || true)" 0
+}
+provenance_says() { # <description> <sha>
+  check "$1: says nothing is pulled" \
+    contains "$out" "$REPO@$D2 has no valid build provenance attestation from .github/workflows/ci.yml on refs/heads/main for $2 (cosign's reason is above), so nothing is pulled"
+}
+touch "$FAKE/fail/cosign"
+deploy_fails "the verifier fails (#177)" provenance "$S2" "$D2" ":: pull"
+rm "$FAKE/fail/cosign"
+check "the verifier fails: shows cosign's error" contains "$out" "cosign: Error: fake cosign: the tool failed"
+provenance_says "the verifier fails" "$S2"
+only_cosign "the verifier fails"
+no_revert "the verifier fails"
+echo "" >"$FAKE/attested/$D2"
+deploy_fails "no attestation (fake cosign)" provenance "$S2" "$D2" ":: pull"
+rm "$FAKE/attested/$D2"
+only_cosign "no attestation (fake cosign)"
+mv /opt/focus/sigstore/cosign /tmp/cosign.fake
+deploy_fails "no verifier installed" provenance "$S2" "$D2" ":: pull"
+mv /tmp/cosign.fake /opt/focus/sigstore/cosign
+check "no verifier installed: says to run bootstrap.sh" \
+  contains "$out" "/opt/focus/sigstore/cosign is missing, or isn't root's and writable by root only: run infra/server/bootstrap.sh"
+check "no verifier installed: no call at all" no_new_calls
+chown deploy /opt/focus/sigstore/trusted_root.json
+deploy_fails "a trusted root the deploy user owns" provenance "$S2" "$D2" ":: pull"
+chown root /opt/focus/sigstore/trusted_root.json
+check "a trusted root the deploy user owns: names it" contains "$out" "/opt/focus/sigstore/trusted_root.json is missing, or isn't root's"
+check "a trusted root the deploy user owns: not used" no_new_calls
+chmod 0775 /opt/focus/sigstore
+deploy_fails "a group-writable verifier directory" provenance "$S2" "$D2" ":: pull"
+chmod 0755 /opt/focus/sigstore
+check "a group-writable verifier directory: names it" contains "$out" "/opt/focus/sigstore is missing, or isn't root's"
+check "a group-writable verifier directory: nothing runs" no_new_calls
+check "sanity: the verifier is root's again" eq "$(mode_owner /opt/focus/sigstore/cosign) $(mode_owner /opt/focus/sigstore/trusted_root.json)" "755 root:root 644 root:root"
+
 running_before=$(cat "$FAKE/running-dev")
 prune "$PG"                   # Postgres' image left the host (#117's pruning, a bump)
 touch "$FAKE/fail/pull"       # and Docker Hub is unreachable
@@ -696,6 +779,7 @@ ci_as prod -o 'SetEnv=LC_FOCUS=leak LANG=C.UTF-8' -- "deploy $S1 $D1"
 printf '%s\n' "$out" | sed 's/^/     | /'
 check "prod deploy of an earlier dev release succeeds" eq "$rc" 0
 calls=$(new_calls)
+check "prod: verifies the build provenance too, first (#177)" eq "$(first_line <<<"$calls" | sed 's/^[^:]*:: /:: /')" "$(cosign_call "$S1" "$D1")"
 check "prod: no pull, the digest is on the host" not_contains "$calls" ":: pull"
 check "prod: checks the revision label" contains "$calls" "org.opencontainers.image.revision\" }} $REPO@$D1"
 check "prod: re-points :S1 at prod's digest" contains "$calls" ":: tag $REPO@$D1 $REPO:$S1"
@@ -788,7 +872,7 @@ broken_deploy() { # <description> <digest> <what the output says failed>
   before_record=$(cat "$RECORD")
   put "$FAKE/tags/$S1" "$D2" # someone moved the host-wide :S1 (prod has D1, dev D5)
   touch "$FAKE/probe-lock"
-  rm -f "$FAKE/lock-probe.log"
+  rm -f "$FAKE/lock-probe.log" "$FAKE/cosign-lock-probe.log"
   mark
   hmark
   ci_as dev -o 'SetEnv=LC_FOCUS=leak LANG=C.UTF-8' -- "deploy $S4 $dig"
@@ -820,6 +904,9 @@ broken_deploy() { # <description> <digest> <what the output says failed>
   check "$desc: no prod file in any call" not_contains "$calls" "/opt/focus/prod/"
   check "$desc: both starts ran under the deploy lock" \
     eq "$(cat "$FAKE/lock-probe.log")" "app_tag=$S4 lock=held"$'\n'"app_tag=$S1 lock=held"
+  check "$desc: one provenance check, the broken build's: the revert verifies nothing (#177)" eq "$(cosign_calls)" 1
+  check "$desc: it ran first" eq "$(first_line <<<"$calls" | sed 's/^[^:]*:: /:: /')" "$(cosign_call "$S4" "$dig")"
+  check "$desc: under the deploy lock" eq "$(cat "$FAKE/cosign-lock-probe.log")" "cosign $REPO@$dig lock=held"
   prod "candidate $S4"
   check "$desc: prod can't take the broken build" eq "$rc" 1
   check "$desc: candidate says dev never ran it successfully" contains "$out" "dev ran no release of $S4 successfully"
@@ -1471,6 +1558,203 @@ ci "deploy $M $EM"
 check "the same release, once its migration works, deploys" eq "$rc" 0
 check "without another floor line" eq "$(floor_lines "$HISTORY")" 3
 check "its rollback target is none: L ran before the floor" eq "$(value previous_tag)" ""
+
+echo "--- Build provenance: the real cosign and recorded attestations (#177)"
+# A fake GHCR (fake_registry.py) serves the recorded objects in provenance/ over HTTPS:
+# ghcr.io, and Sigstore's hosts to catch any call to them, resolve to 127.0.0.1, and a
+# test CA signs its certificate. The real cosign bootstrap.sh installed (and pinned) runs
+# behind fake_cosign.sh, which logs the call; the trusted root is bootstrap.sh's own.
+apt-get install -y -q --no-install-recommends python3 >/dev/null
+REG=/tmp/fake-registry
+PROV=$SRC/server/tests/provenance
+TLS=/tmp/registry-tls
+install -d -m 0755 "$REG" "$REG/images" "$TLS"
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 2 \
+  -subj /CN=focus-test-registry-ca -keyout "$TLS/ca.key" -out "$TLS/ca.crt" 2>/dev/null
+openssl req -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -subj /CN=ghcr.io \
+  -keyout "$TLS/ghcr.key" -out "$TLS/ghcr.csr" 2>/dev/null
+printf 'subjectAltName=DNS:ghcr.io,DNS:tuf-repo-cdn.sigstore.dev,DNS:rekor.sigstore.dev,DNS:fulcio.sigstore.dev\n' >"$TLS/ext.cnf"
+openssl x509 -req -in "$TLS/ghcr.csr" -CA "$TLS/ca.crt" -CAkey "$TLS/ca.key" -CAcreateserial \
+  -days 2 -extfile "$TLS/ext.cnf" -out "$TLS/ghcr.crt" 2>/dev/null
+cp "$TLS/ca.crt" /usr/local/share/ca-certificates/focus-test-registry-ca.crt
+update-ca-certificates >/dev/null 2>&1
+echo "127.0.0.1 ghcr.io tuf-repo-cdn.sigstore.dev rekor.sigstore.dev fulcio.sigstore.dev" >>/etc/hosts
+cp -R "$PROV/ineedtofocus" "$PROV/voyager" "$PROV/photofield" "$REG/images/"
+touch "$REG/requests.log"
+python3 -I "$SRC/server/tests/fake_registry.py" "$REG" "$TLS/ghcr.crt" "$TLS/ghcr.key" >/tmp/fake-registry.out 2>&1 &
+registry=$!
+for _ in $(seq 100); do
+  [[ ! -e $REG/ready ]] || break
+  sleep 0.1
+done
+check "sanity: the fake GHCR is up" [ -e "$REG/ready" ]
+# Egress blocked from here on: names resolve through /etc/hosts or the fake registry's
+# DNS, which refuses and logs every other one (dns.log), so cosign can reach nothing it
+# wasn't pointed at, and a lookup of anything else shows.
+touch "$REG/dns.log"
+cp /etc/resolv.conf /tmp/resolv.conf.saved
+echo "nameserver 127.0.0.1" >/etc/resolv.conf
+check "sanity: egress is blocked: another host can't be reached" \
+  bash -c '! curl -fsS --max-time 10 -o /dev/null https://example.com 2>/dev/null'
+check "sanity: and its lookup is logged" contains "$(cat "$REG/dns.log")" "example.com"
+put "$FAKE/cosign-real" /tmp/cosign.real
+check "sanity: the real cosign is bootstrap.sh's pinned v3.1.4" contains "$(/tmp/cosign.real version 2>&1)" "v3.1.4"
+
+image_digest() { printf 'sha256:%s' "$(sha256sum "$1" | cut -d' ' -f1)"; }
+# This repository's `publish` attested main's 15b5ce8 (#376) as ghcr.io/ybenzine/ineedtofocus@D_OURS.
+T_OURS=15b5ce8891f2787d016a61beda9312ed00f2837d
+D_OURS=$(image_digest "$PROV/ineedtofocus/image.json")
+check "sanity: the recorded image is the digest publish pushed for $T_OURS" \
+  eq "$D_OURS" sha256:0ce366d59163d76f0e3b8fc15b8fdbd636f4891687b49a374485fd368bbbb8d7
+# Other repositories' real attestations, signed by aeharding/voyager's docker.yml on
+# refs/tags/2.49.1 and SmilyOrg/photofield's ci.yml on refs/heads/main, each at its own
+# commit (provenance/README.md).
+VOY_SHA=05d74220b142f9409579ca52c72cb36edab7cbd9
+D_VOY=$(image_digest "$PROV/voyager/image.json")
+PHOTO_SHA=6b820bd8c854c50db47125f908713162e22da88c
+D_PHOTO=$(image_digest "$PROV/photofield/image.json")
+# Bytes with no attestation, and bytes with this repository's attestation moved onto them
+# (its referrers index served at their sha256-<hex> tag).
+manifest() { # <config digest number>: an image manifest of its own
+  printf '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:%064x","size":2},"layers":[]}' "$1"
+}
+install -d "$REG/images/unattested" "$REG/images/moved"
+manifest 0xf00 >"$REG/images/unattested/image.json"
+manifest 0xf01 >"$REG/images/moved/image.json"
+cp "$PROV/ineedtofocus/referrers.json" "$PROV/ineedtofocus/attestation.json" "$PROV/ineedtofocus/bundle.json" "$REG/images/moved/"
+D_NONE=$(image_digest "$REG/images/unattested/image.json")
+D_MOVED=$(image_digest "$REG/images/moved/image.json")
+# Each one's label claims the commit asked for, so only the provenance check stops it.
+echo "$T_OURS" >"$FAKE/labels/$D_OURS"
+echo "$VOY_SHA" >"$FAKE/labels/$D_VOY"
+echo "$PHOTO_SHA" >"$FAKE/labels/$D_PHOTO"
+echo "$T_OURS" >"$FAKE/labels/$D_NONE"
+echo "$T_OURS" >"$FAKE/labels/$D_MOVED"
+
+rmark() {
+  rmark=$(wc -l <"$REG/requests.log")
+  dmark=$(wc -l <"$REG/dns.log")
+}
+new_requests() { tail -n "+$((rmark + 1))" "$REG/requests.log"; }
+new_lookups() { tail -n "+$((dmark + 1))" "$REG/dns.log"; }
+# registry_checks <description>: since rmark, cosign read from ghcr.io only (no TUF,
+# Rekor or Fulcio call: the bundle and the pinned trusted root are all it needs), looked
+# up no other name (egress is blocked, see above), and only while focus-ci held the
+# deploy lock.
+registry_checks() {
+  local requests
+  requests=$(new_requests)
+  check "$1: cosign read the attestation from ghcr.io" contains "$requests" "GET ghcr.io /v2/ybenzine/ineedtofocus/"
+  check "$1: and called no other host (offline against the pinned trusted root)" \
+    eq "$(printf '%s' "$requests" | grep -vc '^[A-Z]* ghcr\.io ' || true)" 0
+  check "$1: and looked up no other name" eq "$(new_lookups)" ""
+  check "$1: every request under the deploy lock" eq "$(printf '%s' "$requests" | grep -vc ' lock=held$' || true)" 0
+}
+real_refused() { # <description> <sha> <digest> <cosign's reason>
+  rmark
+  deploy_fails "$1" provenance "$2" "$3" ":: pull"
+  check "$1: shows cosign's reason" contains "$out" "cosign: Error: $4"
+  check "$1: says nothing is pulled" contains "$out" "$REPO@$3 has no valid build provenance attestation from .github/workflows/ci.yml on refs/heads/main for $2"
+  only_cosign "$1"
+  no_revert "$1"
+}
+dev_before=$(cat "$RECORD" "$FAKE/running-dev")
+real_refused "real cosign: a wrong sha" "$S2" "$D_OURS" \
+  "no matching attestations: failed to verify certificate identity: no matching CertificateIdentity found, last error: expected GithubWorkflowSHA to be \"$S2\", got \"$T_OURS\""
+registry_checks "real cosign: a wrong sha"
+real_refused "real cosign: no attestation" "$T_OURS" "$D_NONE" "no matching attestations"
+registry_checks "real cosign: no attestation"
+real_refused "real cosign: another workflow on another ref" "$VOY_SHA" "$D_VOY" \
+  "no matching attestations: failed to verify certificate identity: no matching CertificateIdentity found, last error: expected SAN value \"https://github.com/ybenzine/ineedtofocus/.github/workflows/ci.yml@refs/heads/main\", got \"https://github.com/aeharding/voyager/.github/workflows/docker.yml@refs/tags/2.49.1\""
+real_refused "real cosign: another repository's ci.yml on refs/heads/main" "$PHOTO_SHA" "$D_PHOTO" \
+  "no matching attestations: failed to verify certificate identity: no matching CertificateIdentity found, last error: expected SAN value \"https://github.com/ybenzine/ineedtofocus/.github/workflows/ci.yml@refs/heads/main\", got \"https://github.com/SmilyOrg/photofield/.github/workflows/ci.yml@refs/heads/main\""
+real_refused "real cosign: this repository's attestation moved onto other bytes" "$T_OURS" "$D_MOVED" \
+  "no matching attestations: failed to verify signature: provided artifact digest does not match any digest in statement"
+registry_checks "real cosign: this repository's attestation moved onto other bytes"
+touch "$REG/down"
+real_refused "real cosign: GHCR unreachable (a tool failure)" "$T_OURS" "$D_OURS" ""
+rm "$REG/down"
+check "GHCR unreachable: cosign says why" contains "$out" "503 Service Unavailable"
+cp -p /opt/focus/sigstore/trusted_root.json /tmp/trusted_root.json.pinned
+printf '{}\n' >/opt/focus/sigstore/trusted_root.json
+real_refused "real cosign: a trusted root that isn't Sigstore's" "$T_OURS" "$D_OURS" ""
+cp -p /tmp/trusted_root.json.pinned /opt/focus/sigstore/trusted_root.json
+check "a trusted root that isn't Sigstore's: cosign says why" contains "$out" "loading trusted root"
+check "sanity: none of the refusals changed what dev runs" eq "$(cat "$RECORD" "$FAKE/running-dev")" "$dev_before"
+
+echo "--- Build provenance: an attested release deploys to dev, then prod (#177)"
+mark
+hmark
+rmark
+touch "$FAKE/probe-lock"
+rm -f "$FAKE/cosign-lock-probe.log"
+ci "deploy $T_OURS $D_OURS"
+rm "$FAKE/probe-lock"
+printf '%s\n' "$out" | sed 's/^/     | /'
+calls=$(new_calls)
+check "real cosign: the attested digest deploys to dev" eq "$rc" 0
+check "it says what was verified" contains "$out" "build provenance: .github/workflows/ci.yml on refs/heads/main attested $REPO@$D_OURS as built from $T_OURS"
+check "the check ran first, before any docker call" eq "$(first_line <<<"$calls" | sed 's/^[^:]*:: /:: /')" "$(cosign_call "$T_OURS" "$D_OURS")"
+check "under the deploy lock" eq "$(cat "$FAKE/cosign-lock-probe.log")" "cosign $REPO@$D_OURS lock=held"
+check "cosign gets PATH and HOME only" clean_env_only "$calls"
+registry_checks "dev deploy"
+check "dev runs it" eq "$(value tag) $(value digest) $(cat "$FAKE/running-dev")" "$T_OURS $D_OURS $D_OURS"
+mark
+rmark
+prod "deploy $T_OURS $D_OURS"
+calls=$(new_calls)
+check "real cosign: prod deploys it too" eq "$rc" 0
+check "prod: after the promotion check, the provenance check runs first" eq "$(first_line <<<"$calls" | sed 's/^[^:]*:: /:: /')" "$(cosign_call "$T_OURS" "$D_OURS")"
+registry_checks "prod deploy"
+check "prod runs it" eq "$(pvalue tag) $(pvalue digest) $(cat "$FAKE/running-prod")" "$T_OURS $D_OURS $D_OURS"
+
+echo "--- Build provenance: prod refuses bytes dev ran without an attestation (#177)"
+# M (EM) ran on dev, deployed through the fake cosign: as if a dev-environment job had
+# skipped the workflow check. dev's log offers it; prod's own check refuses it.
+prod "candidate $M"
+check "sanity: dev's log offers M to prod" contains "$out" "digest=$EM"
+before_record=$(cat "$PROD_RECORD")
+mark
+hmark "$PROD_HISTORY"
+prod "deploy $M $EM"
+check "prod: an unattested digest dev ran fails (status 1)" eq "$rc" 1
+check "prod: at the provenance step, after promote" contains "$out" "failed at 'provenance'"
+check "prod: with cosign's reason" contains "$out" "cosign: Error: no matching attestations"
+only_cosign "prod: an unattested digest dev ran"
+check "prod: record unchanged" eq "$(cat "$PROD_RECORD")" "$before_record"
+check "prod: still runs the attested release" eq "$(cat "$FAKE/running-prod")" "$D_OURS"
+check "prod: logged as failed" contains "$(new_history "$PROD_HISTORY")" "env=prod action=deploy outcome=failed tag=$M digest=$EM"
+check "prod: at step=provenance" contains "$(new_history "$PROD_HISTORY")" "step=provenance"
+
+echo "--- Build provenance: rollback, candidate and the revert need no network for it (#177)"
+touch "$REG/down" # GHCR's attestations (and anything cosign could reach) are gone
+mark
+rmark
+ci rollback
+check "dev rolls back with the registry down" eq "$rc" 0
+check "to M, recorded known-good, though it has no attestation" eq "$(value tag) $(value digest) $(value action)" "$M $EM rollback"
+check "dev's rollback ran no provenance check" eq "$(cosign_calls)" 0
+check "and made no registry request" eq "$(new_requests)" ""
+mark
+prod candidate
+check "candidate: no provenance check either (no call at all)" no_new_calls
+mark
+rb rollback
+check "prod's rollback key rolls prod back with the registry down" eq "$rc $(pvalue tag) $(pvalue action)" "0 $C1 rollback"
+check "prod's rollback ran no provenance check" eq "$(cosign_calls)" 0
+rm "$REG/down"
+echo "up dev" >"$FAKE/broken/$D_OURS"
+mark
+hmark
+ci "deploy $T_OURS $D_OURS"
+rm "$FAKE/broken/$D_OURS"
+check "an attested build that fails at start: the deploy fails" eq "$rc" 1
+check "it reverts to M, which has no attestation" contains "$out" "reverted to $M"
+check "the revert is logged ok" contains "$(new_history | sed -n 2p)" "action=revert outcome=ok tag=$M digest=$EM"
+check "one provenance check, the new release's: none for the revert" eq "$(cosign_calls)" 1
+kill "$registry" 2>/dev/null || true
+wait "$registry" 2>/dev/null || true
+cp /tmp/resolv.conf.saved /etc/resolv.conf
 
 pkill -f "sshd -p $SSH_PORT" || true
 finish

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.index.v1+json",
+  "manifests": [
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:3f30dafd042c793b12a92edae88a483697b413620812ffca3f414de9cf04660f",
+      "size": 1430,
+      "platform": {
+        "architecture": "amd64",
+        "os": "linux"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:591d1f5c5011a4380531648ccd7442475801b5a846a174e6223f692cd528d881",
+      "size": 1430,
+      "platform": {
+        "architecture": "arm64",
+        "os": "linux"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:a8dc8571190682082fb260071832bcbed84fb63d79f7dbc8523029c7424e9231",
+      "size": 565,
+      "annotations": {
+        "vnd.docker.reference.digest": "sha256:3f30dafd042c793b12a92edae88a483697b413620812ffca3f414de9cf04660f",
+        "vnd.docker.reference.type": "attestation-manifest"
+      },
+      "platform": {
+        "architecture": "unknown",
+        "os": "unknown"
+      }
+    },
+    {
+      "mediaType": "application/vnd.oci.image.manifest.v1+json",
+      "digest": "sha256:ac907a531cf25d9f15f464e4b28ef508bb2ca6b43862edd1acf842ac6812e486",
+      "size": 565,
+      "annotations": {
+        "vnd.docker.reference.digest": "sha256:591d1f5c5011a4380531648ccd7442475801b5a846a174e6223f692cd528d881",
+        "vnd.docker.reference.type": "attestation-manifest"
+      },
+      "platform": {
+        "architecture": "unknown",
+        "os": "unknown"
+      }
+    }
+  ],
+  "annotations": {
+    "org.opencontainers.image.description": "A non-invasive local photo viewer with a focus on speed and simplicity",
+    "org.opencontainers.image.licenses": "MIT",
+    "org.opencontainers.image.source": "https://github.com/smilyorg/photofield"
+  }
+}

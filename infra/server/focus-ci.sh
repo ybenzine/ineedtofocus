@@ -11,7 +11,9 @@
 # $SSH_ORIGINAL_COMMAND, and must be exactly one of:
 #
 #   deploy <commit sha> sha256:<digest>
-#       Note the current release (the one to go back to). Pull every other image of the
+#       Note the current release (the one to go back to). Check the digest's build
+#       provenance (see Build provenance): nothing is pulled for a digest ci.yml on main
+#       didn't attest as built from <commit sha>. Pull every other image of the
 #       environment's project the host lacks (Postgres, the collector: pinned by tag and
 #       digest in compose.prod.yml, #170), then pull
 #       ghcr.io/ybenzine/ineedtofocus@sha256:<digest> and check that it was built from
@@ -51,6 +53,22 @@
 # so it runs on today's schema without migrating. Only known-good releases at or above
 # the rollback floor are rollback targets; promotion to prod (`candidate`, `promote`)
 # reads dev's known-good releases whatever dev's floor, since prod's schema is prod's.
+#
+# Build provenance (#177). A deploy, under the lock and before any pull, runs the pinned
+# cosign (/opt/focus/sigstore/cosign, root-owned, installed by bootstrap.sh) on the digest:
+# `cosign verify-attestation` reads the attestation `publish` pushed next to the image in
+# GHCR and checks it offline against the pinned Sigstore trusted root
+# (/opt/focus/sigstore/trusted_root.json, root-owned too): no TUF, Rekor or GitHub API
+# call and no token. It passes only for a SLSA provenance statement about exactly that
+# digest, signed with a certificate GitHub's OIDC issuer got for
+# .github/workflows/ci.yml on refs/heads/main of ybenzine/ineedtofocus, for a push, at
+# the requested commit (SIGNER_* below). Anything else (no attestation, another commit,
+# another workflow, ref or repository, a tool that fails or times out, a verifier or
+# trusted root that is missing or not root's) stops the deploy at step=provenance before
+# any docker call, with nothing changed. This binds whatever the workflows run: their
+# own `gh attestation verify` steps are early warnings. rollback, candidate and the
+# automatic revert don't verify and need no network for it: they only restore digests
+# recorded with an ok line, which passed this check when they were deployed.
 #
 # Rollback floor (#165). A contract migration (a migration file with a
 # `# contract-migration: <reason>` comment, which test_migration_safety.py lets remove
@@ -97,7 +115,8 @@
 #   prod           deploy, status, candidate      on focus-prod. A prod deploy also needs
 #                  dev to have run that exact sha and digest successfully, and not to
 #                  have rolled back from it (dev's releases.log), checked under the lock:
-#                  prod only gets bytes dev ran, which deploy-dev took from `publish`.
+#                  prod only gets bytes dev ran. Its own provenance check then holds
+#                  even if dev ran bytes `publish` didn't attest.
 #                  The prod key can read dev's records but not change dev.
 #   rollback-prod  rollback, status               on focus-prod, for the `rollback`
 #                  environment's key (no reviewer, so on-call can use it). It can only
@@ -121,8 +140,8 @@
 # Safety:
 #   - Exact matches only: 40 lowercase hex for the commit, sha256: plus 64 lowercase hex
 #     for the digest, in the C locale, so nothing the client sends is interpreted.
-#   - Every docker and compose call gets a clean environment (env -i): PATH, HOME and,
-#     for compose, APP_TAG. Variables from the SSH session can't override
+#   - Every docker, compose and cosign call gets a clean environment (env -i): PATH,
+#     HOME and, for compose, APP_TAG. Variables from the SSH session can't override
 #     infra/env/<env>.env (#92 review, finding 2).
 #   - One deploy or rollback at a time on the host, across environments: everything
 #     after validation runs under flock on /opt/focus/deploy.lock (finding 3), the
@@ -170,6 +189,17 @@ readonly MAX_REQUEST_LENGTH=160
 readonly KEEP_KNOWN_GOOD=5
 # Rollback floor (#165): reads a release's schema from its own image (see the header).
 readonly MIGRATION_INFO=$INFRA_DIR/app/migration_info.py
+# Build provenance (#177): the verifier and trust material bootstrap.sh pins, and the one
+# signer a deploy accepts. The identity is the certificate's SAN: the signing workflow
+# (a reusable workflow would be its own file), its repository and ref.
+readonly SIGSTORE_DIR=$FOCUS_ROOT/sigstore
+readonly COSIGN=$SIGSTORE_DIR/cosign
+readonly TRUSTED_ROOT=$SIGSTORE_DIR/trusted_root.json
+readonly PROVENANCE_TIMEOUT_SECONDS=120
+readonly SIGNER_REPOSITORY=ybenzine/ineedtofocus
+readonly SIGNER_REF=refs/heads/main
+readonly SIGNER_IDENTITY=https://github.com/$SIGNER_REPOSITORY/.github/workflows/ci.yml@$SIGNER_REF
+readonly SIGNER_ISSUER=https://token.actions.githubusercontent.com
 export PATH=$CLEAN_PATH
 
 readonly SHA_RE='^[0-9a-f]{40}$'
@@ -470,6 +500,48 @@ promoted() {
     printf 'focus-ci: %s ran no release %s %s successfully: deploy it to %s first\n' \
       "$promote_from" "$1" "$2" "$promote_from" >&2
   fi
+  return 1
+}
+
+# root_owned <path>: it exists, root owns it, and neither group nor others can write it.
+root_owned() {
+  local owner mode
+  owner=$(stat -c %u -- "$1" 2>/dev/null) || return 1
+  mode=$(stat -c %a -- "$1") || return 1
+  [[ $owner == 0 ]] && (((8#$mode & 8#022) == 0))
+}
+
+# verify_provenance <tag> <digest> (#177): the pinned cosign, offline against the pinned
+# trusted root, finds an attestation of exactly <digest> that ci.yml on main signed for a
+# push of <tag> (see Build provenance). Its reason goes to the client on a refusal.
+verify_provenance() {
+  local path out rc=0
+  for path in "$SIGSTORE_DIR" "$COSIGN" "$TRUSTED_ROOT"; do
+    if ! root_owned "$path"; then
+      printf "focus-ci: %s is missing, or isn't root's and writable by root only: run infra/server/bootstrap.sh (see _docs/deployment.md, Build provenance)\n" "$path" >&2
+      return 1
+    fi
+  done
+  out=$(clean timeout --kill-after=10 "$PROVENANCE_TIMEOUT_SECONDS" "$COSIGN" verify-attestation \
+    --trusted-root "$TRUSTED_ROOT" \
+    --type slsaprovenance1 \
+    --certificate-oidc-issuer "$SIGNER_ISSUER" \
+    --certificate-identity "$SIGNER_IDENTITY" \
+    --certificate-github-workflow-repository "$SIGNER_REPOSITORY" \
+    --certificate-github-workflow-ref "$SIGNER_REF" \
+    --certificate-github-workflow-trigger push \
+    --certificate-github-workflow-sha "$1" \
+    "$IMAGE_REPO@$2" 2>&1 >/dev/null) || rc=$?
+  if ((rc == 0)); then
+    log "build provenance: .github/workflows/ci.yml on $SIGNER_REF attested $IMAGE_REPO@$2 as built from $1"
+    return 0
+  fi
+  [[ -z $out ]] || printf '%s\n' "$out" | sed 's/^/cosign: /' >&2
+  if ((rc == 124 || rc == 137)); then
+    printf 'focus-ci: cosign timed out after %ss\n' "$PROVENANCE_TIMEOUT_SECONDS" >&2
+  fi
+  printf "focus-ci: %s has no valid build provenance attestation from .github/workflows/ci.yml on %s for %s (cosign's reason is above), so nothing is pulled\n" \
+    "$IMAGE_REPO@$2" "$SIGNER_REF" "$1" >&2
   return 1
 }
 
@@ -907,6 +979,7 @@ do_deploy() {
   if [[ -n $promote_from ]]; then
     step deploy promote promoted "$tag" "$digest"
   fi
+  step deploy provenance verify_provenance "$tag" "$digest"
   step deploy pull pull_release "$tag" "$digest"
   step deploy schema read_schema "$tag"
   set_floor
