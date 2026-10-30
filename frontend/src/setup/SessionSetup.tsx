@@ -13,7 +13,7 @@ import {
 import { onAppleMobile, SETUP_SILENT_HINT } from '../sounds/appleMobile.ts'
 import { OfflineRainSuggestion } from '../sounds/AudioControls.tsx'
 import { useOnline } from '../sounds/useOnline.ts'
-import { AUDIO_SOURCES, GOAL_MAX_LENGTH, type AudioSource } from './options.ts'
+import { AUDIO_SOURCES, GOAL_MAX_LENGTH, tagLabel, type AudioSource } from './options.ts'
 import type { PreferencesStore } from './preferences.ts'
 
 const AUDIO_LABELS: Record<AudioSource, string> = { none: 'None', rain: 'Rain', youtube: 'YouTube' }
@@ -37,10 +37,6 @@ export interface SessionSetupProps {
   /** Pre-selected reminder for the unlimited timer (AC12.4); off when absent. */
   defaultReminderMinutes?: ReminderMinutes | null
   onStart: (request: SessionRequest) => void | Promise<void>
-}
-
-function capitalize(text: string): string {
-  return text.charAt(0).toUpperCase() + text.slice(1)
 }
 
 /** Whole numbers only; anything else becomes NaN so range validation rejects it. */
@@ -296,7 +292,7 @@ export default function SessionSetup({
                 checked={tag === t}
                 onChange={() => setTag(t)}
               />
-              <span>{capitalize(t)}</span>
+              <span>{tagLabel(t)}</span>
             </label>
           ))}
         </div>
