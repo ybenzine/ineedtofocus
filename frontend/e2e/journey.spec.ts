@@ -154,7 +154,10 @@ test('YouTube is chosen on New session: Start waits for a link, a recent link is
   await start.click()
   await expect(page.getByRole('timer', { name: 'Time' })).toBeVisible()
   // The player itself is YouTube's: this test doesn't depend on it playing.
-  await expect(page.getByRole('region', { name: 'Background audio' })).toBeVisible()
+  const audioCard = page.getByRole('region', { name: 'Background audio' })
+  await expect(audioCard).toBeVisible()
+  // The YouTube mark shows once in the card (#359).
+  await expect(audioCard.locator('.youtube-icon')).toHaveCount(1)
 
   // A reload restores the session with the same link (AC6.4).
   await page.reload()

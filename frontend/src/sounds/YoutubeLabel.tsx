@@ -1,6 +1,7 @@
 // A YouTube link as the user sees it (#326): a small YouTube icon, then the title trimmed to fit.
 // The full title is the accessible name and the tooltip. Without a title it reads "YouTube video"
-// or "YouTube playlist", never the id. Reused wherever a link is shown.
+// or "YouTube playlist", never the id. Reused wherever a link is shown. The icon can be turned
+// off (`showIcon`) where the mark already appears once nearby, as in the timer's audio card.
 
 import { trimYoutubeTitle, youtubeLabelText } from './youtubeTitle.ts'
 
@@ -27,14 +28,16 @@ export function YoutubeIcon() {
 export interface YoutubeLabelProps {
   kind: 'video' | 'playlist'
   title?: string | null
+  /** Show the YouTube mark (default). Off where the mark already sits next to the label. */
+  showIcon?: boolean
 }
 
-export default function YoutubeLabel({ kind, title }: YoutubeLabelProps) {
+export default function YoutubeLabel({ kind, title, showIcon = true }: YoutubeLabelProps) {
   const full = youtubeLabelText(kind, title)
   const short = trimYoutubeTitle(full)
   return (
     <span className="youtube-label" title={full}>
-      <YoutubeIcon />
+      {showIcon && <YoutubeIcon />}
       {short === full ? (
         <span>{full}</span>
       ) : (

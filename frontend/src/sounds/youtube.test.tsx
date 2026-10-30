@@ -470,7 +470,7 @@ describe('titles (#326)', () => {
     const linkStore = new MemoryYoutubeLinkStore()
     linkStore.save(URL)
     setup({ linkStore, links: [{ url: URL, title: 'Saved title' }] })
-    await waitFor(() => expect(screen.getAllByTitle('Saved title')).toHaveLength(2)) // now playing + recent
+    await waitFor(() => expect(screen.getAllByTitle('Saved title')).toHaveLength(1)) // now playing only: not again in the recent list (#359)
   })
 
   it('keeps the fallback when the player cannot say or throws', async () => {
@@ -528,9 +528,9 @@ describe('recent links (AC8.6)', () => {
       ],
     })
     const titled = await screen.findByRole('button', { name: 'Rain on a tin roof' })
-    expect(titled.querySelector('svg[aria-hidden="true"]')).not.toBeNull()
-    const plain = screen.getByRole('button', { name: 'YouTube video' })
-    expect(plain.querySelector('svg[aria-hidden="true"]')).not.toBeNull()
+    // The audio card shows the YouTube mark once, in its header, not on each link (#359).
+    expect(titled.querySelector('svg')).toBeNull()
+    screen.getByRole('button', { name: 'YouTube video' })
     expect(document.body.textContent).not.toContain(ID)
     expect(document.body.textContent).not.toContain(ID2)
   })
@@ -565,7 +565,7 @@ describe('a slow first fetch', () => {
     let finish: (links: RecentLink[]) => void = () => undefined
     const t = setup({ list: () => new Promise<RecentLink[]>((resolve) => (finish = resolve)) })
     await paste(`https://youtu.be/${ID}`)
-    await screen.findByRole('button', { name: 'YouTube video' })
+    await waitFor(() => expect(t.api.use).toHaveBeenCalled())
     await act(async () => finish([{ url: `https://youtu.be/${ID2}`, title: 'Late list' }]))
     expect(screen.queryByRole('button', { name: 'Late list' })).not.toBeInTheDocument()
     expect(t.api.use).toHaveBeenCalled()
