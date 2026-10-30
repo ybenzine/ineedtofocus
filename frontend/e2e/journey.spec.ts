@@ -140,8 +140,8 @@ test('YouTube is chosen on New session: Start waits for a link, a recent link is
   await expect(start).toBeDisabled()
   await expect(page.getByText(/Paste a YouTube link/)).toBeVisible()
 
-  await page.getByLabel('YouTube link').fill('https://example.com/nope')
-  await page.getByLabel('YouTube link').blur()
+  await page.getByRole('textbox', { name: 'YouTube link' }).fill('https://example.com/nope')
+  await page.getByRole('textbox', { name: 'YouTube link' }).blur()
   await expect(page.getByText(/doesn't look like a YouTube link/)).toBeVisible()
   await expect(start).toBeDisabled()
 
@@ -159,6 +159,7 @@ test('YouTube is chosen on New session: Start waits for a link, a recent link is
   // A reload restores the session with the same link (AC6.4).
   await page.reload()
   await expect(page.getByRole('timer', { name: 'Time' })).toBeVisible()
+  await expect(page.getByRole('textbox', { name: 'Another YouTube link' })).toBeVisible()
   expect(await page.evaluate(() => localStorage.getItem('ineedtofocus.youtubeLink'))).toBe(
     'https://youtu.be/aqz-KE-bpKQ',
   )

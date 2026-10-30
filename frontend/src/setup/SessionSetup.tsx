@@ -354,7 +354,7 @@ export default function SessionSetup({
           ))}
         </div>
         {audio === 'rain' && onAppleMobile() && <p className="field-hint">{SETUP_SILENT_HINT}</p>}
-        {audio === 'youtube' && (
+        {audio === 'youtube' && online && (
           <YoutubeSetup
             text={youtubeText}
             onTextChange={setYoutubeText}
@@ -363,7 +363,9 @@ export default function SessionSetup({
           />
         )}
         {audio === 'youtube' && !online && (
-          <OfflineRainSuggestion onUseRain={() => setAudio('rain')} />
+          <div id={hintId}>
+            <OfflineRainSuggestion onUseRain={() => setAudio('rain')} />
+          </div>
         )}
       </fieldset>
 

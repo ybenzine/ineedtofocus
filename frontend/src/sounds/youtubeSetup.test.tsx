@@ -110,21 +110,38 @@ describe('SessionSetup with YouTube', () => {
     expect(onStart.mock.calls[0]?.[0].youtubeLink).toBe('https://youtu.be/dQw4w9WgXcQ')
   })
 
-  it('offline: suggests Rain and still gates Start on a link', () => {
+  it('offline: shows only the Rain suggestion, and Start stays gated and described', () => {
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
     setup()
     pickYoutube()
     expect(screen.getByRole('button', { name: 'Use Rain instead' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('YouTube link')).not.toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: 'Recent YouTube links' })).not.toBeInTheDocument()
     expect(start()).toBeDisabled()
+    expect(start()).toHaveAccessibleDescription(/You are offline/)
     fireEvent.click(screen.getByRole('button', { name: 'Use Rain instead' }))
     expect(screen.getByRole('radio', { name: 'Rain' })).toBeChecked()
     expect(start()).toBeEnabled()
   })
 
+  it('hides the YouTube field again after switching to None or Rain', () => {
+    setup()
+    for (const other of ['None', 'Rain']) {
+      pickYoutube()
+      expect(screen.getByLabelText('YouTube link')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('radio', { name: other }))
+      expect(screen.queryByLabelText('YouTube link')).not.toBeInTheDocument()
+    }
+  })
+
   it('marks the form dirty once a link is typed', () => {
     setup()
     pickYoutube()
+    typeLink(URL1)
     expect(document.querySelector('form')).toHaveAttribute('data-holds-update')
+    typeLink('')
+    fireEvent.click(screen.getByRole('radio', { name: 'None' }))
+    expect(document.querySelector('form')).not.toHaveAttribute('data-holds-update')
   })
 })
 
