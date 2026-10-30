@@ -62,6 +62,9 @@ profile oncall-bwrap /usr/bin/bwrap flags=(unconfined) {
 }
 EOF
       sudo apparmor_parser --replace "$PROFILE"
+      echo "loaded the AppArmor profile $PROFILE: userns for /usr/bin/bwrap only"
+    else
+      echo "no AppArmor profile needed: bwrap starts a sandbox as it is"
     fi
     check
     ;;
