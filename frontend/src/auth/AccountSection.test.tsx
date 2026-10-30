@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SETTINGS_KEY } from '../settings/store.ts'
 import { LocalActiveSessionStore, TimerController } from '../timer/index.ts'
@@ -151,6 +151,23 @@ describe('Account section: delete (AC1.7, AC7, AC8)', () => {
     expect(submit).toBeDisabled()
     fireEvent.change(field, { target: { value: 'x' } })
     expect(submit).toBeEnabled()
+  })
+
+  it.each([
+    [0, 'your settings'],
+    [1, 'your 1 session (archived ones included), your settings'],
+    [12, 'your 12 sessions (archived ones included), your settings'],
+    [null, 'your sessions (archived ones included), your settings'],
+  ])('words the confirmation for a count of %s', async (count, middle) => {
+    await renderSection(makeAccountApi({ sessionCount: vi.fn().mockResolvedValue(count) }))
+    const dialog = openConfirm()
+    await waitFor(() =>
+      expect(within(dialog).getByRole('button', { name: 'Cancel' })).toHaveFocus(),
+    )
+    await act(async () => undefined)
+    expect(within(dialog).getByText(/permanently deletes/).textContent).toBe(
+      `This permanently deletes your account, ${middle} and recent YouTube links, on every device. This can't be undone.`,
+    )
   })
 
   it('Cancel and Escape close it and return focus to Delete account', async () => {

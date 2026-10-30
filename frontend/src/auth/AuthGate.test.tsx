@@ -800,3 +800,60 @@ describe('local data belongs to one user', () => {
     void stuck
   })
 })
+
+describe('landing screen after sign-in (#357)', () => {
+  function Where() {
+    const account = useAccount()
+    return (
+      <>
+        <p>path {window.location.pathname}</p>
+        <button type="button" onClick={() => void account?.accountDeleted()}>
+          simulate deletion
+        </button>
+        <button type="button" onClick={() => void account?.signOut()}>
+          simulate sign out
+        </button>
+      </>
+    )
+  }
+
+  afterEach(() => window.history.replaceState(null, '', '/'))
+
+  function renderAt(path: string, api: AuthApi) {
+    window.history.replaceState(null, '', path)
+    return render(
+      <AuthGate api={api}>
+        <Where />
+      </AuthGate>,
+    )
+  }
+
+  async function submitAs(name: 'Sign in' | 'Create account') {
+    await screen.findByRole('heading', { name: 'Sign in' })
+    if (name === 'Create account') {
+      fireEvent.click(screen.getByRole('button', { name: 'Create an account' }))
+    }
+    fill('a@b.co', 'longenough1')
+    fireEvent.click(screen.getByRole('button', { name }))
+  }
+
+  it('a sign-up opens New session even when the URL names another screen', async () => {
+    renderAt('/settings', makeApi())
+    await submitAs('Create account')
+    expect(await screen.findByText('path /')).toBeInTheDocument()
+  })
+
+  it('the next sign-in after a confirmed deletion opens New session', async () => {
+    renderAt('/settings', makeApi({ me: vi.fn().mockResolvedValue(user) }))
+    fireEvent.click(await screen.findByText('simulate deletion'))
+    await submitAs('Sign in')
+    expect(await screen.findByText('path /')).toBeInTheDocument()
+  })
+
+  it('sign-out then sign-in to the same account keeps the screen', async () => {
+    renderAt('/settings', makeApi({ me: vi.fn().mockResolvedValue(user) }))
+    fireEvent.click(await screen.findByText('simulate sign out'))
+    await submitAs('Sign in')
+    expect(await screen.findByText('path /settings')).toBeInTheDocument()
+  })
+})

@@ -370,8 +370,17 @@ def test_an_unexpected_failure_in_a_history_load_is_counted_once(
     assert _value("focus.history.loads", outcome="error") == errors + 1
 
 
-def test_duration_histograms_use_second_buckets() -> None:
+def test_duration_histograms_use_second_buckets(
+    traced: tuple[TestClient, InMemorySpanExporter],
+) -> None:
     from app.metrics import BATCH_SIZE_BUCKETS, LATENCY_BUCKETS_S
+
+    # Record its own points so it passes alone; `traced` skips it without Postgres.
+    c, _ = traced
+    _signed_in(c)
+    assert c.post("/api/sessions", json=make_session()).status_code == 201
+    assert c.get("/api/history?view=all&tz=UTC").status_code == 200
+    assert c.post("/api/sessions/sync", json={"sessions": [make_session()]}).status_code == 200
 
     assert 2 in LATENCY_BUCKETS_S  # the history alert threshold is a bucket edge
     assert max(LATENCY_BUCKETS_S) <= 10 and min(LATENCY_BUCKETS_S) < 0.01

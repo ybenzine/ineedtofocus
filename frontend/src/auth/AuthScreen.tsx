@@ -5,7 +5,7 @@ type Mode = 'signin' | 'signup'
 
 interface Props {
   api: AuthApi
-  onSignedIn: (user: User) => void
+  onSignedIn: (user: User, signedUp: boolean) => void
   /** Shown above the form, e.g. after an offline sign-out. */
   notice?: string
   /** Runs before each sign-in or sign-up request; a returned message stops the request. */
@@ -72,7 +72,7 @@ export default function AuthScreen({
         mode === 'signup'
           ? await api.signUp(trimmed, password)
           : await api.signIn(trimmed, password)
-      onSignedIn(user)
+      onSignedIn(user, mode === 'signup')
     } catch (error) {
       if (error instanceof AuthError) {
         if (error.kind === 'duplicate') {
