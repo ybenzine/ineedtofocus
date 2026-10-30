@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Set up the I Need To Focus Droplet (Ubuntu 24.04): Docker Engine + Compose plugin,
-# unattended security upgrades, hardened SSH, the `deploy` user for CI and the
-# /opt/focus layout. Issue #25; documented in _docs/deployment.md → Server setup.
+# unattended security upgrades, hardened SSH, the `deploy` user for CI, the /opt/focus
+# layout and the build provenance verifier focus-ci runs (#177). Issue #25; documented
+# in _docs/deployment.md → Server setup.
 #
 # Run it as root on the server. Root SSH login is disabled, so Yacine copies it over
 # and runs it with sudo:
@@ -30,6 +31,24 @@ DOCKER_GPG_URL=https://download.docker.com/linux/ubuntu/gpg
 DOCKER_GPG_FINGERPRINT=9DC858229FC7DD38854AE2D88D81803C0EBFCD88
 DOCKER_KEYRING=/etc/apt/keyrings/docker.asc
 BASE_PACKAGES=(ca-certificates curl gnupg openssh-server unattended-upgrades)
+# Build provenance (#177): cosign, which focus-ci's deploy runs on every digest, and the
+# Sigstore trusted root it checks attestations against (the public-good instance's
+# Fulcio certificates and Rekor and CT log keys). Both pinned by sha256, root-owned in
+# SIGSTORE_DIR. To bump either, change the pins here in a PR (_docs/deployment.md →
+# Build provenance, Upkeep) and re-run this script.
+SIGSTORE_DIR=$FOCUS_ROOT/sigstore
+COSIGN_VERSION=v3.1.4
+COSIGN_URL=https://github.com/sigstore/cosign/releases/download/$COSIGN_VERSION/cosign-linux
+# From cosign_checksums.txt of that release; the key is `dpkg --print-architecture`
+# (the Droplet is amd64; arm64 is for `make test-server` on Apple silicon).
+declare -A COSIGN_SHA256=(
+  [amd64]=424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa
+  [arm64]=ade83b7aac62e131cacfe96d958948b2150cc9efec46a570a2649b8e27dedad2
+)
+# trusted_root.json from Sigstore's TUF repository, by its sha256 in targets.json
+# (version 14, read on 2026-10-30): the same file cosign's own TUF client fetches.
+TRUSTED_ROOT_SHA256=6494e21ea73fa7ee769f85f57d5a3e6a08725eae1e38c755fc3517c9e6bc0b66
+TRUSTED_ROOT_URL=https://tuf-repo-cdn.sigstore.dev/targets/$TRUSTED_ROOT_SHA256.trusted_root.json
 DOCKER_PACKAGES=(docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin)
 
 log() { printf '==> %s\n' "$*"; }
@@ -407,11 +426,70 @@ create_layout() {
   done
 }
 
+# install_pinned <url> <sha256> <path> <mode> <what>: <path>, root-owned with <mode>, holds
+# exactly the file with that sha256. Downloads it only when it doesn't, and installs
+# nothing unless the download has that sha256. Returns 0 if it installed, 1 if unchanged;
+# any failure stops the script (die).
+install_pinned() {
+  local url=$1 want=$2 path=$3 mode=$4 what=$5 tmp have=""
+  if [[ -e $path && ! -f $path ]]; then
+    die "installing $path: it exists but isn't a regular file"
+  fi
+  if [[ -f $path ]]; then
+    have=$(sha256sum "$path") || die "installing $path: can't read its sha256"
+    have=${have%% *}
+  fi
+  if [[ $have == "$want" ]]; then
+    chmod "$mode" "$path" || die "installing $path: chmod $mode failed"
+    chown root:root "$path" || die "installing $path: chown root:root failed"
+    return 1
+  fi
+  tmp=$(mktemp) || die "installing $path: can't create a temporary file"
+  if ! curl -fsSL --retry 3 -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    die "installing $path: downloading $what from $url failed"
+  fi
+  have=$(sha256sum "$tmp") || die "installing $path: can't read the download's sha256"
+  have=${have%% *}
+  if [[ $have != "$want" ]]; then
+    rm -f "$tmp"
+    die "installing $path: $what from $url has sha256 $have, not the pinned $want. Nothing installed"
+  fi
+  # Next to the target, then renamed over it: a deploy never runs a half-written file.
+  if ! install -m "$mode" -o root -g root "$tmp" "$path.new"; then
+    rm -f "$tmp" "$path.new"
+    die "installing $path: install failed (mode $mode, owner root:root)"
+  fi
+  rm -f "$tmp"
+  mv -f "$path.new" "$path" || die "installing $path: can't move $path.new into place"
+  log "installed $what as $path (sha256 $want)"
+  return 0
+}
+
+# install_verifier (#177): cosign and the trusted root, pinned, in SIGSTORE_DIR (root, 755).
+install_verifier() {
+  local arch rc
+  arch=$(dpkg --print-architecture) || die "can't read the architecture (dpkg --print-architecture)"
+  [[ -n ${COSIGN_SHA256[$arch]-} ]] || die "no cosign is pinned for $arch (COSIGN_SHA256 in this script)"
+  install -d -m 0755 -o root -g root "$SIGSTORE_DIR" || die "creating $SIGSTORE_DIR failed"
+  chown root:root "$SIGSTORE_DIR" || die "chown root:root $SIGSTORE_DIR failed"
+  chmod 0755 "$SIGSTORE_DIR" || die "chmod 0755 $SIGSTORE_DIR failed"
+  rc=0
+  install_pinned "$COSIGN_URL-$arch" "${COSIGN_SHA256[$arch]}" "$SIGSTORE_DIR/cosign" 0755 \
+    "cosign $COSIGN_VERSION ($arch)" || rc=$?
+  ((rc <= 1)) || die "installing cosign failed (status $rc)"
+  rc=0
+  install_pinned "$TRUSTED_ROOT_URL" "$TRUSTED_ROOT_SHA256" "$SIGSTORE_DIR/trusted_root.json" 0644 \
+    "Sigstore's trusted root" || rc=$?
+  ((rc <= 1)) || die "installing the trusted root failed (status $rc)"
+}
+
 summary() {
   log "done. State:"
   printf '  %-22s %s\n' "deploy user:" "$(id "$DEPLOY_USER")"
   printf '  %-22s %s\n' "docker:" "$(docker --version)"
   printf '  %-22s %s\n' "compose:" "$(docker compose version)"
+  printf '  %-22s %s\n' "cosign (#177):" "$("$SIGSTORE_DIR/cosign" version 2>/dev/null | sed -n 's/^GitVersion: *//p')"
   printf '  %-22s %s\n' "sshd:" "$(sshd -T 2>/dev/null | grep -E '^(permitrootlogin|passwordauthentication) ' | tr '\n' ' ')"
   if have_systemd; then
     printf '  %-22s %s\n' "unattended-upgrades:" "$(systemctl is-active unattended-upgrades.service || true)"
@@ -432,6 +510,7 @@ main() {
   create_deploy_user
   harden_ssh
   create_layout
+  install_verifier
   summary
 }
 

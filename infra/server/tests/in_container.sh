@@ -2,7 +2,8 @@
 # Runs inside a throwaway ubuntu:24.04 container (started by run.sh): sets up what the
 # Droplet had before bootstrap.sh (Yacine's sudo user, /opt/focus/*/.env, a cloud-init
 # sshd drop-in enabling passwords), runs bootstrap.sh several times and checks the result,
-# then checks that a failing write stops it (#80).
+# including the pinned build provenance verifier (#177), then checks that a failing write
+# stops it (#80).
 set -euo pipefail
 
 BOOTSTRAP=/src/server/bootstrap.sh
@@ -87,6 +88,25 @@ for env in prod dev; do
   check "/opt/focus/$env/.env content untouched" eq "$(cat "/opt/focus/$env/.env")" "POSTGRES_PASSWORD=$env-test-value"
 done
 
+echo "--- Build provenance verifier (#177)"
+arch=$(dpkg --print-architecture)
+pinned_cosign=$(sed -n "s/^  \[$arch\]=\([0-9a-f]\{64\}\)$/\1/p" "$BOOTSTRAP")
+pinned_root=$(sed -n 's/^TRUSTED_ROOT_SHA256=\([0-9a-f]\{64\}\)$/\1/p' "$BOOTSTRAP")
+sha_of() { sha256sum "$1" | cut -d' ' -f1; }
+check "sanity: bootstrap.sh pins cosign for $arch" [ "${#pinned_cosign}" -eq 64 ]
+check "sanity: and the trusted root" [ "${#pinned_root}" -eq 64 ]
+check "/opt/focus/sigstore is root 755" eq "$(mode_owner /opt/focus/sigstore)" "755 root:root"
+check "cosign is root 755" eq "$(mode_owner /opt/focus/sigstore/cosign)" "755 root:root"
+check "cosign is the pinned build" eq "$(sha_of /opt/focus/sigstore/cosign)" "$pinned_cosign"
+check "cosign runs, and is v3.1.4" contains "$(/opt/focus/sigstore/cosign version 2>&1)" "v3.1.4"
+check "the trusted root is root 644" eq "$(mode_owner /opt/focus/sigstore/trusted_root.json)" "644 root:root"
+check "the trusted root is the pinned file" eq "$(sha_of /opt/focus/sigstore/trusted_root.json)" "$pinned_root"
+check "it's Sigstore's public-good trusted root" contains "$(cat /opt/focus/sigstore/trusted_root.json)" "https://fulcio.sigstore.dev"
+check "the summary shows cosign's version" contains "$(cat /tmp/run1.log)" "cosign (#177):"
+check "deploy user can't modify cosign" su -s /bin/bash deploy -c "! (echo x >> /opt/focus/sigstore/cosign) 2>/dev/null"
+check "deploy user can't modify the trusted root" su -s /bin/bash deploy -c "! (echo x >> /opt/focus/sigstore/trusted_root.json) 2>/dev/null"
+check "deploy user can't create files in /opt/focus/sigstore" su -s /bin/bash deploy -c "! touch /opt/focus/sigstore/new 2>/dev/null"
+
 echo "--- Real SSH logins against the hardened sshd"
 ssh_opts=(-p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5)
 mkdir -p /tmp/keys
@@ -127,10 +147,11 @@ managed=(
   /etc/apt/apt.conf.d/20auto-upgrades /etc/apt/apt.conf.d/52focus-unattended-upgrades
   /etc/ssh/sshd_config.d/00-focus-hardening.conf /etc/ssh/authorized_keys/deploy
   /opt/focus/prod/.env /opt/focus/dev/.env
+  /opt/focus/sigstore/cosign /opt/focus/sigstore/trusted_root.json
 )
 snapshot() {
   sha256sum "${managed[@]}"
-  stat -c '%n %a %U:%G' "${managed[@]}" /opt/focus /opt/focus/bin /opt/focus/prod /opt/focus/dev
+  stat -c '%n %a %U:%G' "${managed[@]}" /opt/focus /opt/focus/bin /opt/focus/prod /opt/focus/dev /opt/focus/sigstore
   getent passwd deploy
   id deploy
 }
@@ -144,6 +165,35 @@ check "second run doesn't touch sshd" not_contains "$log2" "reloaded sshd"
 check "second run prints no warning" not_contains "$log2" "WARNING"
 check "files, permissions and user unchanged" eq "$(snapshot)" "$before"
 check "CI keys kept" eq "$(grep -c ' test-ci' /etc/ssh/authorized_keys/deploy)" 2
+check "second run downloads nothing (#177)" not_contains "$log2" "==> installed"
+
+echo "--- The verifier is put back to the pin, and never replaced by other bytes (#177)"
+echo tampered >/opt/focus/sigstore/cosign
+chmod 0666 /opt/focus/sigstore/trusted_root.json
+check "a run with a changed cosign succeeds" run_bootstrap /tmp/run-verifier1.log
+logv=$(cat /tmp/run-verifier1.log)
+check "it installs the pinned cosign again" contains "$logv" "==> installed cosign v3.1.4 ($arch) as /opt/focus/sigstore/cosign"
+check "cosign is the pinned build again" eq "$(sha_of /opt/focus/sigstore/cosign)" "$pinned_cosign"
+check "cosign is root 755 again" eq "$(mode_owner /opt/focus/sigstore/cosign)" "755 root:root"
+check "the trusted root's mode is put back" eq "$(mode_owner /opt/focus/sigstore/trusted_root.json)" "644 root:root"
+check "the unchanged trusted root isn't downloaded again" not_contains "$logv" "trusted root as"
+# A download that isn't the pinned file: a curl in front of the real one writes other bytes.
+install -d /tmp/fake-curl
+# shellcheck disable=SC2016 # the fake curl's own script, not expanded here
+printf '%s\n' '#!/bin/bash' \
+  'while (($#)); do if [[ $1 == -o ]]; then echo "not the pinned file" >"$2"; exit 0; fi; shift; done' \
+  'exit 1' >/tmp/fake-curl/curl
+chmod 0755 /tmp/fake-curl/curl
+rm /opt/focus/sigstore/trusted_root.json
+rc=0
+PATH=/tmp/fake-curl:$PATH run_bootstrap /tmp/run-verifier2.log || rc=$?
+logv=$(cat /tmp/run-verifier2.log)
+check "a download with another sha256 stops bootstrap.sh (status 2)" eq "$rc" 2
+check "it says the sha256 isn't the pinned one" contains "$logv" "not the pinned $pinned_root. Nothing installed"
+check "nothing is installed in its place" [ ! -e /opt/focus/sigstore/trusted_root.json ]
+check "and nothing is left next to it" [ ! -e /opt/focus/sigstore/trusted_root.json.new ]
+check "the next run installs the pinned trusted root" run_bootstrap /tmp/run-verifier3.log
+check "the trusted root is the pinned file again" eq "$(sha_of /opt/focus/sigstore/trusted_root.json)" "$pinned_root"
 
 echo "--- Deploy keys missing restrict or command=… are flagged, in either option order"
 keys=/etc/ssh/authorized_keys/deploy

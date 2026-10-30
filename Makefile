@@ -29,7 +29,7 @@ SCRIPTS_RUN := $(UV) run --with-requirements ../scripts/reviewer_token.py
 # create_backlog.py seeded the board once (2026-10-20) and is kept only as a record; not linted.
 SCRIPTS_LINT_EXCLUDE := create_backlog.py
 # Python under infra/ (the smoke test's fake OTLP gateway, the deploy's migration_info.py), linted like scripts/.
-INFRA_PY := ../infra/tests ../infra/app
+INFRA_PY := ../infra/tests ../infra/app ../infra/server/tests
 # ShellCheck, pinned, run through uv (shellcheck-py ships the official binary).
 SHELLCHECK := uvx --from shellcheck-py==0.11.0.1 shellcheck
 # actionlint, pinned, through uv (actionlint-py ships the official binary). The pinned
@@ -100,7 +100,7 @@ test-frontend: frontend/node_modules ## Frontend unit tests (Vitest)
 test-scripts: backend/.venv ## Repo script tests (scripts/tests, pytest; e.g. the reviewer App, #70)
 	$(SCRIPTS_RUN) pytest -p no:cacheprovider ../scripts/tests $(call pytest_junit,scripts)
 
-test-server: ## Server bootstrap (#25), installer and deploy forced command (#28-#30) in an Ubuntu 24.04 container (needs Docker)
+test-server: ## Server bootstrap (#25), installer and deploy forced command (#28-#30, build provenance #177) in an Ubuntu 24.04 container (needs Docker)
 	infra/server/tests/run.sh
 
 test-infra: ## Validate the production Compose, Caddy and Collector configs against the deploy rules (#27; needs Docker)
@@ -151,7 +151,7 @@ lint-backend: backend/.venv ## ruff check, ruff format --check, mypy
 lint-frontend: frontend/node_modules ## eslint, prettier --check, tsc
 	$(NPM) run lint
 
-lint-scripts: backend/.venv ## ruff check, ruff format --check, mypy (strict) on scripts/*.py, infra/tests/*.py and infra/app/*.py
+lint-scripts: backend/.venv ## ruff check, ruff format --check, mypy (strict) on scripts/*.py, infra/tests/*.py, infra/app/*.py and infra/server/tests/*.py
 	$(SCRIPTS_RUN) ruff check --config pyproject.toml --extend-exclude $(SCRIPTS_LINT_EXCLUDE) ../scripts $(INFRA_PY)
 	$(SCRIPTS_RUN) ruff format --config pyproject.toml --extend-exclude $(SCRIPTS_LINT_EXCLUDE) --check ../scripts $(INFRA_PY)
 	$(SCRIPTS_RUN) mypy --config-file pyproject.toml --exclude '$(SCRIPTS_LINT_EXCLUDE)$$' ../scripts $(INFRA_PY)

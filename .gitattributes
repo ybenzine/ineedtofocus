@@ -1,0 +1,2 @@
+# Recorded registry objects, addressed by their sha256 (#177): never converted.
+infra/server/tests/provenance/*/*.json -text
