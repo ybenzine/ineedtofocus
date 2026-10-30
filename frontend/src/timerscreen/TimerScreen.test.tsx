@@ -78,7 +78,7 @@ describe('TimerScreen (AC9.1)', () => {
     expect(screen.getByRole('timer')).toHaveTextContent('25:00')
     expect(screen.getByText('Countdown')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Focus' })).toBeInTheDocument()
-    expect(screen.getByText('study')).toBeInTheDocument()
+    expect(screen.getByText('Study')).toBeInTheDocument()
     expect(screen.getByText('Write the report')).toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Background audio' })).toHaveTextContent('Rain')
     await advance(61_000)

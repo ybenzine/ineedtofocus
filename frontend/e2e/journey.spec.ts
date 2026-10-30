@@ -22,7 +22,7 @@ test('sign up, run a 1-minute countdown on a fake clock, see it in History with 
 
   await finishCountdown(page, { minutes: 1, tag: 'study', goal: 'Read chapter one' })
   await expect(page.locator('.summary-details')).toContainText('1 min')
-  await expect(page.locator('.summary-details')).toContainText('study')
+  await expect(page.locator('.summary-details')).toContainText('Study')
 
   await page.getByRole('link', { name: 'View history' }).click()
   await expect(page.getByRole('heading', { name: 'History' })).toBeVisible()
@@ -30,7 +30,7 @@ test('sign up, run a 1-minute countdown on a fake clock, see it in History with 
   const row = page.locator('.history-row')
   await expect(row).toHaveCount(1)
   await expect(row).toContainText('Countdown')
-  await expect(row).toContainText('study')
+  await expect(row).toContainText('Study')
   await expect(row).toContainText('Read chapter one')
   await expect(row).toContainText('Completed')
 

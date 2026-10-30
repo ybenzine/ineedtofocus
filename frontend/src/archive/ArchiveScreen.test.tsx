@@ -127,6 +127,14 @@ describe('ArchiveScreen', () => {
     await waitFor(async () => expect(await store.get(record.id)).toBeUndefined())
   })
 
+  it('shows the tag by its label, not the lowercase key', async () => {
+    await archived('Tagged goal')
+    renderScreen()
+    await screen.findByText('Tagged goal')
+    const tag = document.querySelector('.timer-tag')
+    expect(tag).toHaveTextContent(/^[A-Z][a-z]+$/)
+  })
+
   it('#133 loading marks a session archived on another device as archived on the device', async () => {
     const record = makeRecord({ goal: 'Elsewhere' })
     await new HttpSessionsApi({ fetch: server.fetch }).sync([record])

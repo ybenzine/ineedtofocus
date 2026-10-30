@@ -2,7 +2,7 @@
 // pause / resume / stop / skip-break controls. The controller owns the timer; this only shows it.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import type { AudioSource } from '../setup/options.ts'
+import { tagLabel, type AudioSource } from '../setup/options.ts'
 import {
   ACTIVE_SESSION_KEY,
   type TimerController,
@@ -234,7 +234,7 @@ export default function TimerScreen({
       </div>
 
       <p className="timer-meta">
-        <span className="timer-tag">{snapshot.tag}</span>
+        <span className="timer-tag">{tagLabel(snapshot.tag)}</span>
         {snapshot.goal && <span className="timer-goal">{snapshot.goal}</span>}
       </p>
 
