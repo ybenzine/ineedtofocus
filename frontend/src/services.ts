@@ -1,5 +1,6 @@
 // Wires the app's device stores, the sessions API and the timer together.
 
+import { AnonymousActiveSessionStore, type HeldSession } from './anonymous/held.ts'
 import { notifySessionExpired, signedInUserId, type LocalDataHook } from './auth/localData.ts'
 import {
   HttpSessionsApi,
@@ -73,6 +74,18 @@ export function sessionDataHook({
     },
     quarantine: (previousOwnerId) => quarantinePendingRecord(active, sessions, previousOwnerId),
   }
+}
+
+/**
+ * The timer for use without an account (#331): its own storage slot, and a finished session is
+ * claimed by `held` (memory only) instead of going to the session store or the sync queue.
+ */
+export function createAnonymousServices(held: HeldSession): AppServices {
+  const controller = new TimerController({
+    store: new AnonymousActiveSessionStore(held),
+    saveRecord: (record) => held.claim(record),
+  })
+  return { controller, sync: null, sessions: null, hook: null }
 }
 
 export function createAppServices(currentOwner: () => string | null = signedInUserId): AppServices {

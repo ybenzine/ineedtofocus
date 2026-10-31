@@ -6,6 +6,7 @@ import { tagLabel } from '../setup/options.ts'
 import { formatDuration } from './format.ts'
 
 import { HISTORY_PATH } from '../nav/screens.ts'
+import { AuthLink } from '../anonymous/AuthLink.tsx'
 
 export { HISTORY_PATH }
 
@@ -13,6 +14,13 @@ export interface SessionSummaryProps {
   outcome: FinishOutcome
   /** True if the record couldn't be saved yet; it stays on the device and is retried. */
   recordPending?: boolean
+  /**
+   * The session is held for an anonymous user (#331): the prompt to save it replaces the link to
+   * History, which an anonymous user has no data in.
+   */
+  savePrompt?: boolean
+  /** The session was just saved into the account from the prompt (#331). */
+  inAccount?: boolean
   onNewSession: () => void
   /** Switches to the History screen; without it the link is a plain `/history` link. */
   onViewHistory?: () => void
@@ -21,6 +29,8 @@ export interface SessionSummaryProps {
 export default function SessionSummary({
   outcome,
   recordPending,
+  savePrompt = false,
+  inAccount = false,
   onNewSession,
   onViewHistory,
 }: SessionSummaryProps) {
@@ -66,6 +76,23 @@ export default function SessionSummary({
               Not saved yet. It is kept on this device and will be saved automatically.
             </p>
           )}
+          {inAccount && !recordPending && (
+            <p role="status" className="field-hint">
+              This session is now in your account.
+            </p>
+          )}
+          {savePrompt && (
+            <p className="summary-prompt">
+              <AuthLink form="signup" origin="prompt">
+                Create an account
+              </AuthLink>{' '}
+              or{' '}
+              <AuthLink form="signin" origin="prompt">
+                log in
+              </AuthLink>{' '}
+              to save this session
+            </p>
+          )}
         </>
       ) : (
         <>
@@ -79,25 +106,27 @@ export default function SessionSummary({
         <button type="button" className="primary" onClick={onNewSession}>
           New session
         </button>
-        <a
-          className="secondary link-button"
-          href={HISTORY_PATH}
-          onClick={(event) => {
-            if (
-              !onViewHistory ||
-              event.button !== 0 ||
-              event.metaKey ||
-              event.ctrlKey ||
-              event.shiftKey ||
-              event.altKey
-            )
-              return
-            event.preventDefault()
-            onViewHistory()
-          }}
-        >
-          View history
-        </a>
+        {!savePrompt && (
+          <a
+            className="secondary link-button"
+            href={HISTORY_PATH}
+            onClick={(event) => {
+              if (
+                !onViewHistory ||
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+              )
+                return
+              event.preventDefault()
+              onViewHistory()
+            }}
+          >
+            View history
+          </a>
+        )}
       </div>
     </section>
   )

@@ -91,6 +91,19 @@ function remove(key: string): void {
   }
 }
 
+/** True if the device holds an account's data (an owner is recorded), signed in or not. */
+export function hasOwner(): boolean {
+  return read(OWNER_KEY) !== null
+}
+
+/**
+ * True if the stored-session slot holds a session (running, paused or finished and not handed
+ * over): an account's, since anonymous sessions have their own slot (#331).
+ */
+export function accountSlotHasSession(): boolean {
+  return parseStoredTimer(read(ACTIVE_SESSION_KEY)) !== null
+}
+
 export const ACTIVE_TIMER_MESSAGE = 'End your session before signing out.'
 
 /** The confirmation's wording (ruling on #9, AC on #19). */

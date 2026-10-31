@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useEffect } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SETTINGS_KEY } from '../settings/store.ts'
 import { LocalActiveSessionStore, TimerController } from '../timer/index.ts'
 import { ACTIVE_SESSION_KEY } from '../timer/store.ts'
@@ -110,6 +110,7 @@ function seedUserData() {
 }
 
 afterEach(() => {
+  window.history.replaceState(null, '', '/')
   localStorage.clear()
   sessionStorage.clear()
   vi.unstubAllGlobals()
@@ -117,6 +118,10 @@ afterEach(() => {
 })
 
 describe('AuthGate', () => {
+  // A device with no account data opens on New session (#331); these tests are about the forms,
+  // which `/login` opens.
+  beforeEach(() => window.history.replaceState(null, '', '/login'))
+
   it('sends a signed-out user to sign in', async () => {
     renderGate(makeApi())
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
@@ -272,6 +277,7 @@ describe('AuthGate', () => {
     await screen.findByText('the timer app')
     first.unmount()
     localStorage.clear() // a different device has its own storage
+    window.history.replaceState(null, '', '/login')
 
     renderGate(api)
     await screen.findByRole('heading', { name: 'Sign in' })
@@ -838,6 +844,7 @@ describe('landing screen after sign-in (#357)', () => {
   }
 
   it('a sign-up opens New session even when the URL names another screen', async () => {
+    localStorage.setItem(OWNER_KEY, user.id)
     renderAt('/settings', makeApi())
     await submitAs('Create account')
     expect(await screen.findByText('path /')).toBeInTheDocument()
@@ -858,7 +865,7 @@ describe('landing screen after sign-in (#357)', () => {
     expect(window.location.pathname).toBe('/')
   })
 
-  it('after a reload following a deletion, the next sign-in opens New session', async () => {
+  it('after a reload following a deletion, the device opens New session, signed out', async () => {
     const first = renderAt('/settings', makeApi({ me: vi.fn().mockResolvedValue(user) }))
     fireEvent.click(await screen.findByText('simulate deletion'))
     await screen.findByText('Your account was deleted.')
@@ -868,8 +875,8 @@ describe('landing screen after sign-in (#357)', () => {
         <Where />
       </AuthGate>,
     )
-    await submitAs('Sign in')
     expect(await screen.findByText('path /')).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Sign in' })).not.toBeInTheDocument()
   })
 
   it('sign-out then sign-in to the same account keeps the screen', async () => {

@@ -14,14 +14,16 @@ export interface YoutubeLinkStore {
 
 export class LocalYoutubeLinkStore implements YoutubeLinkStore {
   readonly #storage: Storage
+  readonly #key: string
 
-  constructor(storage: Storage = window.localStorage) {
+  constructor(storage: Storage = window.localStorage, key: string = YOUTUBE_LINK_KEY) {
     this.#storage = storage
+    this.#key = key
   }
 
   load(): string | null {
     try {
-      return this.#storage.getItem(YOUTUBE_LINK_KEY)
+      return this.#storage.getItem(this.#key)
     } catch {
       return null
     }
@@ -29,7 +31,7 @@ export class LocalYoutubeLinkStore implements YoutubeLinkStore {
 
   save(url: string): void {
     try {
-      this.#storage.setItem(YOUTUBE_LINK_KEY, url)
+      this.#storage.setItem(this.#key, url)
     } catch {
       // The link is lost on reload; the session itself is unaffected.
     }
@@ -64,14 +66,22 @@ export interface AudioSourceStore {
 
 export class LocalAudioSourceStore implements AudioSourceStore {
   readonly #storage: Storage
+  readonly #key: string
+  readonly #linkKey: string
 
-  constructor(storage: Storage = window.localStorage) {
+  constructor(
+    storage: Storage = window.localStorage,
+    key: string = AUDIO_SOURCE_KEY,
+    linkKey: string = YOUTUBE_LINK_KEY,
+  ) {
     this.#storage = storage
+    this.#key = key
+    this.#linkKey = linkKey
   }
 
   load(): AudioSource {
     try {
-      const raw = this.#storage.getItem(AUDIO_SOURCE_KEY)
+      const raw = this.#storage.getItem(this.#key)
       return (AUDIO_SOURCES as readonly string[]).includes(raw ?? '')
         ? (raw as AudioSource)
         : 'none'
@@ -82,7 +92,7 @@ export class LocalAudioSourceStore implements AudioSourceStore {
 
   save(source: AudioSource): void {
     try {
-      this.#storage.setItem(AUDIO_SOURCE_KEY, source)
+      this.#storage.setItem(this.#key, source)
     } catch {
       // Without storage the choice is lost on reload; the session itself is unaffected.
     }
@@ -90,8 +100,8 @@ export class LocalAudioSourceStore implements AudioSourceStore {
 
   clear(): void {
     try {
-      this.#storage.removeItem(AUDIO_SOURCE_KEY)
-      this.#storage.removeItem(YOUTUBE_LINK_KEY)
+      this.#storage.removeItem(this.#key)
+      this.#storage.removeItem(this.#linkKey)
     } catch {
       // Nothing to clear.
     }

@@ -10,6 +10,8 @@ import type { ReminderSetting, ThemeSetting } from './api.ts'
 import { useSettingsState, useSettingsStore } from './SettingsContext.ts'
 import AccountSection from '../auth/AccountSection.tsx'
 import RangeInput from '../RangeInput.tsx'
+import { useAnonymous } from '../anonymous/AnonymousContext.ts'
+import { ANONYMOUS_SETTINGS_NOTE } from '../anonymous/AnonymousScreens.tsx'
 
 const THEME_CHOICES: { value: ThemeSetting; label: string }[] = [
   { value: 'system', label: 'System (default)' },
@@ -29,32 +31,37 @@ export default function SettingsScreen({
   const store = useSettingsStore()
   const { values, pending, stalled } = useSettingsState()
   const id = useId()
+  // Without an account: device-only settings, no Week start, no Account section (#331).
+  const anonymous = useAnonymous() !== null
   // Only when a send failed or the device is offline, not during every ordinary save.
-  const waiting = Object.keys(pending).length > 0 && (stalled || !navigator.onLine)
+  const waiting = !anonymous && Object.keys(pending).length > 0 && (stalled || !navigator.onLine)
   const canKeepAwake = wakeLockSupported()
 
   return (
     <div className="settings">
       <h1>Settings</h1>
+      {anonymous && <p className="field-hint">{ANONYMOUS_SETTINGS_NOTE}</p>}
 
-      <div className="field">
-        <label htmlFor={`${id}-week`}>Week starts on</label>
-        <select
-          id={`${id}-week`}
-          value={values.week_start_day}
-          aria-describedby={`${id}-week-hint`}
-          onChange={(event) => store.update({ week_start_day: Number(event.target.value) })}
-        >
-          {DAYS.map((day, index) => (
-            <option key={day} value={index}>
-              {day}
-            </option>
-          ))}
-        </select>
-        <p id={`${id}-week-hint`} className="field-hint">
-          Days and weeks follow this device&apos;s time zone.
-        </p>
-      </div>
+      {!anonymous && (
+        <div className="field">
+          <label htmlFor={`${id}-week`}>Week starts on</label>
+          <select
+            id={`${id}-week`}
+            value={values.week_start_day}
+            aria-describedby={`${id}-week-hint`}
+            onChange={(event) => store.update({ week_start_day: Number(event.target.value) })}
+          >
+            {DAYS.map((day, index) => (
+              <option key={day} value={index}>
+                {day}
+              </option>
+            ))}
+          </select>
+          <p id={`${id}-week-hint`} className="field-hint">
+            Days and weeks follow this device&apos;s time zone.
+          </p>
+        </div>
+      )}
 
       <SoundPreview player={player} volume={values.alert_volume} />
 
@@ -134,7 +141,7 @@ export default function SettingsScreen({
         {waiting ? "Saved on this device. It will sync when you're back online." : ''}
       </p>
 
-      <AccountSection controller={controller} />
+      {!anonymous && <AccountSection controller={controller} />}
     </div>
   )
 }

@@ -237,6 +237,29 @@ export class TimerController {
     this.#held = null
   }
 
+  /**
+   * Takes over a finished session that was started elsewhere (an anonymous session saved from
+   * the summary's prompt, #331) and hands it to `saveRecord` unchanged. Like `#finish`, it keeps
+   * the record on the device until it is handed over, and holds it in memory if the store
+   * refuses it; if this device already has another session in the store, that one is left alone.
+   */
+  async adopt(state: StoredTimer): Promise<TimerUpdate> {
+    const record = state.pendingRecord
+    if (record === null) throw new TimerError('There is no finished session to take over')
+    let stored = false
+    if (this.#session === null && this.#store.load() === null) {
+      try {
+        this.#store.save(state)
+        stored = true
+      } catch {
+        // Held in memory below.
+      }
+    }
+    if (!stored) this.#held = record
+    const handedOff = await this.#handOff(record)
+    return { ...NOTHING, outcome: { kind: 'saved', record }, recordPending: !handedOff }
+  }
+
   /** Hands a finished session that couldn't be saved earlier to `saveRecord` again. */
   async retryPending(): Promise<boolean> {
     const stored = this.#store.load()

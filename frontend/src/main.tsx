@@ -20,7 +20,7 @@ void services.drainParked?.()
 
 createRoot(root).render(
   <StrictMode>
-    <AuthGate>
+    <AuthGate handOver={(state) => services.controller.adopt(state)}>
       <App services={services} />
     </AuthGate>
   </StrictMode>,
