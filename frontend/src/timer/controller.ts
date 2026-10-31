@@ -61,6 +61,8 @@ export interface TimerControllerOptions {
   saveRecord: (record: SessionRecord) => void | Promise<void>
   now?: () => number
   newId?: () => string
+  /** Called when `adopt` takes a record, before anything else: binds it to its owner (#331). */
+  onAdopt?: (record: SessionRecord) => void
 }
 
 export interface StartOptions {
@@ -87,6 +89,7 @@ export class TimerController {
   readonly #saveRecord: (record: SessionRecord) => void | Promise<void>
   readonly #now: () => number
   readonly #newId: () => string
+  readonly #onAdopt: ((record: SessionRecord) => void) | undefined
   #session: ActiveSession | null = null
   /**
    * A change whose write to the store failed. `base` is the stored session it was made from
@@ -111,6 +114,7 @@ export class TimerController {
     this.#saveRecord = options.saveRecord
     this.#now = options.now ?? (() => Date.now())
     this.#newId = options.newId ?? (() => crypto.randomUUID())
+    this.#onAdopt = options.onAdopt
   }
 
   /**
@@ -152,11 +156,6 @@ export class TimerController {
 
   /** Starts a new session. Only one can be active at a time (AC6.1). */
   async start(options: StartOptions): Promise<TimerUpdate> {
-    if (!(await this.#drainExtra())) {
-      throw new TimerError(
-        'Your last session is still being saved on this device. Try again in a moment.',
-      )
-    }
     const stored = this.#store.load()
     const pending = this.#held ?? (stored === null ? null : this.#pendingFor(stored))
     if (pending !== null) {
@@ -167,6 +166,12 @@ export class TimerController {
       }
     } else if (this.#session !== null || stored !== null) {
       throw new ActiveSessionExistsError()
+    }
+    // Records `adopt` queued behind it, oldest first.
+    if (!(await this.#drainExtra())) {
+      throw new TimerError(
+        'Your last session is still being saved on this device. Try again in a moment.',
+      )
     }
     // Another start may have won while the previous record was being handed over.
     // (including one another tab started: the store, not just this tab's memory, is the truth).
@@ -257,6 +262,7 @@ export class TimerController {
   async adopt(state: StoredTimer): Promise<TimerUpdate> {
     const record = state.pendingRecord
     if (record === null) throw new TimerError('There is no finished session to take over')
+    this.#onAdopt?.(record)
     // A different record already held only in memory (#286) is handed over first. If it still
     // can't be, the adopted record waits behind it instead of replacing it (F13).
     if (this.#held !== null && this.#held.id !== record.id) {

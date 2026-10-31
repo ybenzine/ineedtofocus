@@ -107,13 +107,13 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
   // Read by the event handlers, which are set up once: a second 401 never ends the expired state.
   const expiredRef = useRef(false)
   const userRef = useRef<User | null>(null)
-  // The app is showing without an account (not a form): it follows a sign-in from another tab.
+  // Signed out here (the app without an account, or a form): follows a sign-in from another tab.
   const anonymousShownRef = useRef(false)
   useEffect(() => {
     expiredRef.current = expired
     userRef.current = user
-    anonymousShownRef.current = !checking && !user && !showForm
-  }, [expired, user, checking, showForm])
+    anonymousShownRef.current = !checking && !user
+  }, [expired, user, checking])
   // Signed out: the sign-in screen follows the device, not the last user's explicit theme.
   useEffect(() => {
     if (!checking && !user && showForm) applyTheme('system')
@@ -124,6 +124,12 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
   useEffect(() => {
     if (blocked) held.discard()
   }, [blocked, held])
+  // Anonymous data never outlives a signed-in mount, offline with the cached user included: a
+  // session left in the anonymous slot would otherwise block the account's Start (AC6.1).
+  const signedIn = user !== null && !expired
+  useEffect(() => {
+    if (signedIn) clearAnonymousData()
+  }, [signedIn])
   // Whatever ends the user's sign-in ends it the same way.
   const endUser = useCallback(() => {
     setMode('signin')
@@ -209,18 +215,31 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
         else if (userRef.current) endUser()
       } else if (!userRef.current && anonymousShownRef.current) {
         // Someone signed in in another tab: that sign-in cleared the anonymous data, so this
-        // tab must not keep showing, or writing back, its stale copy. Follow the sign-in; the
-        // anonymous app then remounts as the account's, with fresh stores (#331).
+        // tab must not keep showing, or writing back, its stale copy, and a form here must not
+        // lead to anonymous use beside an account. Follow the sign-in; the app then remounts as
+        // the account's, with fresh stores (#331). Asks `/me` once; if the server can't be
+        // reached it uses the user the other tab just cached, as start-up does.
+        const follow = async (current: User) => {
+          if (userRef.current || !anonymousShownRef.current) return
+          held.discard()
+          await claimLocalData(current)
+          clearAnonymousData()
+          cacheUser(current)
+          if (formFromPath(window.location.pathname) !== null) {
+            window.history.replaceState(null, '', '/')
+          }
+          setRoute(null)
+          setMustSignIn(false)
+          setUser(current)
+        }
         api.me().then(
-          async (current) => {
-            if (!current || userRef.current || !anonymousShownRef.current) return
-            held.discard()
-            await claimLocalData(current)
-            clearAnonymousData()
-            cacheUser(current)
-            setUser(current)
+          (current) => (current ? follow(current) : undefined),
+          (error: unknown) => {
+            const unreachable =
+              error instanceof AuthError && (error.kind === 'network' || error.kind === 'server')
+            const cached = unreachable ? loadCachedUser() : null
+            return cached ? follow(cached) : undefined
           },
-          () => undefined,
         )
       } else if (expiredRef.current) {
         // The same user signed in again in another tab: this one is signed in again too.

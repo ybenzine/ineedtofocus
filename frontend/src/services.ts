@@ -15,7 +15,7 @@ import {
   quarantinePendingRecord,
   type SessionStore,
 } from './sync/index.ts'
-import { LocalActiveSessionStore, TimerController } from './timer/index.ts'
+import { LocalActiveSessionStore, TimerController, type ActiveSessionStore } from './timer/index.ts'
 
 export interface AppServices {
   controller: TimerController
@@ -88,7 +88,10 @@ export function createAnonymousServices(held: HeldSession): AppServices {
   return { controller, sync: null, sessions: null, hook: null }
 }
 
-export function createAppServices(currentOwner: () => string | null = signedInUserId): AppServices {
+export function createAppServices(
+  currentOwner: () => string | null = signedInUserId,
+  options: { activeStore?: ActiveSessionStore } = {},
+): AppServices {
   const sessions = new IndexedDbSessionStore()
   const sync = new SyncEngine({
     store: sessions,
@@ -112,9 +115,13 @@ export function createAppServices(currentOwner: () => string | null = signedInUs
       })
     return draining
   }
-  const active = new OwnedActiveSessionStore(new LocalActiveSessionStore(), currentOwner)
+  const active = new OwnedActiveSessionStore(
+    options.activeStore ?? new LocalActiveSessionStore(),
+    currentOwner,
+  )
   const controller = new TimerController({
     store: active,
+    onAdopt: (record) => active.bindOwner(record.id),
     // On the device first (AC13.2), under the user who started the session; the network call
     // starts only once the write has landed.
     saveRecord: deviceSaver({

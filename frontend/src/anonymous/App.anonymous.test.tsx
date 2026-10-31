@@ -730,3 +730,56 @@ describe('a stale anonymous tab after a sign-in in another tab', () => {
     expect(await screen.findByText(/already active/)).toBeInTheDocument()
   })
 })
+
+describe('anonymous use never runs beside a signed-in device', () => {
+  function signInElsewhere() {
+    localStorage.setItem(OWNER_KEY, alice.id)
+    localStorage.setItem(USER_KEY, JSON.stringify(alice))
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: USER_KEY, newValue: JSON.stringify(alice) }),
+      )
+    })
+  }
+
+  it('a tab follows the sign-in with the cached user when /me cannot be reached', async () => {
+    const api = makeApi()
+    renderApp({ api })
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    await screen.findByRole('heading', { name: 'Settings' })
+    fireEvent.click(screen.getByRole('radio', { name: 'Dark' }))
+    localStorage.removeItem(ANON_SETTINGS_KEY)
+    vi.mocked(api.me).mockRejectedValue(new AuthError('network', 'offline'))
+    signInElsewhere()
+    expect(await screen.findByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    expect(localStorage.getItem(ANON_SETTINGS_KEY)).toBeNull()
+  })
+
+  it('a tab showing a form follows the sign-in too, so Continue cannot start anonymous use', async () => {
+    window.history.replaceState(null, '', '/login')
+    const api = makeApi()
+    renderApp({ api })
+    await screen.findByRole('heading', { name: 'Sign in' })
+    vi.mocked(api.me).mockResolvedValue(alice)
+    signInElsewhere()
+    expect(await screen.findByRole('button', { name: 'Start' })).toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'Continue without an account' })).toBeNull()
+    expect(window.location.pathname).toBe('/')
+  })
+
+  it('an anonymous session left in the slot cannot strand the account, offline included', async () => {
+    const stale = new TimerController({
+      store: new LocalActiveSessionStore(localStorage, ANON_ACTIVE_SESSION_KEY),
+      saveRecord: () => undefined,
+    })
+    await stale.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
+    localStorage.setItem(OWNER_KEY, alice.id)
+    localStorage.setItem(USER_KEY, JSON.stringify(alice))
+    // Offline start-up with the remembered user.
+    renderApp({ api: makeApi({ me: vi.fn().mockRejectedValue(new AuthError('network', 'x')) }) })
+    fireEvent.click(await screen.findByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    expect(localStorage.getItem(ANON_ACTIVE_SESSION_KEY)).toBeNull()
+    expect(localStorage.getItem(ACTIVE_SESSION_KEY)).not.toBeNull()
+  })
+})

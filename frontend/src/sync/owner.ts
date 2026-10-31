@@ -36,6 +36,8 @@ export class OwnedActiveSessionStore implements ActiveSessionStore {
    * tab), so a different user can't adopt the session (#245, AC1.3).
    */
   #first: { sessionId: string; ownerId: string | null } | null = null
+  /** Owners of records taken over from elsewhere (#331), kept in memory until they are saved. */
+  readonly #bound = new Map<string, string | null>()
 
   constructor(
     inner: ActiveSessionStore,
@@ -73,7 +75,16 @@ export class OwnedActiveSessionStore implements ActiveSessionStore {
    * session. Unlike `ownerOf` it does not read localStorage, so it survives a failing store.
    */
   firstOwnerOf(sessionId: string): string | null | undefined {
-    return this.#first?.sessionId === sessionId ? this.#first.ownerId : undefined
+    if (this.#first?.sessionId === sessionId) return this.#first.ownerId
+    return this.#bound.get(sessionId)
+  }
+
+  /**
+   * Fixes the owner of a record taken over now (the signed-in user), so it is saved under them
+   * even if it waits in memory while someone else signs in (AC1.3, #331).
+   */
+  bindOwner(sessionId: string): void {
+    if (!this.#bound.has(sessionId)) this.#bound.set(sessionId, this.#currentOwner())
   }
 
   /** The owner recorded for this session: an id, `null` (nobody), or `undefined` if unknown. */

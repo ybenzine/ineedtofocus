@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { createAppServices } from '../services.ts'
+import type { IndexedDbSessionStore } from '../sync/index.ts'
 import { finishSession, startSession, type SessionRecord } from './engine.ts'
 import { MemoryActiveSessionStore, TimerController, type StoredTimer } from './index.ts'
 
@@ -75,5 +77,46 @@ describe('TimerController.adopt', () => {
     await expect(controller.start({ config: CONFIG, tag: 'work', goal: null })).rejects.toThrow(
       /still being saved/,
     )
+  })
+})
+
+describe('adopted records keep their owner (AC1.3, #331)', () => {
+  it('a record held or queued across an expiry and a different sign-in is saved under its own owner', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('offline')))
+    let owner = 'alice'
+    let up = false
+    const services = createAppServices(() => owner, {
+      // The device refuses every write of the timer's own store.
+      activeStore: {
+        load: () => null,
+        clear: () => undefined,
+        save() {
+          throw new Error('QuotaExceededError')
+        },
+      },
+    })
+    const sessions = services.sessions as IndexedDbSessionStore
+    const save = sessions.save.bind(sessions)
+    vi.spyOn(sessions, 'save').mockImplementation((record, ownerId) =>
+      up ? save(record, ownerId) : Promise.reject(new Error('IndexedDB down')),
+    )
+    const { controller } = services
+
+    // Alice's record is held in memory; Bob's prompt record queues behind it.
+    await controller.adopt(finished('alice-1'))
+    owner = 'bob'
+    await controller.adopt(finished('bob-anon-1'))
+    // Bob's sign-in expires and Carol signs in.
+    owner = 'carol'
+    up = true
+    expect(await controller.retryPending()).toBe(true)
+
+    const ids = async (who: string) => (await sessions.list(who)).map((s) => s.record.id)
+    expect(await ids('alice')).toEqual(['alice-1'])
+    expect(await ids('bob')).toEqual(['bob-anon-1'])
+    expect(await ids('carol')).toEqual([])
+    for (const who of ['alice', 'bob', 'carol']) await sessions.clearOwner(who)
+    sessions.close()
+    vi.unstubAllGlobals()
   })
 })
