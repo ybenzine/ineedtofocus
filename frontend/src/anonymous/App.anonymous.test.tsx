@@ -824,4 +824,40 @@ describe('a stale anonymous tab whose follow does not adopt a user (#396)', () =
     }
     expect(stored.values).toEqual({ ...DEFAULT_SETTINGS, theme: 'light' })
   })
+
+  it('remounts from the sign-in event alone, with no settings removal event', async () => {
+    const api = makeApi()
+    renderApp({ api })
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    await screen.findByRole('heading', { name: 'Settings' })
+    fireEvent.click(screen.getByRole('radio', { name: 'Dark' }))
+    localStorage.removeItem(ANON_SETTINGS_KEY)
+    vi.mocked(api.me).mockResolvedValue(null)
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: USER_KEY, newValue: JSON.stringify(alice) }),
+      )
+    })
+    await waitFor(() =>
+      expect(screen.getByRole('radio', { name: 'System (default)' })).toBeChecked(),
+    )
+  })
+
+  it('keeps the "ended in another tab" notice when another tab ends a session', async () => {
+    renderApp()
+    fireEvent.click(await screen.findByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    // Another tab ends the session: the slot and the audio keys go.
+    localStorage.removeItem(ANON_ACTIVE_SESSION_KEY)
+    localStorage.removeItem(ANON_AUDIO_SOURCE_KEY)
+    localStorage.removeItem(ANON_YOUTUBE_LINK_KEY)
+    act(() => {
+      for (const key of [ANON_ACTIVE_SESSION_KEY, ANON_AUDIO_SOURCE_KEY, ANON_YOUTUBE_LINK_KEY]) {
+        window.dispatchEvent(new StorageEvent('storage', { key, newValue: null }))
+      }
+    })
+    expect(await screen.findByText('This session was ended in another tab.')).toBeInTheDocument()
+    await act(async () => undefined)
+    expect(screen.getByText('This session was ended in another tab.')).toBeInTheDocument()
+  })
 })

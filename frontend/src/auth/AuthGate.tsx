@@ -26,12 +26,7 @@ import {
   type FormOrigin,
 } from '../anonymous/AnonymousContext.ts'
 import { HeldSession } from '../anonymous/held.ts'
-import {
-  ANON_AUDIO_SOURCE_KEY,
-  ANON_SETTINGS_KEY,
-  ANON_YOUTUBE_LINK_KEY,
-  clearAnonymousData,
-} from '../anonymous/keys.ts'
+import { ANON_SETTINGS_KEY, clearAnonymousData } from '../anonymous/keys.ts'
 import { registerMemoryHolder } from '../update/idle.ts'
 import { ACTIVE_SESSION_KEY, type StoredTimer } from '../timer/store.ts'
 import type { TimerUpdate } from '../timer/index.ts'
@@ -215,12 +210,13 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
     // Signing out in one tab removes the remembered user; the others follow.
     function onStorage(event: StorageEvent) {
       if (event.key === null || event.key === ACTIVE_SESSION_KEY) setSlotChanges((n) => n + 1)
+      // Nothing in normal anonymous use removes the settings key (the audio source and link keys
+      // go at every session end), so a removal means a sign-in cleared the data. Every sign-in
+      // also writes `ineedtofocus.user` right after clearing, which is the second signal.
       const clearedAnonymous =
         event.key === null ||
-        ((event.key === ANON_SETTINGS_KEY ||
-          event.key === ANON_AUDIO_SOURCE_KEY ||
-          event.key === ANON_YOUTUBE_LINK_KEY) &&
-          event.newValue === null)
+        (event.key === ANON_SETTINGS_KEY && event.newValue === null) ||
+        (event.key === USER_KEY && event.newValue !== null)
       if (clearedAnonymous && !userRef.current) setAnonymousEpoch((n) => n + 1)
       if (event.key !== USER_KEY) return
       if (event.newValue === null) {
