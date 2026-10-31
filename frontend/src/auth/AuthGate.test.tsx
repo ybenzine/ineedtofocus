@@ -879,6 +879,12 @@ describe('landing screen after sign-in (#357)', () => {
     expect(screen.queryByRole('heading', { name: 'Sign in' })).not.toBeInTheDocument()
   })
 
+  it('shows the sign-in form after a sign-out, even on a page opened at /signup', async () => {
+    renderAt('/signup', makeApi({ me: vi.fn().mockResolvedValue(user) }))
+    fireEvent.click(await screen.findByText('simulate sign out'))
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+  })
+
   it('sign-out then sign-in to the same account keeps the screen', async () => {
     renderAt('/settings', makeApi({ me: vi.fn().mockResolvedValue(user) }))
     fireEvent.click(await screen.findByText('simulate sign out'))

@@ -160,6 +160,7 @@ export default function AuthScreen({
       {onContinue && (
         <p>
           <a
+            className="auth-link"
             href="/"
             onClick={(event) => {
               if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return

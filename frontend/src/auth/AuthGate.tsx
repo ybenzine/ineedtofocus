@@ -123,6 +123,7 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
   }, [blocked, held])
   // Whatever ends the user's sign-in ends it the same way.
   const endUser = useCallback(() => {
+    setMode('signin')
     setMustSignIn(true)
     setHandedOver(null)
     setUser(null)

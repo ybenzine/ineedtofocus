@@ -17,6 +17,7 @@ export function AuthLink({
   const anonymous = useAnonymous()
   return (
     <a
+      className="auth-link"
       href={pathForForm(form)}
       onClick={(event) => {
         if (
