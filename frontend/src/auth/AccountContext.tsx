@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react'
+import type { TimerUpdate } from '../timer/index.ts'
 import type { User } from './api.ts'
 
 export interface Account {
@@ -19,6 +20,11 @@ export interface Account {
    * shows the sign-in screen with "Your account was deleted."
    */
   accountDeleted: () => Promise<void>
+  /**
+   * The anonymous session just saved from the summary's prompt (#331): the app opens on its
+   * summary, signed in. Absent otherwise.
+   */
+  handedOver?: TimerUpdate | null
 }
 
 export const AccountContext = createContext<Account | null>(null)

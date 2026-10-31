@@ -43,8 +43,9 @@ export async function newPage(context: BrowserContext): Promise<Page> {
 }
 
 export async function signUp(page: Page, email: string): Promise<void> {
-  await page.goto('/')
-  await page.getByRole('button', { name: 'Create an account' }).click()
+  // A device with no account opens on New session (#331); the sign-up form is at /signup.
+  await page.goto('/signup')
+  await expect(page.getByRole('heading', { name: 'Create your account' })).toBeVisible()
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password').fill(PASSWORD)
   await page.getByRole('button', { name: 'Create account' }).click()
@@ -52,7 +53,7 @@ export async function signUp(page: Page, email: string): Promise<void> {
 }
 
 export async function signIn(page: Page, email: string): Promise<void> {
-  await page.goto('/')
+  await page.goto('/login')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Password').fill(PASSWORD)
   await page.getByRole('button', { name: 'Sign in', exact: true }).click()

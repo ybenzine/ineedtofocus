@@ -56,6 +56,10 @@ export interface SettingsStoreOptions {
   onUnauthorized?: () => void
   /** First retry delay after a failed send while online; doubles up to a minute. */
   retryBaseMs?: number
+  /** The storage key of the device copy (anonymous use keeps its own, #331). */
+  key?: string
+  /** The Web Lock that guards the device copy. */
+  lock?: string
 }
 
 const MAX_RETRY_MS = 60_000
@@ -82,6 +86,8 @@ export class SettingsStore {
   readonly #currentOwner: (() => string | null) | undefined
   readonly #onUnauthorized: (() => void) | undefined
   readonly #retryBaseMs: number
+  readonly #key: string
+  readonly #lock: string
   #abort = new AbortController()
   #state: SettingsState
   #disposed = false
@@ -103,6 +109,8 @@ export class SettingsStore {
     this.#currentOwner = options.currentOwner
     this.#onUnauthorized = options.onUnauthorized
     this.#retryBaseMs = options.retryBaseMs ?? 2000
+    this.#key = options.key ?? SETTINGS_KEY
+    this.#lock = options.lock ?? SETTINGS_LOCK
     this.#state = this.#read()
   }
 
@@ -123,7 +131,7 @@ export class SettingsStore {
   /** The cache as stored now, or null if it is missing, unreadable or another user's. */
   #readStored(): SettingsState | null {
     try {
-      const raw = this.#storage?.getItem(SETTINGS_KEY)
+      const raw = this.#storage?.getItem(this.#key)
       if (raw) {
         const stored = JSON.parse(raw) as { owner?: unknown; values?: unknown; pending?: unknown }
         // Someone else's cache is never shown to or sent for this user.
@@ -144,7 +152,7 @@ export class SettingsStore {
   #write(state: SettingsState): void {
     try {
       this.#storage?.setItem(
-        SETTINGS_KEY,
+        this.#key,
         JSON.stringify({ owner: this.#owner, values: state.values, pending: state.pending }),
       )
     } catch {
@@ -197,7 +205,7 @@ export class SettingsStore {
       return
     }
     this.#lastWrite = locks
-      .request(SETTINGS_LOCK, async () => merge())
+      .request(this.#lock, async () => merge())
       .catch(() => {
         // Locking failed before the merge ran: merge without it rather than lose the write.
         if (!started) merge()
@@ -351,7 +359,7 @@ export class SettingsStore {
       }
     }
     this.#lastWrite = locks
-      .request(SETTINGS_LOCK, async () => repair())
+      .request(this.#lock, async () => repair())
       .catch(() => {
         if (!started) repair()
       })
@@ -457,7 +465,7 @@ export class SettingsStore {
     }
     // Another tab saved to the cache: show and send its edits too.
     const onStorage = (event: StorageEvent) => {
-      if (event.key === SETTINGS_KEY && this.#writing === 0) {
+      if (event.key === this.#key && this.#writing === 0) {
         this.#adoptStored()
         void this.flush()
       }

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TimerController } from '../timer/index.ts'
+import { useAnonymous } from '../anonymous/AnonymousContext.ts'
+import { AuthLink } from '../anonymous/AuthLink.tsx'
 import { useAccount } from './AccountContext.tsx'
 import {
   ACTIVE_TIMER_MESSAGE,
@@ -11,13 +13,14 @@ import {
 } from './localData.ts'
 
 /**
- * Who is signed in, and Sign out. Shown on every screen except a running timer or the session summary.
+ * Who is signed in, and Sign out; without an account (#331), Create account and Log in. Shown on every screen except a running timer or the session summary.
  * Sign out is refused while a timer runs; unsynced sessions and edits get one last sync (at most
  * 10 s, skipped offline) and, if any remain, are deleted only after a confirmation (Cancel is
  * the default).
  */
 export default function AccountBar({ controller }: { controller: TimerController }) {
   const account = useAccount()
+  const anonymous = useAnonymous()
   const [message, setMessage] = useState('')
   const [unsynced, setUnsynced] = useState<UnsyncedCount | null>(null)
   const [busy, setBusy] = useState(false)
@@ -33,7 +36,20 @@ export default function AccountBar({ controller }: { controller: TimerController
     signOutRef.current?.focus()
   }
 
-  if (!account) return null
+  if (!account) {
+    // Without an account (#331): no email, no Sign out, just the two ways in.
+    if (!anonymous) return null
+    return (
+      <header className="account-bar">
+        <AuthLink form="signup" origin="screen">
+          Create account
+        </AuthLink>
+        <AuthLink form="signin" origin="screen">
+          Log in
+        </AuthLink>
+      </header>
+    )
+  }
   const { signOut } = account
 
   async function finish() {

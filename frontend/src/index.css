@@ -135,6 +135,18 @@ a:hover {
   color: var(--accent-hover);
 }
 
+/* A link in running text or a bar that is still a 44 px touch target (the anonymous prompts). */
+.auth-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+  padding: 0 0.25rem;
+  vertical-align: middle;
+}
+
 /* Buttons: outline by default, accent fill for the primary action and for selected states. */
 button,
 .link-button {

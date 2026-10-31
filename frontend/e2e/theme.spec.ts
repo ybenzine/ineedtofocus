@@ -91,7 +91,7 @@ for (const [palette, width] of RUNS) {
       page,
     }) => {
       await installClock(page)
-      await page.goto('/')
+      await page.goto('/login')
       await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible()
       await check(page, 'auth', palette)
 

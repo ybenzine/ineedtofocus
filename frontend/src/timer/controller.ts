@@ -61,6 +61,8 @@ export interface TimerControllerOptions {
   saveRecord: (record: SessionRecord) => void | Promise<void>
   now?: () => number
   newId?: () => string
+  /** Called when `adopt` takes a record, before anything else: binds it to its owner (#331). */
+  onAdopt?: (record: SessionRecord) => void
 }
 
 export interface StartOptions {
@@ -87,6 +89,7 @@ export class TimerController {
   readonly #saveRecord: (record: SessionRecord) => void | Promise<void>
   readonly #now: () => number
   readonly #newId: () => string
+  readonly #onAdopt: ((record: SessionRecord) => void) | undefined
   #session: ActiveSession | null = null
   /**
    * A change whose write to the store failed. `base` is the stored session it was made from
@@ -100,12 +103,18 @@ export class TimerController {
    * write failed). Held here until `saveRecord` accepts it, so it isn't lost while the tab lives.
    */
   #held: SessionRecord | null = null
+  /**
+   * Records taken over by `adopt` while `#held` already holds a different one (#331). They wait
+   * here, in memory, and go to `saveRecord` after it; none is ever dropped for another.
+   */
+  #extra: SessionRecord[] = []
 
   constructor(options: TimerControllerOptions) {
     this.#store = options.store
     this.#saveRecord = options.saveRecord
     this.#now = options.now ?? (() => Date.now())
     this.#newId = options.newId ?? (() => crypto.randomUUID())
+    this.#onAdopt = options.onAdopt
   }
 
   /**
@@ -157,6 +166,12 @@ export class TimerController {
       }
     } else if (this.#session !== null || stored !== null) {
       throw new ActiveSessionExistsError()
+    }
+    // Records `adopt` queued behind it, oldest first.
+    if (!(await this.#drainExtra())) {
+      throw new TimerError(
+        'Your last session is still being saved on this device. Try again in a moment.',
+      )
     }
     // Another start may have won while the previous record was being handed over.
     // (including one another tab started: the store, not just this tab's memory, is the truth).
@@ -226,7 +241,7 @@ export class TimerController {
    * `pendingRecord` write nor `saveRecord` has landed (#286). A reload would lose it.
    */
   holdsRecord(): boolean {
-    return this.#held !== null
+    return this.#held !== null || this.#extra.length > 0
   }
 
   /**
@@ -235,14 +250,57 @@ export class TimerController {
    */
   discardHeld(): void {
     this.#held = null
+    this.#extra = []
+  }
+
+  /**
+   * Takes over a finished session that was started elsewhere (an anonymous session saved from
+   * the summary's prompt, #331) and hands it to `saveRecord` unchanged. Like `#finish`, it keeps
+   * the record on the device until it is handed over, and holds it in memory if the store
+   * refuses it; if this device already has another session in the store, that one is left alone.
+   */
+  async adopt(state: StoredTimer): Promise<TimerUpdate> {
+    const record = state.pendingRecord
+    if (record === null) throw new TimerError('There is no finished session to take over')
+    this.#onAdopt?.(record)
+    // A different record already held only in memory (#286) is handed over first. If it still
+    // can't be, the adopted record waits behind it instead of replacing it (F13).
+    if (this.#held !== null && this.#held.id !== record.id) {
+      if (!(await this.#handOff(this.#held)) && this.#held !== null) {
+        if (!this.#extra.some((r) => r.id === record.id)) this.#extra.push(record)
+        return { ...NOTHING, outcome: { kind: 'saved', record }, recordPending: true }
+      }
+    }
+    let stored = false
+    if (this.#session === null && this.#store.load() === null) {
+      try {
+        this.#store.save(state)
+        stored = true
+      } catch {
+        // Held in memory below.
+      }
+    }
+    if (!stored) this.#held = record
+    const handedOff = await this.#handOff(record)
+    return { ...NOTHING, outcome: { kind: 'saved', record }, recordPending: !handedOff }
   }
 
   /** Hands a finished session that couldn't be saved earlier to `saveRecord` again. */
   async retryPending(): Promise<boolean> {
     const stored = this.#store.load()
     const pending = this.#held ?? (stored === null ? null : this.#pendingFor(stored))
-    if (pending === null) return true
-    return this.#handOff(pending)
+    const first = pending === null ? true : await this.#handOff(pending)
+    const rest = await this.#drainExtra()
+    return first && rest
+  }
+
+  /** Hands over the records `adopt` queued, oldest first; true once none is left. */
+  async #drainExtra(): Promise<boolean> {
+    for (const record of [...this.#extra]) {
+      if (!(await this.#handOff(record))) break
+      this.#extra = this.#extra.filter((r) => r.id !== record.id)
+    }
+    return this.#extra.length === 0
   }
 
   /**

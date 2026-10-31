@@ -111,7 +111,7 @@ for (const scheme of SCHEMES) {
     test('auth, setup, timer states, summary, History, Archive, Settings', async ({ page }) => {
       await installClock(page)
       // Sign-in and sign-up.
-      await page.goto('/')
+      await page.goto('/login')
       await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
       await expectTheme(page)
       await expectNoSeriousViolations(page)
@@ -252,7 +252,7 @@ async function visitEveryScreen(
   check: (screen: string) => Promise<void>,
 ): Promise<void> {
   await installClock(page)
-  await page.goto('/')
+  await page.goto('/login')
   await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible()
   await check('sign in')
   await page.getByRole('button', { name: 'Create an account' }).click()
@@ -442,7 +442,7 @@ test.describe('keyboard and screen readers', () => {
 
   test('every control has an accessible name and errors are announced', async ({ page }) => {
     await installClock(page)
-    await page.goto('/')
+    await page.goto('/login')
     await page.getByRole('button', { name: 'Create an account' }).click()
     await page.getByRole('button', { name: 'Create account' }).click()
     // Field errors are alerts tied to their input.

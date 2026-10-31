@@ -4,7 +4,8 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import RangeInput from './RangeInput.tsx'
-import { USER_KEY } from './auth/localData.ts'
+import { ANON_SETTINGS_KEY } from './anonymous/keys.ts'
+import { OWNER_KEY, PENDING_LOGOUT_KEY, USER_KEY } from './auth/localData.ts'
 import { SETTINGS_KEY } from './settings/store.ts'
 import { applyTheme } from './theme.ts'
 
@@ -19,6 +20,7 @@ afterEach(() => {
   root.removeAttribute('data-theme')
   root.style.removeProperty('--bg')
   localStorage.clear()
+  window.history.replaceState(null, '', '/')
 })
 
 describe('applyTheme', () => {
@@ -52,6 +54,37 @@ describe('theme-init.js (runs before first paint)', () => {
       run()
       expect(root).toHaveAttribute('data-theme', theme)
     }
+  })
+
+  it('reads the device-only theme of a device with no account data (#331)', () => {
+    for (const theme of ['dark', 'light']) {
+      localStorage.setItem(ANON_SETTINGS_KEY, JSON.stringify({ owner: null, values: { theme } }))
+      root.removeAttribute('data-theme')
+      run()
+      expect(root).toHaveAttribute('data-theme', theme)
+    }
+  })
+
+  it('does not apply the device-only theme where an account is involved', () => {
+    localStorage.setItem(
+      ANON_SETTINGS_KEY,
+      JSON.stringify({ owner: null, values: { theme: 'dark' } }),
+    )
+    localStorage.setItem(OWNER_KEY, 'u')
+    run()
+    expect(root).not.toHaveAttribute('data-theme')
+    localStorage.removeItem(OWNER_KEY)
+    localStorage.setItem(PENDING_LOGOUT_KEY, '1')
+    run()
+    expect(root).not.toHaveAttribute('data-theme')
+    localStorage.removeItem(PENDING_LOGOUT_KEY)
+    window.history.replaceState(null, '', '/login')
+    run()
+    expect(root).not.toHaveAttribute('data-theme')
+    window.history.replaceState(null, '', '/')
+    signedInAs('u')
+    run()
+    expect(root).not.toHaveAttribute('data-theme')
   })
 
   it('ignores a settings copy that belongs to someone else', () => {

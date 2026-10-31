@@ -4,6 +4,7 @@ import AudioControls from './sounds/AudioControls.tsx'
 import {
   getDefaultLinkStore,
   LocalAudioSourceStore,
+  LocalYoutubeLinkStore,
   type AudioSourceStore,
   type YoutubeLinkStore,
 } from './sounds/audioSource.ts'
@@ -12,9 +13,20 @@ import type { LoadYoutubeApi } from './sounds/ytApi.ts'
 import { RainPlayer } from './sounds/rain.ts'
 import { useAccount } from './auth/AccountContext.tsx'
 import AccountBar from './auth/AccountBar.tsx'
+import { useAnonymous } from './anonymous/AnonymousContext.ts'
+import { AnonymousArchive, AnonymousHistory } from './anonymous/AnonymousScreens.tsx'
+import { anonymousYoutubeApi } from './anonymous/youtube.ts'
+import {
+  ANON_AUDIO_SOURCE_KEY,
+  ANON_SETTINGS_KEY,
+  ANON_SETTINGS_LOCK,
+  ANON_YOUTUBE_LINK_KEY,
+} from './anonymous/keys.ts'
 import ArchiveScreen from './archive/ArchiveScreen.tsx'
 import HistoryScreen from './history/HistoryScreen.tsx'
 import {
+  accountSlotHasSession,
+  anonymousSlotHasSession,
   notifySessionExpired,
   registerMemoryTimerProbe,
   registerLocalDataHook,
@@ -40,9 +52,9 @@ import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
 import type { AudioSource } from './setup/options.ts'
 import SessionSummary from './timerscreen/SessionSummary.tsx'
 import TimerScreen from './timerscreen/TimerScreen.tsx'
-import { createAppServices, type AppServices } from './services.ts'
+import { createAnonymousServices, createAppServices, type AppServices } from './services.ts'
 import { useTheme } from './theme.ts'
-import type { TimerController, TimerUpdate } from './timer/index.ts'
+import { ActiveSessionExistsError, type TimerController, type TimerUpdate } from './timer/index.ts'
 
 export interface AppProps {
   /**
@@ -84,7 +96,7 @@ type View =
   | { name: 'loading' }
   | { name: ScreenId }
   | { name: 'timer' }
-  | { name: 'summary'; update: TimerUpdate }
+  | { name: 'summary'; update: TimerUpdate; inAccount?: boolean }
 
 /** How long a first look at the server's settings may hold up the setup screen. */
 export const SETTINGS_WAIT_MS = 1500
@@ -99,18 +111,26 @@ export default function App(props: AppProps) {
   // so it shows their cached settings, but `currentOwner()` is null, so it never fetches,
   // sends or rewrites the cache.
   const account = useAccount()
+  // Without an account (#331) settings are the device's own, under their own key, and never sent.
+  const anonymous = useAnonymous()
   const [mountOwner] = useState(() => (account?.expired ? account.user.id : signedInUserId()))
   const settings = useMemo(
     () =>
       given ??
-      new SettingsStore({
-        api: httpSettingsApi,
-        storage: window.localStorage,
-        owner: mountOwner,
-        currentOwner: signedInUserId,
-        onUnauthorized: notifySessionExpired,
-      }),
-    [given, mountOwner],
+      (anonymous
+        ? new SettingsStore({
+            storage: window.localStorage,
+            key: ANON_SETTINGS_KEY,
+            lock: ANON_SETTINGS_LOCK,
+          })
+        : new SettingsStore({
+            api: httpSettingsApi,
+            storage: window.localStorage,
+            owner: mountOwner,
+            currentOwner: signedInUserId,
+            onUnauthorized: notifySessionExpired,
+          })),
+    [given, mountOwner, anonymous],
   )
   // Re-armed on every setup: StrictMode runs setup, cleanup, setup on the same instance.
   useEffect(() => {
@@ -118,7 +138,10 @@ export default function App(props: AppProps) {
     return () => settings.dispose()
   }, [settings])
   // Sign-out sends and counts the settings edits not yet accepted (#129).
-  useEffect(() => registerLocalDataHook(settingsDataHook(settings)), [settings])
+  useEffect(() => {
+    if (anonymous) return
+    return registerLocalDataHook(settingsDataHook(settings))
+  }, [settings, anonymous])
   return (
     <SettingsContext.Provider value={settings}>
       <AppBody {...props} settings={settings} />
@@ -134,14 +157,21 @@ function AppBody({
   alerts,
   rain,
   audioStore,
-  youtube,
+  youtube: youtubeProp,
   pendingRetryMs = PENDING_RETRY_MS,
   parkedDrainMs = PARKED_DRAIN_MS,
 }: AppProps & { settings: SettingsStore }) {
-  const services = useMemo<AppServices>(
-    () => given ?? (controller ? { controller, sync: null, hook: null } : createAppServices()),
-    [given, controller],
-  )
+  const anonymous = useAnonymous()
+  // Without an account the timer keeps its own slot and holds a finished session in memory; the
+  // account's services (session store, sync) are never used (#331).
+  const services = useMemo<AppServices>(() => {
+    if (anonymous) {
+      return controller
+        ? { controller, sync: null, hook: null }
+        : createAnonymousServices(anonymous.held)
+    }
+    return given ?? (controller ? { controller, sync: null, hook: null } : createAppServices())
+  }, [given, controller, anonymous])
   const timer = services.controller
   const prefs = useMemo(
     () => preferences ?? new SettingsPreferencesStore(settings),
@@ -157,9 +187,43 @@ function AppBody({
       new RainPlayer({ alerts: player, volume: new SettingsBackgroundVolumeStore(settings) }),
     [rain, player, settings],
   )
-  const sourceStore = useMemo(() => audioStore ?? new LocalAudioSourceStore(), [audioStore])
+  const sourceStore = useMemo(
+    () =>
+      audioStore ??
+      (anonymous
+        ? new LocalAudioSourceStore(
+            window.localStorage,
+            ANON_AUDIO_SOURCE_KEY,
+            ANON_YOUTUBE_LINK_KEY,
+          )
+        : new LocalAudioSourceStore()),
+    [audioStore, anonymous],
+  )
+  // Without an account the link is remembered under the anonymous keys, there is no recent list
+  // and nothing about a link or its title reaches the server.
+  const youtube = useMemo(
+    () =>
+      anonymous
+        ? {
+            ...youtubeProp,
+            linkStore:
+              youtubeProp?.linkStore ??
+              new LocalYoutubeLinkStore(window.localStorage, ANON_YOUTUBE_LINK_KEY),
+            api: anonymousYoutubeApi,
+          }
+        : youtubeProp,
+    [youtubeProp, anonymous],
+  )
   const { values } = useSettingsState()
-  const [view, setView] = useState<View>({ name: 'loading' })
+  const account = useAccount()
+  // The anonymous session just saved from the summary's prompt: the app opens on its summary,
+  // signed in (#331).
+  const [handedOver] = useState(() => account?.handedOver ?? null)
+  const [view, setView] = useState<View>(() =>
+    handedOver?.outcome
+      ? { name: 'summary', update: handedOver, inAccount: true }
+      : { name: 'loading' },
+  )
   useTheme(values.theme, view.name === 'timer' || view.name === 'summary')
   // A new version may take over only on setup, History, Archive and Settings (#244): the timer,
   // a summary and the start-up restore are never reloaded. Before a reload, send what is pending.
@@ -183,7 +247,6 @@ function AppBody({
 
   // The sign-in expired mid-session: the timer screen and its summary stay; sign-in follows
   // as soon as the user is on any other screen.
-  const account = useAccount()
   const leaveExpired = account?.expired ? account.leaveExpired : null
   useEffect(() => {
     if (leaveExpired && view.name !== 'loading' && view.name !== 'timer' && view.name !== 'summary')
@@ -201,10 +264,25 @@ function AppBody({
   // while the app was closed finished (AC6.5).
   useEffect(() => {
     let cancelled = false
+    if (handedOver?.outcome) {
+      // Signed in from the summary's prompt: back on that summary, now in the account.
+      void settings.refresh()
+      return
+    }
     const foreign = services.isForeignSession?.() ?? false
     // A different user's running session never reaches the timer screen, whatever is stored.
     services.discardForeignRunning?.()
-    void timer.restore().then(async (update) => {
+    void timer.restore().then(async (restored) => {
+      let update = restored
+      if (anonymous) {
+        // A session finished while the app was closed (AC6.5), or held by this page while a
+        // sign-in form was open, is shown from the memory of this page. A finish another page
+        // already claimed is not ours to show.
+        const held = anonymous.held.get()
+        update = held
+          ? { ...restored, outcome: { kind: 'saved', record: held.record }, recordPending: false }
+          : { ...restored, outcome: null }
+      }
       if (foreign && update.recordPending && !cancelled) setForeignPending(true)
       if (update.snapshot && !foreign) {
         void settings.refresh() // no wait: sends pending edits, fetches the server copy
@@ -239,7 +317,26 @@ function AppBody({
     return () => {
       cancelled = true
     }
-  }, [timer, services, settings, sourceStore])
+  }, [timer, services, settings, sourceStore, anonymous, handedOver])
+
+  // The held anonymous session is shown only on its summary. Leaving it other than through the
+  // prompt's links (New session, any navigation) discards it quietly (#331); so does the marker
+  // no longer naming it, which the held session checks itself.
+  useEffect(() => {
+    if (anonymous && view.name !== 'summary' && view.name !== 'loading') anonymous.held.discard()
+  }, [anonymous, view.name])
+  useEffect(() => {
+    if (!anonymous) return
+    return anonymous.held.subscribe(() => {
+      setView((current) =>
+        current.name === 'summary' &&
+        current.update.outcome?.kind === 'saved' &&
+        anonymous.held.get() === null
+          ? { name: 'setup' }
+          : current,
+      )
+    })
+  }, [anonymous])
 
   // Sync settings whenever the connection returns; at launch `refresh()` runs in the restore
   // effect above (waited for only when the setup screen opens).
@@ -273,8 +370,12 @@ function AppBody({
   useEffect(() => registerMemoryTimerProbe(() => timer.hasUnsaved()), [timer])
   // ...and so does a finished record held only in memory: no update reload until it is handed over.
   useEffect(() => registerMemoryHolder(() => timer.hasUnsaved() || timer.holdsRecord()), [timer])
-  // Sign-out tries to hand a held record over and counts it if it can't (#298).
-  useEffect(() => registerLocalDataHook(heldRecordHook(timer)), [timer])
+  // Sign-out tries to hand a held record over and counts it if it can't (#298). There is no
+  // sign-out without an account.
+  useEffect(() => {
+    if (anonymous) return
+    return registerLocalDataHook(heldRecordHook(timer))
+  }, [timer, anonymous])
 
   // Send what is on the device now, when the connection returns, and on backoff (AC13.3).
   // Runs only while someone is signed in: AuthGate renders the app only then (#9).
@@ -304,7 +405,7 @@ function AppBody({
           setForeignPending(false)
           setView((current) =>
             current.name === 'summary'
-              ? { name: 'summary', update: { ...current.update, recordPending: false } }
+              ? { ...current, update: { ...current.update, recordPending: false } }
               : current,
           )
         })
@@ -318,7 +419,13 @@ function AppBody({
   async function start(request: SessionRequest) {
     void player.unlock() // the Start press is the user gesture browsers require before audio
     setNotice(null)
+    // One session at a time across both slots (AC6.1): an account's session sits in the other.
+    if (anonymous ? accountSlotHasSession() : anonymousSlotHasSession()) {
+      throw new ActiveSessionExistsError()
+    }
     await timer.start({ config: request.config, tag: request.tag, goal: request.goal })
+    // A session started voids any held one, here or in another tab, through the marker.
+    anonymous?.held.forgetMarker()
     sourceStore.save(request.audio)
     if (request.audio === 'youtube' && request.youtubeLink !== null) {
       // The timer screen's player picks the link up from the store (it is also what a reload
@@ -336,14 +443,19 @@ function AppBody({
     (update: TimerUpdate) => {
       sourceStore.clear()
       // An update with no outcome means another tab ended the session; that tab shows the summary.
-      if (update.outcome) {
+      // So does a finish whose session another page claimed first (#331).
+      const lost =
+        anonymous !== null &&
+        update.outcome?.kind === 'saved' &&
+        !anonymous.held.holds(update.outcome.record.id)
+      if (update.outcome && !lost) {
         setView({ name: 'summary', update })
       } else {
         setNotice('This session was ended in another tab.')
         setView({ name: 'setup' })
       }
     },
-    [sourceStore],
+    [sourceStore, anonymous],
   )
 
   const changeAudio = useCallback(
@@ -384,6 +496,8 @@ function AppBody({
         <SessionSummary
           outcome={view.update.outcome}
           recordPending={view.update.recordPending}
+          savePrompt={anonymous !== null && view.update.outcome.kind === 'saved'}
+          inAccount={view.inAccount}
           onNewSession={() => goTo('setup')}
           onViewHistory={() => goTo('history')}
         />
@@ -396,11 +510,15 @@ function AppBody({
       <main className="history-screen">
         <AccountBar controller={timer} />
         <ScreenNav current="history" onNavigate={goTo} />
-        <HistoryScreen
-          sessions={services.sessions}
-          sync={services.sync}
-          onNewSession={() => goTo('setup')}
-        />
+        {anonymous ? (
+          <AnonymousHistory />
+        ) : (
+          <HistoryScreen
+            sessions={services.sessions}
+            sync={services.sync}
+            onNewSession={() => goTo('setup')}
+          />
+        )}
       </main>
     )
   }
@@ -410,7 +528,7 @@ function AppBody({
       <main className="history-screen">
         <AccountBar controller={timer} />
         <ScreenNav current="archive" onNavigate={goTo} />
-        <ArchiveScreen sessions={services.sessions} />
+        {anonymous ? <AnonymousArchive /> : <ArchiveScreen sessions={services.sessions} />}
       </main>
     )
   }

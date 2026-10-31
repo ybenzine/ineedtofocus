@@ -8,6 +8,7 @@
 // "Idle" is checked again right before acting, after the flush.
 
 import { ACTIVE_SESSION_KEY, parseStoredTimer } from '../timer/store.ts'
+import { ANON_ACTIVE_SESSION_KEY } from '../anonymous/keys.ts'
 import { holdsMemoryOnlyData } from './idle.ts'
 
 export const UPDATE_CHECK_MS = 60 * 60 * 1000
@@ -62,10 +63,17 @@ export function hasOpenEdit(doc: Document = document): boolean {
   return doc.querySelector('[role="alertdialog"], [role="dialog"], [data-holds-update]') !== null
 }
 
-/** Any stored session, running, paused or finished but not handed over: in some tab. */
+/**
+ * Any stored session, running, paused or finished but not handed over: in some tab. Both slots
+ * count, an account's and an anonymous one (#331). The anonymous held-session marker doesn't: a
+ * held session is protected like a record held only in memory, by its own page being busy.
+ */
 export function hasStoredSession(): boolean {
   try {
-    return parseStoredTimer(localStorage.getItem(ACTIVE_SESSION_KEY)) !== null
+    return (
+      parseStoredTimer(localStorage.getItem(ACTIVE_SESSION_KEY)) !== null ||
+      parseStoredTimer(localStorage.getItem(ANON_ACTIVE_SESSION_KEY)) !== null
+    )
   } catch {
     return false
   }

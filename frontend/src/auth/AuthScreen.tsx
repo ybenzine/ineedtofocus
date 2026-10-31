@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { AuthError, describeWait, type AuthApi, type User } from './api.ts'
 
-type Mode = 'signin' | 'signup'
+import type { AuthForm as Mode } from '../anonymous/AnonymousContext.ts'
 
 interface Props {
   api: AuthApi
+  /** Which form is shown; `onModeChange` is called when the user switches. */
+  mode: Mode
+  onModeChange: (mode: Mode) => void
   onSignedIn: (user: User, signedUp: boolean) => void
+  /** "Continue without an account" (#331); absent where anonymous use isn't offered. */
+  onContinue?: () => void
   /** Shown above the form, e.g. after an offline sign-out. */
   notice?: string
   /** Runs before each sign-in or sign-up request; a returned message stops the request. */
@@ -16,11 +21,13 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export default function AuthScreen({
   api,
+  mode,
+  onModeChange,
+  onContinue,
   onSignedIn,
   notice,
   beforeSubmit = () => Promise.resolve(null),
 }: Props) {
-  const [mode, setMode] = useState<Mode>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [emailError, setEmailError] = useState('')
@@ -39,7 +46,7 @@ export default function AuthScreen({
 
   function switchMode(next: Mode) {
     switched.current = true
-    setMode(next)
+    onModeChange(next)
     setEmailError('')
     setPasswordError('')
     setFormError('')
@@ -150,6 +157,28 @@ export default function AuthScreen({
           {signUp ? 'Sign in' : 'Create an account'}
         </button>
       </p>
+      {onContinue && (
+        <p>
+          <a
+            className="auth-link"
+            href="/"
+            onClick={(event) => {
+              if (
+                event.button !== 0 ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.shiftKey ||
+                event.altKey
+              )
+                return
+              event.preventDefault()
+              onContinue()
+            }}
+          >
+            Continue without an account
+          </a>
+        </p>
+      )}
     </main>
   )
 }
