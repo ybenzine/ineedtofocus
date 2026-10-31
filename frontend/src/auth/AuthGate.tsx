@@ -26,7 +26,7 @@ import {
   type FormOrigin,
 } from '../anonymous/AnonymousContext.ts'
 import { HeldSession } from '../anonymous/held.ts'
-import { clearAnonymousData } from '../anonymous/keys.ts'
+import { ANON_SETTINGS_KEY, clearAnonymousData } from '../anonymous/keys.ts'
 import { registerMemoryHolder } from '../update/idle.ts'
 import { ACTIVE_SESSION_KEY, type StoredTimer } from '../timer/store.ts'
 import type { TimerUpdate } from '../timer/index.ts'
@@ -102,6 +102,10 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
   // Re-render when another tab changes the stored session: anonymous use isn't offered while an
   // account's session is in it.
   const [, setSlotChanges] = useState(0)
+  // Bumped when another tab clears the anonymous data (a sign-in): the anonymous app is keyed by
+  // it and remounts with fresh stores, whether or not this tab then follows the sign-in, so it
+  // can never write back what was cleared (#396).
+  const [anonymousEpoch, setAnonymousEpoch] = useState(0)
   const blocked = !user && accountSlotHasSession()
   const showForm = route !== null || mustSignIn || blocked
   // Read by the event handlers, which are set up once: a second 401 never ends the expired state.
@@ -206,6 +210,14 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
     // Signing out in one tab removes the remembered user; the others follow.
     function onStorage(event: StorageEvent) {
       if (event.key === null || event.key === ACTIVE_SESSION_KEY) setSlotChanges((n) => n + 1)
+      // Nothing in normal anonymous use removes the settings key (the audio source and link keys
+      // go at every session end), so a removal means a sign-in cleared the data. Every sign-in
+      // also writes `ineedtofocus.user` right after clearing, which is the second signal.
+      const clearedAnonymous =
+        event.key === null ||
+        (event.key === ANON_SETTINGS_KEY && event.newValue === null) ||
+        (event.key === USER_KEY && event.newValue !== null)
+      if (clearedAnonymous && !userRef.current) setAnonymousEpoch((n) => n + 1)
       if (event.key !== USER_KEY) return
       if (event.newValue === null) {
         // Another tab signed out or found the sign-in expired. A timer running here keeps its
@@ -379,7 +391,11 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
     )
   }
   if (!user && !showForm) {
-    return <AnonymousContext.Provider value={anonymous}>{children}</AnonymousContext.Provider>
+    return (
+      <AnonymousContext.Provider key={anonymousEpoch} value={anonymous}>
+        {children}
+      </AnonymousContext.Provider>
+    )
   }
   if (!user) {
     return (
