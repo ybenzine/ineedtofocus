@@ -107,10 +107,13 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
   // Read by the event handlers, which are set up once: a second 401 never ends the expired state.
   const expiredRef = useRef(false)
   const userRef = useRef<User | null>(null)
+  // The app is showing without an account (not a form): it follows a sign-in from another tab.
+  const anonymousShownRef = useRef(false)
   useEffect(() => {
     expiredRef.current = expired
     userRef.current = user
-  }, [expired, user])
+    anonymousShownRef.current = !checking && !user && !showForm
+  }, [expired, user, checking, showForm])
   // Signed out: the sign-in screen follows the device, not the last user's explicit theme.
   useEffect(() => {
     if (!checking && !user && showForm) applyTheme('system')
@@ -204,6 +207,21 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
         // this tab's memory (#245); that one also stays, in expired mode.
         if (userRef.current && hasActiveTimer()) setExpired(true)
         else if (userRef.current) endUser()
+      } else if (!userRef.current && anonymousShownRef.current) {
+        // Someone signed in in another tab: that sign-in cleared the anonymous data, so this
+        // tab must not keep showing, or writing back, its stale copy. Follow the sign-in; the
+        // anonymous app then remounts as the account's, with fresh stores (#331).
+        api.me().then(
+          async (current) => {
+            if (!current || userRef.current || !anonymousShownRef.current) return
+            held.discard()
+            await claimLocalData(current)
+            clearAnonymousData()
+            cacheUser(current)
+            setUser(current)
+          },
+          () => undefined,
+        )
       } else if (expiredRef.current) {
         // The same user signed in again in another tab: this one is signed in again too.
         try {
@@ -259,7 +277,7 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
       window.removeEventListener('online', onOnline)
       window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired)
     }
-  }, [flushLogout, api, endUser])
+  }, [flushLogout, api, endUser, held])
 
   const account = useMemo<Account | null>(() => {
     if (!user) return null

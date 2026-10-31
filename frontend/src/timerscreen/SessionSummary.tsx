@@ -1,6 +1,6 @@
 // End-of-session summary (F9): what was saved, with a link to the history (F10, built in #20).
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { FinishOutcome } from '../timer/index.ts'
 import { tagLabel } from '../setup/options.ts'
 import { formatDuration } from './format.ts'
@@ -37,6 +37,11 @@ export default function SessionSummary({
   const headingRef = useRef<HTMLHeadingElement>(null)
   useEffect(() => {
     headingRef.current?.focus()
+  }, [])
+  const [announce, setAnnounce] = useState(false)
+  useEffect(() => {
+    const id = setTimeout(() => setAnnounce(true), 100)
+    return () => clearTimeout(id)
   }, [])
   return (
     <section className="summary" aria-labelledby="summary-title">
@@ -76,9 +81,12 @@ export default function SessionSummary({
               Not saved yet. It is kept on this device and will be saved automatically.
             </p>
           )}
-          {inAccount && !recordPending && (
+          {inAccount && (
+            // Mounted empty and filled afterwards, so a screen reader announces the change.
             <p role="status" className="field-hint">
-              This session is now in your account.
+              {inAccount && !recordPending && announce
+                ? 'This session is now in your account.'
+                : ''}
             </p>
           )}
           {savePrompt && (

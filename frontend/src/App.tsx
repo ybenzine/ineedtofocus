@@ -26,6 +26,7 @@ import ArchiveScreen from './archive/ArchiveScreen.tsx'
 import HistoryScreen from './history/HistoryScreen.tsx'
 import {
   accountSlotHasSession,
+  anonymousSlotHasSession,
   notifySessionExpired,
   registerMemoryTimerProbe,
   registerLocalDataHook,
@@ -419,7 +420,9 @@ function AppBody({
     void player.unlock() // the Start press is the user gesture browsers require before audio
     setNotice(null)
     // One session at a time across both slots (AC6.1): an account's session sits in the other.
-    if (anonymous && accountSlotHasSession()) throw new ActiveSessionExistsError()
+    if (anonymous ? accountSlotHasSession() : anonymousSlotHasSession()) {
+      throw new ActiveSessionExistsError()
+    }
     await timer.start({ config: request.config, tag: request.tag, goal: request.goal })
     // A session started voids any held one, here or in another tab, through the marker.
     anonymous?.held.forgetMarker()

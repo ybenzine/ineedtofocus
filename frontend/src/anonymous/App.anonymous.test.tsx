@@ -1,9 +1,11 @@
+import type { ReactNode } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../App.tsx'
 import { AuthError, type AuthApi, type User } from '../auth/api.ts'
 import AuthGate from '../auth/AuthGate.tsx'
-import { OWNER_KEY } from '../auth/localData.ts'
+import { useAccount } from '../auth/AccountContext.tsx'
+import { OWNER_KEY, USER_KEY } from '../auth/localData.ts'
 import { IndexedDbSessionStore, OwnedActiveSessionStore } from '../sync/index.ts'
 import { MemoryPreferencesStore } from '../setup/preferences.ts'
 import {
@@ -60,7 +62,11 @@ interface Rig {
 }
 
 function renderApp(
-  options: { api?: AuthApi; saveRecord?: (record: unknown) => Promise<void> | void } = {},
+  options: {
+    api?: AuthApi
+    saveRecord?: (record: unknown) => Promise<void> | void
+    extra?: ReactNode
+  } = {},
 ) {
   const api = options.api ?? makeApi()
   const saveRecord = vi.fn(options.saveRecord ?? (() => undefined))
@@ -76,6 +82,7 @@ function renderApp(
         preferences={new MemoryPreferencesStore()}
         pendingRetryMs={50}
       />
+      {options.extra}
     </AuthGate>
   )
   const view = render(ui)
@@ -492,8 +499,20 @@ describe('signing up or in from the prompt', () => {
     expect(screen.getByRole('link', { name: 'View history' })).toBeInTheDocument()
     expect(screen.queryByText(isPrompt)).not.toBeInTheDocument()
     expect(rig.saveRecord).toHaveBeenCalledTimes(1)
-    const record = rig.saveRecord.mock.calls[0]?.[0] as { focusSeconds: number; id: string }
-    expect(record.focusSeconds).toBe(120)
+    // The whole record, unchanged: what the timer finished is what the account saves.
+    expect(rig.saveRecord.mock.calls[0]?.[0]).toEqual({
+      id: expect.any(String),
+      mode: 'countdown',
+      modeConfig: { mode: 'countdown', minutes: 25 },
+      tag: 'work',
+      goal: null,
+      status: 'ended_early',
+      startedAt: new Date(NINE).toISOString(),
+      endedAt: new Date(NINE + 120_000).toISOString(),
+      focusSeconds: 120,
+      pausedSeconds: 0,
+      blocksCompleted: 0,
+    })
     expect(window.location.pathname).toBe('/')
     expect(localStorage.getItem(OWNER_KEY)).toBe(alice.id)
     // Everything anonymous is gone.
@@ -623,5 +642,91 @@ describe('clearing at every sign-in', () => {
       expect(localStorage.getItem(key)).toBe(value)
     }
     expect(apiCalls()).toEqual([])
+  })
+})
+
+function DeleteAccount() {
+  const account = useAccount()
+  return (
+    <button type="button" onClick={() => void account?.accountDeleted()}>
+      simulate deletion
+    </button>
+  )
+}
+
+describe('after an account deletion (AC1.7)', () => {
+  it('a sign-in from the prompt still returns to the summary', async () => {
+    const api = makeApi({ me: vi.fn().mockResolvedValue(alice) })
+    const { rig } = renderApp({ api, extra: <DeleteAccount /> })
+    fireEvent.click(await screen.findByText('simulate deletion'))
+    expect(await screen.findByText('Your account was deleted.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('link', { name: 'Continue without an account' }))
+    await finishAnonymousSession()
+    fireEvent.click(screen.getByRole('link', { name: 'Create an account' }))
+    await screen.findByRole('heading', { name: 'Create your account' })
+    fill('a@b.co', 'longenough1')
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
+    expect(await screen.findByText('This session is now in your account.')).toBeInTheDocument()
+    expect(rig.saveRecord).toHaveBeenCalledTimes(1)
+    expect(window.location.pathname).toBe('/')
+  })
+})
+
+describe('a stale anonymous tab after a sign-in in another tab', () => {
+  it('follows the sign-in and never writes its old settings back', async () => {
+    const api = makeApi()
+    renderApp({ api })
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    await screen.findByRole('heading', { name: 'Settings' })
+    fireEvent.click(screen.getByRole('radio', { name: 'Dark' }))
+    expect(localStorage.getItem(ANON_SETTINGS_KEY)).not.toBeNull()
+
+    // Another tab signs in: it clears the anonymous keys and records the user.
+    localStorage.removeItem(ANON_SETTINGS_KEY)
+    localStorage.setItem(OWNER_KEY, alice.id)
+    localStorage.setItem(USER_KEY, JSON.stringify(alice))
+    vi.mocked(api.me).mockResolvedValue(alice)
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: USER_KEY, newValue: JSON.stringify(alice) }),
+      )
+    })
+    expect(await screen.findByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    expect(
+      screen.queryByText(/Without an account, your settings are saved on this device only/),
+    ).not.toBeInTheDocument()
+    expect(localStorage.getItem(ANON_SETTINGS_KEY)).toBeNull()
+  })
+
+  it('cannot start an anonymous session once an account is signed in', async () => {
+    const api = makeApi()
+    renderApp({ api })
+    await screen.findByRole('button', { name: 'Start' })
+    localStorage.setItem(OWNER_KEY, alice.id)
+    localStorage.setItem(USER_KEY, JSON.stringify(alice))
+    vi.mocked(api.me).mockResolvedValue(alice)
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: USER_KEY, newValue: JSON.stringify(alice) }),
+      )
+    })
+    await screen.findByRole('button', { name: 'Sign out' })
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    expect(localStorage.getItem(ANON_ACTIVE_SESSION_KEY)).toBeNull()
+    expect(localStorage.getItem(ACTIVE_SESSION_KEY)).not.toBeNull()
+  })
+
+  it("the account's start refuses while the anonymous slot holds a session (AC6.1)", async () => {
+    renderApp({ api: makeApi({ me: vi.fn().mockResolvedValue(alice) }) })
+    const start = await screen.findByRole('button', { name: 'Start' })
+    // A stale tab starts an anonymous session after the sign-in cleared the anonymous keys.
+    const stale = new TimerController({
+      store: new LocalActiveSessionStore(localStorage, ANON_ACTIVE_SESSION_KEY),
+      saveRecord: () => undefined,
+    })
+    await stale.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
+    fireEvent.click(start)
+    expect(await screen.findByText(/already active/)).toBeInTheDocument()
   })
 })

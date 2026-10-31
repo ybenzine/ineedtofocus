@@ -1,3 +1,4 @@
+import { ANON_ACTIVE_SESSION_KEY } from '../anonymous/keys.ts'
 import { AUDIO_SOURCE_KEY, YOUTUBE_LINK_KEY } from '../sounds/audioSource.ts'
 import { SETTINGS_KEY } from '../settings/store.ts'
 import { ACTIVE_OWNER_KEY } from '../sync/owner.ts'
@@ -102,6 +103,11 @@ export function hasOwner(): boolean {
  */
 export function accountSlotHasSession(): boolean {
   return parseStoredTimer(read(ACTIVE_SESSION_KEY)) !== null
+}
+
+/** True if the anonymous slot holds a session (#331): an account's start must wait for it. */
+export function anonymousSlotHasSession(): boolean {
+  return parseStoredTimer(read(ANON_ACTIVE_SESSION_KEY)) !== null
 }
 
 export const ACTIVE_TIMER_MESSAGE = 'End your session before signing out.'
