@@ -14,6 +14,7 @@ import {
   TimerController,
   type StoredTimer,
 } from '../timer/index.ts'
+import { DEFAULT_SETTINGS } from '../settings/api.ts'
 import { SETTINGS_KEY } from '../settings/store.ts'
 import {
   ANON_ACTIVE_SESSION_KEY,
@@ -781,5 +782,46 @@ describe('anonymous use never runs beside a signed-in device', () => {
     await screen.findByRole('timer')
     expect(localStorage.getItem(ANON_ACTIVE_SESSION_KEY)).toBeNull()
     expect(localStorage.getItem(ACTIVE_SESSION_KEY)).not.toBeNull()
+  })
+})
+
+describe('a stale anonymous tab whose follow does not adopt a user (#396)', () => {
+  const cases: [string, () => Promise<never> | Promise<null>][] = [
+    ['/me answers 401 (the other tab signed out again)', () => Promise.resolve(null)],
+    [
+      'the network fails and no user is cached',
+      () => Promise.reject(new AuthError('network', 'offline')),
+    ],
+    ['/me answers another 4xx', () => Promise.reject(new AuthError('rate_limited', 'slow down'))],
+  ]
+
+  it.each(cases)('remounts with fresh stores when %s', async (_name, meAnswer) => {
+    const api = makeApi()
+    renderApp({ api })
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings' }))
+    await screen.findByRole('heading', { name: 'Settings' })
+    fireEvent.click(screen.getByRole('radio', { name: 'Dark' }))
+    expect(screen.getByRole('radio', { name: 'Dark' })).toBeChecked()
+
+    // Another tab signs in (clearing the anonymous keys) and then out again.
+    localStorage.removeItem(ANON_SETTINGS_KEY)
+    vi.mocked(api.me).mockImplementation(meAnswer)
+    act(() => {
+      window.dispatchEvent(new StorageEvent('storage', { key: ANON_SETTINGS_KEY, newValue: null }))
+      window.dispatchEvent(
+        new StorageEvent('storage', { key: USER_KEY, newValue: JSON.stringify(alice) }),
+      )
+    })
+    await waitFor(() =>
+      expect(screen.getByRole('radio', { name: 'System (default)' })).toBeChecked(),
+    )
+    expect(localStorage.getItem(ANON_SETTINGS_KEY)).toBeNull()
+
+    // The next edit writes the defaults plus that edit, never the old Dark.
+    fireEvent.click(screen.getByRole('radio', { name: 'Light' }))
+    const stored = JSON.parse(localStorage.getItem(ANON_SETTINGS_KEY) ?? '{}') as {
+      values: Record<string, unknown>
+    }
+    expect(stored.values).toEqual({ ...DEFAULT_SETTINGS, theme: 'light' })
   })
 })
