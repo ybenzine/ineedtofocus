@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SETTINGS_KEY } from '../settings/store.ts'
+import { TAGS_KEY } from '../tags/store.ts'
 import { LocalActiveSessionStore, TimerController } from '../timer/index.ts'
 import { ACTIVE_SESSION_KEY } from '../timer/store.ts'
 import AccountBar from './AccountBar.tsx'
@@ -106,6 +107,7 @@ function seedUserData() {
     localStorage.setItem(`ineedtofocus.${legacy}`, '1')
   }
   localStorage.setItem(YOUTUBE_LINK_KEY, 'https://youtu.be/dQw4w9WgXcQ')
+  localStorage.setItem(TAGS_KEY, JSON.stringify({ owner: 'u', tags: [] }))
   localStorage.setItem('someone.elses.key', 'keep me')
 }
 
@@ -302,7 +304,7 @@ describe('sign out', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     expect(api.signOut).toHaveBeenCalled()
-    for (const key of [SETTINGS_KEY, USER_KEY, OWNER_KEY, YOUTUBE_LINK_KEY]) {
+    for (const key of [SETTINGS_KEY, TAGS_KEY, USER_KEY, OWNER_KEY, YOUTUBE_LINK_KEY]) {
       expect(localStorage.getItem(key)).toBeNull()
     }
     for (const legacy of ['preferences', 'keepAwake', 'alertVolume']) {

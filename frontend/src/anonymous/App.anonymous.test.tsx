@@ -323,6 +323,23 @@ describe('what an anonymous user can do', () => {
     expect(apiCalls()).toEqual([])
   })
 
+  it('offers only the six built-in tags, and the Tags section points to sign-up and log-in, with no /api/tags call (AC1.8, AC7.9)', async () => {
+    renderApp()
+    const picker = await screen.findByRole('group', { name: 'Tag' })
+    expect(within(picker).getAllByRole('radio')).toHaveLength(6)
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await screen.findByRole('heading', { name: 'Tags' })
+    const tags = screen.getByRole('region', { name: 'Tags' })
+    expect(tags).toHaveTextContent('Create an account or log in to add your own tags.')
+    expect(within(tags).getByRole('link', { name: 'Create an account' })).toHaveAttribute(
+      'href',
+      '/signup',
+    )
+    expect(within(tags).getByRole('link', { name: 'log in' })).toHaveAttribute('href', '/login')
+    expect(within(tags).queryByLabelText('Tag name')).not.toBeInTheDocument()
+    expect(apiCalls()).toEqual([])
+  })
+
   it('remembers the audio source and YouTube link under the anonymous keys, with no recent list', async () => {
     renderApp()
     fireEvent.click(await screen.findByRole('radio', { name: 'YouTube' }))

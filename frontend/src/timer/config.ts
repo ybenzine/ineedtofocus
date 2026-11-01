@@ -4,10 +4,11 @@ export const MINUTE_MS = 60_000
 
 export type Mode = 'countdown' | 'pomodoro' | 'unlimited'
 
-/** AC7.1: the fixed set of tags, in display order. */
+/** AC7.1: the six built-in tags, in display order. */
 export const TAGS = ['work', 'study', 'nap', 'read', 'meditation', 'exercise'] as const
 
-export type Tag = (typeof TAGS)[number]
+/** A built-in tag's identifier, or a custom tag's id (a UUID; AC7.4). */
+export type Tag = string
 
 /** AC2.1: 1–240 whole minutes. */
 export interface CountdownConfig {

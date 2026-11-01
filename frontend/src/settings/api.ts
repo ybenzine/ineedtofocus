@@ -1,6 +1,6 @@
 // The Settings API (#12): GET and partial PATCH of /api/settings.
 
-import { TAGS, type Tag } from '../timer/index.ts'
+import { type Tag } from '../timer/index.ts'
 
 /** The Pomodoro configuration as the API stores it (snake_case, no `mode`). */
 export interface ApiPomodoroConfig {
@@ -119,9 +119,8 @@ export function parseSettings(value: unknown): Settings {
       ? (reminder as ReminderSetting)
       : null,
     pomodoro_config: parsePomodoro(value.pomodoro_config),
-    last_tag: (TAGS as readonly unknown[]).includes(value.last_tag)
-      ? (value.last_tag as Tag)
-      : null,
+    last_tag:
+      typeof value.last_tag === 'string' && value.last_tag !== '' ? (value.last_tag as Tag) : null,
     theme: (THEME_SETTINGS as readonly unknown[]).includes(value.theme)
       ? (value.theme as ThemeSetting)
       : d.theme,

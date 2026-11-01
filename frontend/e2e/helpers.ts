@@ -1,5 +1,4 @@
 import type { Tag } from '../src/timer/config.ts'
-import { tagLabel } from '../src/setup/options.ts'
 import { expect, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test'
 
 export const PASSWORD = 'correct horse battery'
@@ -72,7 +71,10 @@ export async function startCountdown(page: Page, options: CountdownOptions = {})
   await page.getByRole('radio', { name: 'Countdown' }).check()
   await page.getByLabel('Duration').fill(String(minutes))
   // The radio labels are capitalised ("Study"); the tag keys are not.
-  if (tag) await page.getByRole('radio', { name: tagLabel(tag), exact: true }).check()
+  if (tag)
+    await page
+      .getByRole('radio', { name: tag.charAt(0).toUpperCase() + tag.slice(1), exact: true })
+      .check()
   if (goal) await page.getByLabel(/What are you focusing on/).fill(goal)
   await page.getByRole('button', { name: 'Start' }).click()
   await expect(page.getByRole('timer', { name: 'Time' })).toBeVisible()

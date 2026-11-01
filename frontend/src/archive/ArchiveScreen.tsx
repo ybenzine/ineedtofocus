@@ -7,7 +7,7 @@ import { deviceTimeZone } from '../history/api.ts'
 import { formatDate, formatTime } from '../history/model.ts'
 import { markArchivedOnDevice, reconcileArchivedGone } from '../sync/reconcile.ts'
 import type { SessionStore } from '../sync/sessionStore.ts'
-import { tagLabel } from '../setup/options.ts'
+import TagName from '../tags/TagName.tsx'
 import { formatDuration } from '../timerscreen/format.ts'
 import { HttpArchiveApi, type ArchiveApi, type ArchivedSession } from './api.ts'
 
@@ -225,7 +225,7 @@ export default function ArchiveScreen({
         </p>
         <p className="history-row-main">
           <span>{MODE_LABEL[s.mode]}</span>
-          <span className="timer-tag">{tagLabel(s.tag)}</span>
+          <TagName tag={s.tag} className="timer-tag" />
           <span>{formatDuration(s.focusSeconds)}</span>
           <span>{STATUS_LABEL[s.status]}</span>
         </p>

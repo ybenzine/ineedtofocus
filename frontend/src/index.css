@@ -29,6 +29,15 @@
   --accent-hover: #b9bdff; /* hover or pressed accent */
   --on-accent: #0d0d33; /* text on accent fills */
   --error: #ff8a80; /* error text (#149) */
+  /* Tag colours (#401, AC7.5): decorative dots, 3:1 against --bg and --surface of the set. */
+  --tag-indigo: #8c93ff;
+  --tag-blue: #5fb0ff;
+  --tag-teal: #3fd0c0;
+  --tag-green: #6fd37a;
+  --tag-yellow: #e8c547;
+  --tag-orange: #ff9f5a;
+  --tag-red: #ff7a7a;
+  --tag-pink: #ff8ec9;
 
   font-family: 'Inter Variable', Inter, system-ui, 'Segoe UI', Roboto, sans-serif;
   font-size: 16px;
@@ -53,6 +62,14 @@
     --accent-hover: #2a2ea8;
     --on-accent: #fafaff;
     --error: #b3261e;
+    --tag-indigo: #4146d1;
+    --tag-blue: #1f6fc2;
+    --tag-teal: #0b7f77;
+    --tag-green: #2e7d32;
+    --tag-yellow: #8a6a00;
+    --tag-orange: #b8520a;
+    --tag-red: #c62828;
+    --tag-pink: #c2185b;
     color-scheme: light;
   }
 }
@@ -68,6 +85,14 @@
   --accent-hover: #2a2ea8;
   --on-accent: #fafaff;
   --error: #b3261e;
+  --tag-indigo: #4146d1;
+  --tag-blue: #1f6fc2;
+  --tag-teal: #0b7f77;
+  --tag-green: #2e7d32;
+  --tag-yellow: #8a6a00;
+  --tag-orange: #b8520a;
+  --tag-red: #c62828;
+  --tag-pink: #c2185b;
   color-scheme: light;
 }
 
@@ -83,6 +108,14 @@
   --accent-hover: #b9bdff;
   --on-accent: #0d0d33;
   --error: #ff8a80;
+  --tag-indigo: #8c93ff;
+  --tag-blue: #5fb0ff;
+  --tag-teal: #3fd0c0;
+  --tag-green: #6fd37a;
+  --tag-yellow: #e8c547;
+  --tag-orange: #ff9f5a;
+  --tag-red: #ff7a7a;
+  --tag-pink: #ff8ec9;
   color-scheme: dark;
 }
 
@@ -1160,4 +1193,159 @@ main.focus-screen {
 
 .youtube-now-playing {
   margin: 0;
+}
+
+/* Tag dots (#401, AC7.8): decorative, before the tag's name. A ring in the text colour keeps the
+   dot visible on a selected chip, whose fill is the accent. */
+.tag-dot {
+  flex: none;
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.choices .choice:has(input[type='radio']:checked) .tag-dot,
+button[aria-pressed='true'] .tag-dot {
+  box-shadow: 0 0 0 2px currentColor;
+  margin-inline: 2px;
+}
+
+.tag-dot-indigo {
+  background: var(--tag-indigo);
+}
+.tag-dot-blue {
+  background: var(--tag-blue);
+}
+.tag-dot-teal {
+  background: var(--tag-teal);
+}
+.tag-dot-green {
+  background: var(--tag-green);
+}
+.tag-dot-yellow {
+  background: var(--tag-yellow);
+}
+.tag-dot-orange {
+  background: var(--tag-orange);
+}
+.tag-dot-red {
+  background: var(--tag-red);
+}
+.tag-dot-pink {
+  background: var(--tag-pink);
+}
+
+.tag-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.tag-name-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.history-tags button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+  text-align: left;
+}
+
+/* Settings → Tags (#401). */
+.tag-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tag-list > li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.tag-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tag-colors {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.tag-colors legend {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 0;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.tag-colors .choices {
+  gap: 0.25rem 0.5rem;
+}
+
+.tag-colors .choice {
+  padding: 0 0.75rem;
+}
+
+.tag-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.tag-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.tag-field > label {
+  overflow-wrap: anywhere;
+  font-size: 0.9375rem;
+  color: var(--muted);
+}
+
+/* A card like the other Settings groups; a div, so the .settings > section rules don't apply. */
+.tags-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+}
+
+.tags-section h2,
+.tags-section h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.tags-section p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A select is as wide as its longest option: keep a 24-character tag name inside the form (#401). */
+.history-edit .field {
+  min-width: 0;
 }

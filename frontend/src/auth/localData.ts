@@ -1,6 +1,7 @@
 import { ANON_ACTIVE_SESSION_KEY } from '../anonymous/keys.ts'
 import { AUDIO_SOURCE_KEY, YOUTUBE_LINK_KEY } from '../sounds/audioSource.ts'
 import { SETTINGS_KEY } from '../settings/store.ts'
+import { TAGS_KEY } from '../tags/store.ts'
 import { ACTIVE_OWNER_KEY } from '../sync/owner.ts'
 import { finishedRecordOf, parkSession } from '../sync/parked.ts'
 import { SAVE_TIMEOUT_MS, withTimeout } from '../sync/saveRecord.ts'
@@ -28,6 +29,7 @@ const LEGACY_USER_DATA_KEYS = [
 /** Data that belongs to one user. Cleared on sign-out and when a different user signs in. */
 const USER_DATA_KEYS = [
   SETTINGS_KEY,
+  TAGS_KEY,
   ACTIVE_SESSION_KEY,
   ACTIVE_OWNER_KEY,
   AUDIO_SOURCE_KEY,

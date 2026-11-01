@@ -39,6 +39,9 @@ function renderScreen(store = new SettingsStore()) {
   return { store, ...audio }
 }
 
+/** The sync note: the first status region (the Tags section has its own, after it). */
+const settingsNote = (): HTMLElement => screen.getAllByRole('status')[0] as HTMLElement
+
 describe('SettingsScreen', () => {
   it('shows the defaults for a new user', () => {
     renderScreen()
@@ -113,7 +116,7 @@ describe('SettingsScreen', () => {
       },
     })
     renderScreen(store)
-    expect(within(screen.getByRole('status')).queryByText(/sync/)).toBeNull()
+    expect(within(settingsNote()).queryByText(/sync/)).toBeNull()
     fireEvent.change(screen.getByLabelText('Week starts on'), { target: { value: '2' } })
     expect(await screen.findByText(/sync when you.re back online/)).toBeInTheDocument()
   })
@@ -124,7 +127,7 @@ describe('SettingsScreen', () => {
     })
     renderScreen(store)
     fireEvent.change(screen.getByLabelText('Week starts on'), { target: { value: '2' } })
-    expect(screen.getByRole('status')).toHaveTextContent('')
+    expect(settingsNote()).toHaveTextContent('')
   })
 
   it('follows a synced alert volume arriving while Settings is open', () => {
