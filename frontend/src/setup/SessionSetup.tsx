@@ -244,8 +244,10 @@ export default function SessionSetup({
   // The live region says the line again only when the user changed something, never when the
   // clock moved on: its text is fixed from the render in which the length or mode changed.
   const announceKey = `${mode}|${lengthText}`
+  // Spoken, "→" would be read as "right arrow".
   const [announced, setAnnounced] = useState({ key: announceKey, text: line })
   if (announced.key !== announceKey) setAnnounced({ key: announceKey, text: line })
+  const spoken = announced.text.replace(' → ', ', ends at ')
 
   const arcs =
     mode === 'countdown'
@@ -279,6 +281,8 @@ export default function SessionSetup({
       })
       if (toStart.mode === 'pomodoro') preferences.save({ tag, pomodoro: toStart })
       else preferences.save({ ...preferences.load(), tag })
+      // The next setup is a new one (AC2.6), beginning from what this session just saved.
+      model.reset(defaultValues(preferences.load(), defaultReminderMinutes))
     } catch (error) {
       model.setFailure(error instanceof Error ? error.message : 'The session could not be started.')
     } finally {
@@ -359,7 +363,7 @@ export default function SessionSetup({
                 onChange={(event) => model.edit({ countdown: event.target.value })}
               />
               <span className="dial-unit">minutes</span>
-              <DialLine line={line} announced={announced.text} />
+              <DialLine line={line} />
             </Dial>
             <StepButton
               large
@@ -392,7 +396,7 @@ export default function SessionSetup({
                 onChange={(event) => model.edit({ focus: event.target.value })}
               />
               <span className="dial-unit">min focus</span>
-              <DialLine line={line} announced={announced.text} />
+              <DialLine line={line} />
             </Dial>
             <StepButton
               large
@@ -410,10 +414,15 @@ export default function SessionSetup({
                 ∞
               </span>
               <span className="dial-unit">no time limit</span>
-              <DialLine line={line} announced={announced.text} />
+              <DialLine line={line} />
             </Dial>
           </div>
         )}
+
+        {/* One region for every mode, so a mode change is announced: it changes text, never node. */}
+        <span className="sr-only" role="status" aria-live="polite">
+          {spoken}
+        </span>
 
         <div id={errorId} className="setup-errors" aria-live="polite">
           {errorList.map(([field, message]) => (
@@ -643,19 +652,11 @@ export default function SessionSetup({
   )
 }
 
-/**
- * The summary line. What is drawn follows the clock; what a screen reader hears is a separate
- * live region that only changes when the user changes the setup (AC9).
- */
-function DialLine({ line, announced }: { line: string; announced: string }) {
+/** The summary line as drawn: it follows the clock, and is hidden from screen readers (see the status region). */
+function DialLine({ line }: { line: string }) {
   return (
-    <>
-      <span className="dial-line" data-testid="dial-line" aria-hidden="true">
-        {line}
-      </span>
-      <span className="sr-only" role="status" aria-live="polite">
-        {announced}
-      </span>
-    </>
+    <span className="dial-line" data-testid="dial-line" aria-hidden="true">
+      {line}
+    </span>
   )
 }

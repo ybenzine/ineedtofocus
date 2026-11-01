@@ -483,8 +483,6 @@ function AppBody({
       linksApi.use(request.youtubeLink).catch(() => undefined)
     }
     setAudio(request.audio)
-    // The next setup is a new one (AC2.6).
-    setup.reset()
     setView({ name: 'timer' })
   }
 

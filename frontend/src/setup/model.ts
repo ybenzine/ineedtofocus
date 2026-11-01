@@ -68,8 +68,11 @@ export interface SetupModel {
   edit: (patch: SetupEdits) => void
   setStarting: (starting: boolean) => void
   setFailure: (failure: string | null) => void
-  /** Begins a new setup: after a session has started. Edits go; the defaults show again. */
-  reset: () => void
+  /**
+   * Begins a new setup, after a session has started. Edits go; the defaults show again. Pass the
+   * defaults as saved by that session, so the new setup begins from them.
+   */
+  reset: (next?: SetupValues) => void
 }
 
 interface State {
@@ -106,8 +109,13 @@ export function useSetupModel(defaults: SetupValues): SetupModel {
   const setFailure = useCallback((failure: string | null) => {
     setState((current) => ({ ...current, failure }))
   }, [])
-  const reset = useCallback(() => {
-    setState((current) => ({ ...current, edits: {}, began: latest.current, failure: null }))
+  const reset = useCallback((next?: SetupValues) => {
+    setState((current) => ({
+      ...current,
+      edits: {},
+      began: next ?? latest.current,
+      failure: null,
+    }))
   }, [])
 
   return {

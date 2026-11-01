@@ -1514,15 +1514,15 @@ main.setup-screen:has(~ .tab-bar) {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 1.125rem;
-  padding-bottom: 0.75rem;
+  gap: 1rem;
+  padding-bottom: 0.5rem;
 }
 
 .setup-footer {
   position: sticky;
   bottom: var(--tab-bar-height);
   z-index: 2;
-  padding-block: 0.75rem;
+  padding-block: 0.625rem;
   background: var(--bg);
 }
 
@@ -1627,7 +1627,7 @@ main.setup-screen:has(~ .tab-bar) {
 }
 
 .dial-small {
-  max-width: 13rem;
+  max-width: 12.5rem;
 }
 
 .dial-ring {
@@ -1750,7 +1750,7 @@ main.setup-screen:has(~ .tab-bar) {
 
 /* An empty live region adds no height, nor the two flex gaps around it. */
 .setup-errors:empty {
-  margin-block: -0.5625rem;
+  margin-block: -0.5rem;
 }
 
 /* Presets and reminders: chips that show their state. */
@@ -1874,7 +1874,7 @@ main.setup-screen:has(~ .tab-bar) {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  min-height: 3.25rem;
+  min-height: 3rem;
   padding: 0 0.875rem 0 1rem;
   border-bottom: 1px solid var(--border);
 }

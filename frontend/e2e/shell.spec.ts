@@ -20,11 +20,11 @@ const SCREENS = [
   ['Settings', '/settings'],
 ] as const
 
-async function expectNoSeriousViolations(page: Page): Promise<void> {
+async function expectNoSeriousViolations(page: Page, screen?: 'New session'): Promise<void> {
   // On a 568 px phone New session scrolls under its pinned Start (#407, AC1), so axe sees the rows
   // behind it as partly covered until they are scrolled into view; the target size is checked on
   // the taller phones.
-  const short = (page.viewportSize()?.height ?? Infinity) < 600
+  const short = screen === 'New session' && (page.viewportSize()?.height ?? Infinity) < 600
   const results = await new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
     .disableRules(short ? ['target-size'] : [])
@@ -96,7 +96,7 @@ for (const scheme of ['dark', 'light'] as const) {
         await openAccountMenu(page)
         await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible()
         await expectNoSidewaysScroll(page)
-        await expectNoSeriousViolations(page)
+        await expectNoSeriousViolations(page, 'New session')
       })
 
       test('signed out: Log in in the header and no overflow', async ({ page }) => {
@@ -107,7 +107,7 @@ for (const scheme of ['dark', 'light'] as const) {
         await expect(page.getByRole('link', { name: 'Create account' })).toHaveCount(0)
         await expectOneRow(page)
         await expectNoSidewaysScroll(page)
-        await expectNoSeriousViolations(page)
+        await expectNoSeriousViolations(page, 'New session')
       })
     })
   }

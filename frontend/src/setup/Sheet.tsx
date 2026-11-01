@@ -4,9 +4,7 @@
 
 import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
-
-const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+import { FOCUSABLE, tabbable } from './tabbable.ts'
 
 export interface SheetProps {
   title: string
@@ -45,7 +43,7 @@ export default function Sheet({
         return
       }
       if (event.key !== 'Tab' || !dialog.current) return
-      const items = [...dialog.current.querySelectorAll<HTMLElement>(FOCUSABLE)]
+      const items = tabbable(dialog.current)
       if (items.length === 0) {
         event.preventDefault()
         return

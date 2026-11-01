@@ -212,15 +212,36 @@ describe('SessionSetup summary line', () => {
     setup()
     const live = screen.getByRole('status')
     expect(line()).toHaveTextContent('30m → 2:35 pm')
-    expect(live).toHaveTextContent('30m → 2:35 pm')
+    expect(live).toHaveTextContent('30m, ends at 2:35 pm')
     act(() => {
       vi.advanceTimersByTime(CLOCK_REFRESH_MS * 3)
     })
     expect(line()).toHaveTextContent('30m → 2:36 pm')
     // What a screen reader hears is unchanged until the user changes something.
-    expect(live).toHaveTextContent('30m → 2:35 pm')
+    expect(live).toHaveTextContent('30m, ends at 2:35 pm')
     typeDuration('45')
-    expect(live).toHaveTextContent('45m → 2:51 pm')
+    expect(live).toHaveTextContent('45m, ends at 2:51 pm')
+  })
+
+  it('keeps one status region through a mode change and updates its text', () => {
+    setup()
+    const live = screen.getByRole('status')
+    expect(live).toHaveTextContent(/^30m, ends at /)
+    chooseMode('Pomodoro')
+    expect(screen.getByRole('status')).toBe(live)
+    expect(live).toHaveTextContent(/^1h 55m, ends at /)
+    chooseMode('Unlimited')
+    expect(screen.getByRole('status')).toBe(live)
+    expect(live).toHaveTextContent('no reminders')
+    chooseMode('Countdown')
+    expect(screen.getByRole('status')).toBe(live)
+    expect(live).toHaveTextContent(/^30m, ends at /)
+  })
+
+  it('speaks the arrow as "ends at" in the status region only', () => {
+    setup()
+    expect(screen.getByRole('status').textContent).not.toContain('→')
+    expect(screen.getByTestId('dial-line').textContent).toContain('→')
   })
 
   it('is a polite live region and hides its drawn copy from screen readers', () => {
@@ -626,6 +647,22 @@ describe('SessionSetup Tag & goal sheet', () => {
     expect(document.activeElement).toBe(firstFocusable)
   })
 
+  it.each(['None', 'Rain'] as const)(
+    'traps Tab in the Sound sheet with %s chosen, forward and back',
+    (choice) => {
+      setup()
+      pickSound(choice)
+      const sheet = openSheet('Sound')
+      const done = within(sheet).getByRole('button', { name: 'Done' })
+      const checked = within(sheet).getByRole('radio', { name: choice })
+      checked.focus()
+      fireEvent.keyDown(document, { key: 'Tab' })
+      expect(document.activeElement).toBe(done)
+      fireEvent.keyDown(document, { key: 'Tab', shiftKey: true })
+      expect(document.activeElement).toBe(checked)
+    },
+  )
+
   it('does not start the session when Enter is pressed in the goal field', () => {
     const { onStart } = setup()
     const sheet = openSheet('Goal')
@@ -722,6 +759,29 @@ describe('SessionSetup starting', () => {
       finish()
     })
     expect(start()).toBeEnabled()
+  })
+})
+
+describe('SessionSetup after a start', () => {
+  it('begins the next setup from what the session saved', async () => {
+    const preferences = new MemoryPreferencesStore()
+    const onStart = vi.fn()
+    const first = render(<SessionSetup preferences={preferences} onStart={onStart} />)
+    chooseMode('Pomodoro')
+    typeFocus('40')
+    fireEvent.click(start())
+    await waitFor(() => expect(preferences.load().pomodoro.focusMinutes).toBe(40))
+    await waitFor(() => expect(start()).toBeEnabled())
+    // The next setup shows 40; typing 40 again is not a change from where it began.
+    chooseMode('Pomodoro')
+    typeFocus('40')
+    chooseMode('Countdown')
+    expect(document.querySelector('form')).not.toHaveAttribute('data-holds-update')
+    chooseMode('Pomodoro')
+    typeFocus('45')
+    chooseMode('Countdown')
+    expect(document.querySelector('form')).toHaveAttribute('data-holds-update')
+    first.unmount()
   })
 })
 

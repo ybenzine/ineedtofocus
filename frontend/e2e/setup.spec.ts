@@ -101,6 +101,24 @@ test('a sheet traps focus, closes with Escape and returns focus to its row', asy
   await closeSheet(page)
 })
 
+test('the Sound sheet keeps Tab inside with None or Rain chosen', async ({ page }) => {
+  await installClock(page)
+  await signUp(page, newEmail())
+  for (const choice of ['None', 'Rain'] as const) {
+    const sheet = await openSheet(page, 'Sound')
+    await sheet.getByRole('radio', { name: choice }).check()
+    for (const shift of [false, true]) {
+      for (let i = 0; i < 6; i++) {
+        await page.keyboard.press(shift ? 'Shift+Tab' : 'Tab')
+        expect(
+          await page.evaluate(() => !!document.activeElement?.closest('[role="dialog"]')),
+        ).toBe(true)
+      }
+    }
+    await closeSheet(page)
+  }
+})
+
 // Layout: no sideways scroll and Start in view at a small phone, a phone and a desktop; at 390 x 844
 // the whole screen fits without scrolling, in each mode and both themes.
 for (const scheme of ['dark', 'light'] as const) {
@@ -126,6 +144,21 @@ for (const scheme of ['dark', 'light'] as const) {
             )
             expect(overflow).toBeLessThanOrEqual(0)
           }
+        })
+      }
+
+      if (width === 390) {
+        test('Pomodoro with the Long break on fits without scrolling', async ({ page }) => {
+          await installClock(page)
+          await signUp(page, newEmail())
+          await page.getByRole('radio', { name: 'Pomodoro' }).check()
+          await page.getByRole('switch', { name: /long break/i }).check()
+          await expect(page.getByLabel('Long break in minutes, 5 to 60')).toBeVisible()
+          await expect(page.getByRole('button', { name: 'Start' })).toBeInViewport({ ratio: 1 })
+          const overflow = await page.evaluate(
+            () => document.documentElement.scrollHeight - document.documentElement.clientHeight,
+          )
+          expect(overflow).toBeLessThanOrEqual(0)
         })
       }
 
