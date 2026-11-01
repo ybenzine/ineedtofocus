@@ -51,6 +51,10 @@ class UserSettings(Base):
         ),
         CheckConstraint("last_tag IS NULL OR " + in_list("last_tag", TAGS), name="last_tag"),
         CheckConstraint(in_list("theme", THEMES), name="theme"),
+        CheckConstraint(
+            "countdown_recent_minutes IS NULL OR countdown_recent_minutes BETWEEN 1 AND 240",
+            name="countdown_recent_minutes",
+        ),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
@@ -65,6 +69,9 @@ class UserSettings(Base):
     default_reminder_minutes: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     # Last-used Pomodoro configuration (AC12.5); NULL until first use.
     pomodoro_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Last custom Countdown length in minutes (#405, AC2.7); NULL = none. Not checked against
+    # the presets: those are a client rule.
+    countdown_recent_minutes: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     # Like `FocusSession.tag`: "work" here plus `custom_tag_id` means a custom last-used tag.
     last_tag: Mapped[str | None] = mapped_column(String(16), nullable=True)
     custom_tag_id: Mapped[uuid.UUID | None] = mapped_column(

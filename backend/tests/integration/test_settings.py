@@ -29,6 +29,7 @@ DEFAULTS = {
     "pomodoro_config": None,
     "last_tag": None,
     "theme": "system",
+    "countdown_recent_minutes": None,
 }
 POMODORO = {
     "focus_minutes": 50,
@@ -126,6 +127,43 @@ def test_updated_at_moves_on_update(client: TestClient) -> None:
     assert after > before
 
 
+def test_408_recent_countdown_is_null_set_changed_and_cleared(client: TestClient) -> None:
+    first = client.get("/api/settings").json()
+    assert first["countdown_recent_minutes"] is None
+    stamps = [first["updated_at"]]
+    for value in (25, 240, 1, None):
+        r = client.patch("/api/settings", json={"countdown_recent_minutes": value})
+        assert r.status_code == 200
+        assert r.json()["countdown_recent_minutes"] == value
+        assert client.get("/api/settings").json()["countdown_recent_minutes"] == value
+        stamps.append(r.json()["updated_at"])
+    assert stamps == sorted(stamps) and len(set(stamps)) == len(stamps)
+
+
+def test_408_omitted_recent_countdown_is_left_unchanged(client: TestClient) -> None:
+    client.patch("/api/settings", json={"countdown_recent_minutes": 25})
+    client.patch("/api/settings", json={"alert_volume": 10})
+    assert client.patch("/api/settings", json={}).json()["countdown_recent_minutes"] == 25
+    # Not checked against the presets: 30 is accepted.
+    assert client.patch("/api/settings", json={"countdown_recent_minutes": 30}).status_code == 200
+
+
+def test_408_invalid_recent_countdown_is_422_naming_the_field(client: TestClient) -> None:
+    r = client.patch("/api/settings", json={"countdown_recent_minutes": 241})
+    assert r.status_code == 422
+    assert "countdown_recent_minutes" in json.dumps(r.json())
+
+
+def test_408_recent_countdown_is_per_user_and_in_the_export(make_client: MakeClient) -> None:
+    with make_client() as a, make_client() as b:
+        signup(a, "a@example.com")
+        signup(b, "b@example.com")
+        a.patch("/api/settings", json={"countdown_recent_minutes": 25})
+        assert b.get("/api/settings").json()["countdown_recent_minutes"] is None
+        exported = a.get("/api/account/export").json()
+        assert exported["settings"]["countdown_recent_minutes"] == 25
+
+
 @pytest.mark.parametrize(
     "patch",
     [
@@ -144,6 +182,13 @@ def test_updated_at_moves_on_update(client: TestClient) -> None:
         {"theme": "sepia"},
         {"theme": None},
         {"theme": "Dark"},
+        {"countdown_recent_minutes": 0},
+        {"countdown_recent_minutes": 241},
+        {"countdown_recent_minutes": -5},
+        {"countdown_recent_minutes": "30"},
+        {"countdown_recent_minutes": 30.5},
+        {"countdown_recent_minutes": 30.0},
+        {"countdown_recent_minutes": True},
         {"unknown": 1},
     ],
 )
