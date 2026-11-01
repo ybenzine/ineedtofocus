@@ -26,7 +26,9 @@ from sqlalchemy.dialects.postgresql import insert
 from app.deps import CurrentUser, DbSession
 from app.errors import ErrorResponse
 from app.models import UserSettings, YoutubeRecentLink
-from app.models.enums import Tag, Theme
+from app.models.enums import TAGS, Theme
+from app.models.tag_ref import is_stale
+from app.tags_api import TagValue, owned_tag_ids, unknown_tag_error
 
 router = APIRouter(prefix="/api", tags=["settings"])
 
@@ -62,7 +64,10 @@ class SettingsOut(BaseModel):
     keep_screen_awake: bool
     default_reminder_minutes: ReminderMinutes | None = Field(description="null = Off")
     pomodoro_config: PomodoroConfig | None = Field(description="null until first use")
-    last_tag: Tag | None = Field(description="null means Work (AC7.2)")
+    last_tag: str | None = Field(
+        description="A built-in tag identifier or a custom tag's id (removed ones too); "
+        "null means Work (AC7.2)"
+    )
     theme: Theme = Field(description="system follows the device's light/dark setting (#214)")
     updated_at: datetime
 
@@ -86,7 +91,7 @@ class SettingsPatch(BaseModel):
     keep_screen_awake: StrictBool = False
     default_reminder_minutes: ReminderMinutes | None = None
     pomodoro_config: PomodoroConfig | None = None
-    last_tag: Tag | None = None
+    last_tag: TagValue | None = None
     theme: Theme = Theme.SYSTEM
 
 
@@ -100,7 +105,7 @@ def _to_out(row: UserSettings) -> SettingsOut:
         pomodoro_config=(
             PomodoroConfig.model_validate(row.pomodoro_config) if row.pomodoro_config else None
         ),
-        last_tag=Tag(row.last_tag) if row.last_tag else None,
+        last_tag=row.effective_last_tag,
         theme=Theme(row.theme),
         updated_at=row.updated_at,
     )
@@ -136,12 +141,21 @@ async def get_settings(user: CurrentUser, db: DbSession) -> SettingsOut:
 async def update_settings(body: SettingsPatch, user: CurrentUser, db: DbSession) -> SettingsOut:
     """Change the fields sent; the rest stay as they are. Out-of-range values are 422."""
     row = await _get_or_create(db, user)
+    if (
+        body.last_tag is not None
+        and body.last_tag not in TAGS
+        and body.last_tag not in await owned_tag_ids(db, user.id)
+    ):
+        raise unknown_tag_error("body", "last_tag")
+    if is_stale(row.last_tag, row.custom_tag_id):
+        row.custom_tag_id = None  # edited to a built-in tag by the release before (#400)
     for name in body.model_fields_set:
         value = getattr(body, name)
         if name == "pomodoro_config":
             value = body.pomodoro_config.model_dump() if body.pomodoro_config else None
         elif name == "last_tag":
-            value = body.last_tag.value if body.last_tag else None
+            row.set_last_tag(body.last_tag)
+            continue
         elif name == "theme":
             value = body.theme.value
         setattr(row, name, value)

@@ -21,6 +21,7 @@ from app.metrics import zero_journey_series
 from app.rate_limit import FailureLimiter
 from app.sessions import router as sessions_router
 from app.settings_api import router as settings_router
+from app.tags_api import router as tags_router
 from app.telemetry import install_privacy_filters, instrument_engine, telemetry_config
 from app.web import mount_frontend
 
@@ -81,6 +82,7 @@ def create_app(
     app.include_router(sessions_router)
     app.include_router(settings_router)
     app.include_router(history_router)
+    app.include_router(tags_router)
     mount_frontend(app, settings.frontend_dist)
     return app
 

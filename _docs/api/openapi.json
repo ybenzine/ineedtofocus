@@ -188,6 +188,14 @@
           "settings": {
             "$ref": "#/components/schemas/SettingsOut"
           },
+          "tags": {
+            "description": "Every custom tag, removed ones included, oldest first (AC7.4)",
+            "items": {
+              "$ref": "#/components/schemas/TagOut"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
           "youtube_links": {
             "items": {
               "$ref": "#/components/schemas/YoutubeLinkOut"
@@ -202,6 +210,7 @@
           "account",
           "settings",
           "sessions",
+          "tags",
           "youtube_links"
         ],
         "title": "ExportOut",
@@ -333,12 +342,14 @@
           "tag": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Tag"
+                "description": "A built-in tag identifier (work, study, nap, read, meditation, exercise) or the id of one of the user's own custom tags, removed ones included",
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Tag"
           }
         },
         "title": "SessionEdit",
@@ -422,7 +433,9 @@
             "$ref": "#/components/schemas/Status-Input"
           },
           "tag": {
-            "$ref": "#/components/schemas/Tag"
+            "description": "A built-in tag identifier (work, study, nap, read, meditation, exercise) or the id of one of the user's own custom tags, removed ones included",
+            "title": "Tag",
+            "type": "string"
           }
         },
         "required": [
@@ -541,7 +554,9 @@
             "$ref": "#/components/schemas/app__models__enums__Status"
           },
           "tag": {
-            "$ref": "#/components/schemas/Tag"
+            "description": "A built-in tag identifier or the id of a custom tag (AC7.4); the id of a removed tag stays on its sessions (AC7.7)",
+            "title": "Tag",
+            "type": "string"
           }
         },
         "required": [
@@ -601,13 +616,14 @@
           "last_tag": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Tag"
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "null means Work (AC7.2)"
+            "description": "A built-in tag identifier or a custom tag's id (removed ones too); null means Work (AC7.2)",
+            "title": "Last Tag"
           },
           "pomodoro_config": {
             "anyOf": [
@@ -691,12 +707,14 @@
           "last_tag": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/Tag"
+                "description": "A built-in tag identifier (work, study, nap, read, meditation, exercise) or the id of one of the user's own custom tags, removed ones included",
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Last Tag"
           },
           "pomodoro_config": {
             "anyOf": [
@@ -878,17 +896,149 @@
         "title": "SyncResult",
         "type": "object"
       },
-      "Tag": {
-        "enum": [
-          "work",
-          "study",
-          "nap",
-          "read",
-          "meditation",
-          "exercise"
+      "TagCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "color": {
+            "enum": [
+              "indigo",
+              "blue",
+              "teal",
+              "green",
+              "yellow",
+              "orange",
+              "red",
+              "pink"
+            ],
+            "title": "Color",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 24,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "color"
         ],
-        "title": "Tag",
-        "type": "string"
+        "title": "TagCreate",
+        "type": "object"
+      },
+      "TagList": {
+        "properties": {
+          "tags": {
+            "description": "Every custom tag, removed ones included, oldest first",
+            "items": {
+              "$ref": "#/components/schemas/TagOut"
+            },
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tags"
+        ],
+        "title": "TagList",
+        "type": "object"
+      },
+      "TagOut": {
+        "properties": {
+          "color": {
+            "enum": [
+              "indigo",
+              "blue",
+              "teal",
+              "green",
+              "yellow",
+              "orange",
+              "red",
+              "pink"
+            ],
+            "title": "Color",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "removed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "null while the tag is in use (AC7.7)",
+            "title": "Removed At"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "color",
+          "created_at",
+          "removed_at"
+        ],
+        "title": "TagOut",
+        "type": "object"
+      },
+      "TagPatch": {
+        "additionalProperties": false,
+        "description": "Rename and/or recolour. An omitted field is unchanged; neither may be null.",
+        "properties": {
+          "color": {
+            "anyOf": [
+              {
+                "enum": [
+                  "indigo",
+                  "blue",
+                  "teal",
+                  "green",
+                  "yellow",
+                  "orange",
+                  "red",
+                  "pink"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 24,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "TagPatch",
+        "type": "object"
       },
       "TagTotal": {
         "properties": {
@@ -901,7 +1051,9 @@
             "type": "integer"
           },
           "tag": {
-            "$ref": "#/components/schemas/Tag"
+            "description": "A built-in tag identifier or a custom tag's id",
+            "title": "Tag",
+            "type": "string"
           }
         },
         "required": [
@@ -1540,7 +1692,7 @@
             }
           },
           {
-            "description": "Repeat to filter by any of several tags (AC10.2); none = all",
+            "description": "Repeat to filter by any of several tags, built-in or the user's own custom tags, removed ones included (AC10.2); none = all",
             "in": "query",
             "name": "tag",
             "required": false,
@@ -1548,7 +1700,8 @@
               "anyOf": [
                 {
                   "items": {
-                    "$ref": "#/components/schemas/Tag"
+                    "description": "A built-in tag identifier (work, study, nap, read, meditation, exercise) or the id of one of the user's own custom tags, removed ones included",
+                    "type": "string"
                   },
                   "type": "array"
                 },
@@ -1556,7 +1709,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Repeat to filter by any of several tags (AC10.2); none = all",
+              "description": "Repeat to filter by any of several tags, built-in or the user's own custom tags, removed ones included (AC10.2); none = all",
               "title": "Tag"
             }
           }
@@ -2166,6 +2319,296 @@
         "summary": "Update Settings",
         "tags": [
           "settings"
+        ]
+      }
+    },
+    "/api/tags": {
+      "get": {
+        "description": "Every custom tag of the user, removed ones included, oldest first (AC7.8 order).",
+        "operationId": "list_tags_api_tags_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such tag"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict: one `details` item whose `type` is name_taken, removed_name_taken, limit_in_use, limit_total or removed"
+          }
+        },
+        "summary": "List Tags",
+        "tags": [
+          "tags"
+        ]
+      },
+      "post": {
+        "description": "Create a tag (201), or bring back the removed tag of the same name (200), keeping its\nstored name and taking the colour given (AC7.4, AC7.7). Checks run in this order:\nvalidation (422), `name_taken`, bring back (or `limit_in_use`), then for a new tag\n`limit_in_use` and `limit_total`.",
+        "operationId": "create_tag_api_tags_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagOut"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such tag"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict: one `details` item whose `type` is name_taken, removed_name_taken, limit_in_use, limit_total or removed"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Create Tag",
+        "tags": [
+          "tags"
+        ]
+      }
+    },
+    "/api/tags/{tag_id}": {
+      "patch": {
+        "description": "Rename and/or recolour (AC7.6). Checks run in this order: 404, 422 validation,\n`removed`, `name_taken`, `removed_name_taken`. Renaming a tag to its own name in another\ncase is allowed.",
+        "operationId": "update_tag_api_tags__tag_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tag_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tag Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TagPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such tag"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict: one `details` item whose `type` is name_taken, removed_name_taken, limit_in_use, limit_total or removed"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Update Tag",
+        "tags": [
+          "tags"
+        ]
+      }
+    },
+    "/api/tags/{tag_id}/remove": {
+      "post": {
+        "description": "Remove a tag (AC7.7): it leaves the pickers, nothing else changes. Idempotent.",
+        "operationId": "remove_tag_api_tags__tag_id__remove_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tag_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tag Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TagOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such tag"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict: one `details` item whose `type` is name_taken, removed_name_taken, limit_in_use, limit_total or removed"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Remove Tag",
+        "tags": [
+          "tags"
         ]
       }
     },

@@ -15,10 +15,11 @@ from sqlalchemy import delete, select
 from app.auth import _client, _errors, _settings
 from app.deps import CurrentUser, DbSession, session_cookie_name
 from app.errors import ErrorResponse
-from app.models import FocusSession, User, YoutubeRecentLink
+from app.models import CustomTag, FocusSession, User, YoutubeRecentLink
 from app.security import verify_password
 from app.sessions import SessionOut, _out
 from app.settings_api import SettingsOut, YoutubeLinkOut, _get_or_create, _to_out
+from app.tags_api import TagOut
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,9 @@ class ExportOut(BaseModel):
     sessions: list[SessionOut] = Field(
         description="Every session, archived ones included, oldest first"
     )
+    tags: list[TagOut] = Field(
+        description="Every custom tag, removed ones included, oldest first (AC7.4)"
+    )
     youtube_links: list[YoutubeLinkOut]
 
 
@@ -72,6 +76,11 @@ async def export_account(user: CurrentUser, db: DbSession, response: Response) -
         .where(FocusSession.user_id == user.id)
         .order_by(FocusSession.started_at, FocusSession.id)
     )
+    tags = await db.scalars(
+        select(CustomTag)
+        .where(CustomTag.user_id == user.id)
+        .order_by(CustomTag.created_at, CustomTag.id)
+    )
     links = await db.execute(
         select(YoutubeRecentLink.url, YoutubeRecentLink.title, YoutubeRecentLink.last_used_at)
         .where(YoutubeRecentLink.user_id == user.id)
@@ -83,6 +92,7 @@ async def export_account(user: CurrentUser, db: DbSession, response: Response) -
         account=ExportAccount(email=user.email, created_at=user.created_at),
         settings=_to_out(settings_row),
         sessions=[_out(r) for r in rows],
+        tags=[TagOut.model_validate(t, from_attributes=True) for t in tags],
         youtube_links=[YoutubeLinkOut(url=u, title=t, last_used_at=at) for u, t, at in links.all()],
     )
 
@@ -117,7 +127,7 @@ async def delete_account(
         raise HTTPException(403, "Incorrect password")
     limiter.succeeded(client, user.email)
     user_id = user.id
-    # ON DELETE CASCADE removes settings, sign-ins, sessions and recent links.
+    # ON DELETE CASCADE removes settings, sign-ins, sessions, custom tags and recent links.
     await db.execute(delete(User).where(User.id == user_id))
     await db.commit()
     logger.info("account deleted", extra={"user_id": str(user_id)})

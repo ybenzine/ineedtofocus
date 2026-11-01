@@ -7,7 +7,7 @@ week-start day, 0 = Sunday ... 6 = Saturday (AC10.6).
 
 import calendar
 import datetime as dt
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from functools import cache
@@ -23,6 +23,8 @@ MAX_CUSTOM_YEARS = 100
 
 BucketUnit = Literal["day", "month"]
 
+# A tag the order doesn't list sorts after all that it does.
+_UNRANKED = 1_000_000
 _UTC_MIN = dt.datetime.min.replace(tzinfo=dt.UTC)
 _UTC_MAX = dt.datetime.max.replace(tzinfo=dt.UTC)
 
@@ -197,8 +199,12 @@ def summarize[S: SessionLike](
     zone: ZoneInfo,
     view: View,
     date_range: DateRange | None,
+    tag_order: Mapping[str, int] | None = None,
 ) -> Summary[S]:
     """Totals, per-tag totals, chart buckets and the sessions of a view (AC10.3, AC10.5).
+
+    `tag_order` ranks tags for ties in the breakdown (AC7.8: the built-in tags, then custom tags
+    oldest first); by default the built-in order.
 
     `sessions` may include rows outside the range (the database query uses a UTC window with
     margin); only those whose local start date is in the range are kept. For All time
@@ -221,8 +227,10 @@ def summarize[S: SessionLike](
         total.add(s.focus_seconds)
         by_tag.setdefault(s.tag, Totals()).add(s.focus_seconds)
         buckets[_bucket_key(day, unit)].add(s.focus_seconds)
-    tag_order = {t: i for i, t in enumerate(TAGS)}
-    tags = sorted(by_tag.items(), key=lambda kv: (-kv[1].focus_seconds, tag_order.get(kv[0], 99)))
+    rank = tag_order or {t: i for i, t in enumerate(TAGS)}
+    tags = sorted(
+        by_tag.items(), key=lambda kv: (-kv[1].focus_seconds, rank.get(kv[0], _UNRANKED), kv[0])
+    )
     return Summary(
         date_range=date_range,
         unit=unit,

@@ -12,6 +12,15 @@ class Tag(StrEnum):
     EXERCISE = "exercise"
 
 
+# Display names of the built-in tags; a custom tag may not take one, ignoring case (AC7.4).
+TAG_DISPLAY_NAMES: tuple[str, ...] = ("Work", "Study", "Nap", "Read", "Meditation", "Exercise")
+# The palette of tag colours (AC7.5), in palette order.
+COLORS: tuple[str, ...] = ("indigo", "blue", "teal", "green", "yellow", "orange", "red", "pink")
+TAG_NAME_MAX_LENGTH = 24
+MAX_CUSTOM_TAGS_IN_USE = 20
+MAX_CUSTOM_TAGS_TOTAL = 100
+
+
 class Theme(StrEnum):
     """Colour theme (#214); "system" follows the device's light/dark setting."""
 

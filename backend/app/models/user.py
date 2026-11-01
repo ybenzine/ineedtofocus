@@ -18,6 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 from app.models.enums import REMINDER_MINUTES, TAGS, THEMES, in_list
+from app.models.tag_ref import effective_tag, set_tag
 
 
 class User(Base):
@@ -64,7 +65,25 @@ class UserSettings(Base):
     default_reminder_minutes: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     # Last-used Pomodoro configuration (AC12.5); NULL until first use.
     pomodoro_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Like `FocusSession.tag`: "work" here plus `custom_tag_id` means a custom last-used tag.
     last_tag: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    custom_tag_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("custom_tags.id"), nullable=True
+    )
     # Colour theme (#214): "system" follows the device's light/dark setting.
     theme: Mapped[str] = mapped_column(String(8), server_default=text("'system'"))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    @property
+    def effective_last_tag(self) -> str | None:
+        """`last_tag` as the API shows it: a built-in identifier, a custom tag's id or None."""
+        if self.last_tag is None:
+            return None
+        return effective_tag(self.last_tag, self.custom_tag_id)
+
+    def set_last_tag(self, value: str | None) -> None:
+        """Store a built-in identifier, a custom tag's id or None (see `last_tag`)."""
+        if value is None:
+            self.last_tag, self.custom_tag_id = None, None
+        else:
+            self.last_tag, self.custom_tag_id = set_tag(value)

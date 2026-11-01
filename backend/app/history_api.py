@@ -5,12 +5,13 @@ in `app.history`. Privacy: goals are returned to their owner but never logged.
 """
 
 import datetime as dt
+import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, and_, or_, select
 
 from app.deps import CurrentUser, DbSession
 from app.errors import ErrorResponse
@@ -25,8 +26,10 @@ from app.history import (
     within_custom_limit,
 )
 from app.metrics import HISTORY_LOAD_DURATION, HISTORY_LOADS, observe
-from app.models import FocusSession, Tag, UserSettings
-from app.sessions import SessionOut
+from app.models import CustomTag, FocusSession, UserSettings
+from app.models.enums import TAGS
+from app.sessions import SessionOut, _out
+from app.tags_api import TagValue, unknown_tag_error
 
 router = APIRouter(prefix="/api", tags=["history"])
 
@@ -36,7 +39,7 @@ _ERRORS: dict[int | str, dict[str, Any]] = {
 
 
 class TagTotal(BaseModel):
-    tag: Tag
+    tag: str = Field(description="A built-in tag identifier or a custom tag's id")
     focus_seconds: int
     sessions: int
 
@@ -96,6 +99,26 @@ def _totals(t: Totals) -> dict[str, int]:
     return {"focus_seconds": t.focus_seconds, "sessions": t.sessions}
 
 
+def _tag_filter(tags: list[str], owned: set[str]) -> ColumnElement[bool]:
+    """Sessions whose tag, as the API shows it, is one of `tags` (AC10.2). A custom tag is
+    stored as `work` plus its id, and a row with another built-in `tag` next to an id was
+    changed by the release before, so it counts as that built-in tag (`app.models.tag_ref`)."""
+    for index, value in enumerate(tags):
+        if value not in TAGS and value not in owned:
+            raise unknown_tag_error("query", "tag", index)
+    wanted = set(tags)
+    others = [t for t in TAGS if t in wanted and t != "work"]
+    custom = [uuid.UUID(t) for t in wanted if t not in TAGS]
+    parts: list[ColumnElement[bool]] = []
+    if others:
+        parts.append(FocusSession.tag.in_(others))
+    if "work" in wanted:
+        parts.append(and_(FocusSession.tag == "work", FocusSession.custom_tag_id.is_(None)))
+    if custom:
+        parts.append(and_(FocusSession.tag == "work", FocusSession.custom_tag_id.in_(custom)))
+    return or_(*parts)
+
+
 @router.get("/history", responses=_ERRORS)
 async def get_history(
     user: CurrentUser,
@@ -111,8 +134,11 @@ async def get_history(
     start: Annotated[dt.date | None, Query(description="Custom range start (inclusive)")] = None,
     end: Annotated[dt.date | None, Query(description="Custom range end (inclusive)")] = None,
     tag: Annotated[
-        list[Tag] | None,
-        Query(description="Repeat to filter by any of several tags (AC10.2); none = all"),
+        list[TagValue] | None,
+        Query(
+            description="Repeat to filter by any of several tags, built-in or the user's own "
+            "custom tags, removed ones included (AC10.2); none = all"
+        ),
     ] = None,
 ) -> HistoryOut:
     """One history view (AC10.1-AC10.7).
@@ -139,11 +165,21 @@ async def get_history(
         )
         date_range = resolve_range(view, anchor, start, end, week_start_day)
 
+        # AC7.8's order of tags: the built-in ones, then custom tags oldest first.
+        custom_ids = [
+            str(i)
+            for i in await db.scalars(
+                select(CustomTag.id)
+                .where(CustomTag.user_id == user.id)
+                .order_by(CustomTag.created_at, CustomTag.id)
+            )
+        ]
+        tag_order = {t: i for i, t in enumerate([*TAGS, *custom_ids])}
         query = select(FocusSession).where(
             FocusSession.user_id == user.id, FocusSession.archived_at.is_(None)
         )
         if tag:
-            query = query.where(FocusSession.tag.in_({t.value for t in tag}))
+            query = query.where(_tag_filter(tag, set(custom_ids)))
         if date_range is not None:
             lo, hi = utc_window(date_range)
             query = query.where(FocusSession.started_at >= lo, FocusSession.started_at < hi)
@@ -151,7 +187,7 @@ async def get_history(
             await db.scalars(query.order_by(FocusSession.started_at.desc(), FocusSession.id.desc()))
         ).all()
 
-        summary = summarize(rows, zone, view, date_range)
+        summary = summarize([_out(r) for r in rows], zone, view, date_range, tag_order)
         covered = summary.date_range
         HISTORY_LOADS.add(1, {"outcome": "ok"})
         return HistoryOut(
@@ -163,7 +199,7 @@ async def get_history(
             bucket=summary.unit,
             total_focus_seconds=summary.total.focus_seconds,
             session_count=summary.total.sessions,
-            tags=[TagTotal(tag=Tag(t), **_totals(v)) for t, v in summary.tags],
+            tags=[TagTotal(tag=t, **_totals(v)) for t, v in summary.tags],
             buckets=[Bucket(date=d, **_totals(v)) for d, v in summary.buckets],
-            sessions=[SessionOut.model_validate(r, from_attributes=True) for r in summary.sessions],
+            sessions=summary.sessions,
         )
