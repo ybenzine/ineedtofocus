@@ -1520,7 +1520,7 @@ main.setup-screen:has(~ .tab-bar) {
   display: flex;
   flex-direction: column;
   gap: 1rem;
-  padding-bottom: 0.5rem;
+  padding-bottom: 0.25rem;
 }
 
 /* A focused control scrolls clear of the pinned Start and the tab bar (WCAG 2.4.11). */
