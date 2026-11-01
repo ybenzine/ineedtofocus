@@ -4,12 +4,15 @@ import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'rea
 import { notifySessionExpired, signedInUserId } from '../auth/localData.ts'
 import { HttpArchiveApi, type ArchiveApi } from '../archive/api.ts'
 import { useSettingsState } from '../settings/SettingsContext.ts'
-import { GOAL_MAX_LENGTH, tagLabel } from '../setup/options.ts'
+import { GOAL_MAX_LENGTH } from '../setup/options.ts'
+import { useTagsView } from '../tags/context.ts'
+import TagName, { TagDot } from '../tags/TagName.tsx'
+import { sortByFocus } from '../tags/view.ts'
 import { HttpSessionsApi, type SessionEdit, type SessionsApi } from '../sync/api.ts'
 import { clearArchivedOnDevice, reconcileMissing } from '../sync/reconcile.ts'
 import type { SessionStore } from '../sync/sessionStore.ts'
 import type { SyncEngine } from '../sync/syncEngine.ts'
-import { TAGS, type Tag } from '../timer/config.ts'
+import type { Tag } from '../timer/config.ts'
 import { formatDuration } from '../timerscreen/format.ts'
 import {
   deviceTimeZone,
@@ -88,6 +91,7 @@ export default function HistoryScreen({
   onNewSession,
 }: HistoryScreenProps) {
   const tz = useMemo(() => timeZone ?? deviceTimeZone(), [timeZone])
+  const tagsView = useTagsView()
   const owner = ownerId === undefined ? signedInUserId() : ownerId
   const today = localDate(new Date(now()).toISOString(), tz)
 
@@ -561,14 +565,18 @@ export default function HistoryScreen({
         <button type="button" aria-pressed={tags.length === 0} onClick={() => setTags([])}>
           All tags
         </button>
-        {TAGS.map((tag) => (
+        {tagsView.all.map((tag) => (
           <button
-            key={tag}
+            key={tag.id}
             type="button"
-            aria-pressed={tags.includes(tag)}
-            onClick={() => toggleTag(tag)}
+            className="history-tag-chip"
+            aria-pressed={tags.includes(tag.id)}
+            onClick={() => toggleTag(tag.id)}
           >
-            {tagLabel(tag)}
+            <TagDot color={tag.color} />
+            <span className="tag-name-text">
+              {tag.removed ? `${tag.name} (removed)` : tag.name}
+            </span>
           </button>
         ))}
       </div>
@@ -665,6 +673,7 @@ function Results({
   onArchiveOnDevice: (session: HistorySession) => Promise<void>
   onDiscard: (session: HistorySession) => Promise<boolean>
 }) {
+  const tagsView = useTagsView()
   const unsynced = data.sessions.filter((s) => s.unsaved).length
   return (
     <>
@@ -708,9 +717,9 @@ function Results({
           <section aria-labelledby="by-tag">
             <h2 id="by-tag">By tag</h2>
             <ul className="history-tag-list">
-              {data.tags.map((t) => (
+              {sortByFocus(data.tags, tagsView).map((t) => (
                 <li key={t.tag}>
-                  <span className="timer-tag">{tagLabel(t.tag)}</span>
+                  <TagName tag={t.tag} className="timer-tag" />
                   <span>{formatDuration(t.focusSeconds)}</span>
                 </li>
               ))}
@@ -836,7 +845,7 @@ function SessionRow({
       </p>
       <p className="history-row-main">
         <span>{MODE_LABEL[session.mode]}</span>
-        <span className="timer-tag">{tagLabel(session.tag)}</span>
+        <TagName tag={session.tag} className="timer-tag" />
         <span>{formatDuration(session.focusSeconds)}</span>
         <span>{STATUS_LABEL[session.status]}</span>
       </p>
@@ -930,6 +939,13 @@ function EditForm({
 }) {
   const id = useId()
   const [tag, setTag] = useState<Tag>(session.tag)
+  // The tags that can be picked (AC7.8 order), names only. A tag the session already has but
+  // that is removed (or unknown here) stays listed, selected, until another is picked (AC7.7).
+  const tagsView = useTagsView()
+  const options =
+    tag === session.tag && !tagsView.pickable.some((t) => t.id === tag)
+      ? [...tagsView.pickable, tagsView.info(tag)]
+      : tagsView.pickable
   const [goal, setGoal] = useState(session.goal ?? '')
   const [busy, setBusy] = useState(false)
   const first = useRef<HTMLSelectElement>(null)
@@ -968,9 +984,9 @@ function EditForm({
           value={tag}
           onChange={(event) => setTag(event.target.value as Tag)}
         >
-          {TAGS.map((t) => (
-            <option key={t} value={t}>
-              {tagLabel(t)}
+          {options.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
             </option>
           ))}
         </select>

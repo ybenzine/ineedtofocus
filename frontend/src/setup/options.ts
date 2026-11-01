@@ -1,4 +1,6 @@
 import type { Tag } from '../timer/config.ts'
+import type { CustomTag } from '../tags/api.ts'
+import { buildTagsView } from '../tags/view.ts'
 
 /** AC7.3 */
 export const GOAL_MAX_LENGTH = 120
@@ -7,7 +9,10 @@ export const GOAL_MAX_LENGTH = 120
 export const AUDIO_SOURCES = ['none', 'rain', 'youtube'] as const
 export type AudioSource = (typeof AUDIO_SOURCES)[number]
 
-/** Display label for a tag key: first letter upper-case. Option values stay the lowercase key. */
-export function tagLabel(tag: Tag): string {
-  return tag.charAt(0).toUpperCase() + tag.slice(1)
+/**
+ * Display name of a tag: a built-in key with its first letter upper-case, a custom tag's own
+ * name as typed (AC7.8) when `custom` lists it, else "Tag". Option values stay the key or id.
+ */
+export function tagLabel(tag: Tag, custom: readonly CustomTag[] = []): string {
+  return buildTagsView(custom).info(tag).name
 }

@@ -4,7 +4,6 @@ import type { ApiResult } from '../sync/api.ts'
 import type { Mode, Tag } from '../timer/config.ts'
 import type { SessionStatus } from '../timer/engine.ts'
 import type { SyncIndicator } from '../sync/sessionStore.ts'
-import { TAGS } from '../timer/config.ts'
 import { tracedFetch } from '../telemetry/tracedFetch.ts'
 
 export type HistoryView = 'day' | 'week' | 'month' | 'all' | 'custom'
@@ -99,7 +98,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 const num = (value: unknown): number => (typeof value === 'number' ? value : 0)
 const dateOrNull = (value: unknown): string | null => (typeof value === 'string' ? value : null)
-const isTag = (value: unknown): value is Tag => TAGS.includes(value as Tag)
+const isTag = (value: unknown): value is Tag => typeof value === 'string' && value !== ''
 
 export function parseHistory(value: unknown): HistoryData | null {
   if (!isObject(value)) return null

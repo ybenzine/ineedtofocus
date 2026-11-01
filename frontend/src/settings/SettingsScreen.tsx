@@ -8,6 +8,7 @@ import { REMINDER_OPTIONS, type TimerController } from '../timer/index.ts'
 import { wakeLockSupported } from '../timerscreen/wakeLock.ts'
 import type { ReminderSetting, ThemeSetting } from './api.ts'
 import { useSettingsState, useSettingsStore } from './SettingsContext.ts'
+import TagsSection from '../tags/TagsSection.tsx'
 import AccountSection from '../auth/AccountSection.tsx'
 import RangeInput from '../RangeInput.tsx'
 import { useAnonymous } from '../anonymous/AnonymousContext.ts'
@@ -140,6 +141,8 @@ export default function SettingsScreen({
       <p role="status" className="field-hint">
         {waiting ? "Saved on this device. It will sync when you're back online." : ''}
       </p>
+
+      <TagsSection />
 
       {!anonymous && <AccountSection controller={controller} />}
     </div>

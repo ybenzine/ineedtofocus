@@ -3,7 +3,7 @@
 // the server never looks done.
 
 import type { ApiResult } from '../sync/api.ts'
-import { TAGS, type Mode, type Tag } from '../timer/config.ts'
+import type { Mode, Tag } from '../timer/config.ts'
 import type { SessionStatus } from '../timer/engine.ts'
 import { tracedFetch } from '../telemetry/tracedFetch.ts'
 
@@ -37,12 +37,12 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function parseArchived(value: unknown): ArchivedSession | null {
   if (!isObject(value) || typeof value.id !== 'string') return null
-  if (!TAGS.includes(value.tag as Tag)) return null
+  if (typeof value.tag !== 'string' || value.tag === '') return null
   if (typeof value.started_at !== 'string' || typeof value.archived_at !== 'string') return null
   return {
     id: value.id,
     mode: value.mode as Mode,
-    tag: value.tag as Tag,
+    tag: value.tag,
     goal: typeof value.goal === 'string' ? value.goal : null,
     startedAt: value.started_at,
     focusSeconds: typeof value.focus_seconds === 'number' ? value.focus_seconds : 0,

@@ -49,12 +49,17 @@ function tk(set: TokenSet, name: string): string {
 const blocks = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/(:root[^{}]*)\{([^}]*)\}/g)].map(
   (m) => {
     const tokens: TokenSet = {}
+    const tagTokens: TokenSet = {}
     for (const t of (m[2] as string).matchAll(/--([a-z-]+):\s*(#[0-9a-f]{6})\b/gi)) {
-      tokens[t[1] as string] = (t[2] as string).toLowerCase()
+      const name = t[1] as string
+      // Tag colours (#401) are a set of their own, checked below.
+      if (name.startsWith('tag-')) tagTokens[name.slice(4)] = (t[2] as string).toLowerCase()
+      else tokens[name] = (t[2] as string).toLowerCase()
     }
     return {
       selector: (m[1] as string).trim(),
       tokens,
+      tagTokens,
       scheme: (m[2] as string).match(/color-scheme:\s*(\w+)\s*;/)?.[1],
     }
   },
@@ -71,6 +76,8 @@ const LIGHT_SELECTORS = [":root:not([data-theme='dark'])", ":root[data-theme='li
 
 const DARK: TokenSet = block(':root').tokens
 const LIGHT: TokenSet = block(":root[data-theme='light']").tokens
+
+const TAG_COLORS = ['indigo', 'blue', 'teal', 'green', 'yellow', 'orange', 'red', 'pink']
 
 const NAMES = [
   'bg',
@@ -170,6 +177,40 @@ describe('design tokens (#213, #214)', () => {
   })
 })
 
+describe('tag colours (#401, AC7.5)', () => {
+  const DARK_TAGS = block(':root').tagTokens
+  const LIGHT_TAGS = block(":root[data-theme='light']").tagTokens
+
+  it('defines the eight colours, in palette order, for each theme', () => {
+    expect(Object.keys(DARK_TAGS)).toEqual(TAG_COLORS)
+    expect(Object.keys(LIGHT_TAGS)).toEqual(TAG_COLORS)
+  })
+
+  it('every place a set is applied carries the same tag values', () => {
+    for (const selector of DARK_SELECTORS) {
+      expect(block(selector).tagTokens, selector).toEqual(DARK_TAGS)
+    }
+    for (const selector of LIGHT_SELECTORS) {
+      expect(block(selector).tagTokens, selector).toEqual(LIGHT_TAGS)
+    }
+  })
+
+  it('the timer and summary block carries the dark values, so they stay dark in light mode (AC9.1)', () => {
+    expect(block(':root:has(main.focus-screen)').tagTokens).toEqual(DARK_TAGS)
+    expect(DARK_TAGS).not.toEqual(LIGHT_TAGS)
+  })
+
+  describe.each([
+    ['dark', DARK, DARK_TAGS],
+    ['light', LIGHT, LIGHT_TAGS],
+  ])('%s set', (_name, set, tags) => {
+    it.each(TAG_COLORS.flatMap((c) => [`${c}|bg`, `${c}|surface`]))('%s reaches 3:1', (pair) => {
+      const [color, surface] = pair.split('|') as [string, string]
+      expect(contrast(tk(tags, color), tk(set, surface))).toBeGreaterThanOrEqual(3)
+    })
+  })
+})
+
 describe.each([
   ['dark', DARK],
   ['light', LIGHT],
@@ -241,7 +282,11 @@ describe('no colour literals outside the token blocks (#213, #214)', () => {
 
   /** Named colours in a declaration value (words that are not part of a url or a string). */
   function namedIn(value: string, set: Set<string> = NAMED_SET): string[] {
-    const bare = value.replace(/url\([^)]*\)/gi, '').replace(/(['"]).*?\1/g, '')
+    // A plain `var(--token)` is a token, whatever its name says (`--tag-indigo`); a fallback isn't.
+    const bare = value
+      .replace(/url\([^)]*\)/gi, '')
+      .replace(/var\(\s*--[a-z0-9-]+\s*\)/gi, '')
+      .replace(/(['"]).*?\1/g, '')
     return (bare.match(/[a-z]+/gi) ?? []).filter((w) => set.has(w.toLowerCase()))
   }
 
@@ -309,6 +354,11 @@ describe('no colour literals outside the token blocks (#213, #214)', () => {
       [],
     )
     expect(offenders('a { color: var(--text); font-family: Inter, system-ui; }')).toEqual([])
+    expect(offenders('a { background: var(--tag-indigo); }')).toEqual([])
+    expect(offenders('a { background: var(--tag-indigo, red); }')).toEqual([
+      'background: indigo',
+      'background: red',
+    ])
     expect(offenders('@media (forced-colors: active) { a { color: Highlight; } }')).toEqual([])
     expect(offenders('@media (forced-colors: active) { a { color: #fff; } }')).toHaveLength(1)
     expect(offenders('@media (forced-colors: active) { a { color: red; } }')).toEqual([

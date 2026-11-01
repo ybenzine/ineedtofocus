@@ -3,7 +3,6 @@ import {
   COUNTDOWN_LIMITS,
   POMODORO_LIMITS,
   REMINDER_OPTIONS,
-  TAGS,
   validateConfig,
   type Mode,
   type ReminderMinutes,
@@ -16,7 +15,9 @@ import { useOnline } from '../sounds/useOnline.ts'
 import YoutubeSetup from '../sounds/YoutubeSetup.tsx'
 import { checkYoutubeLink } from '../sounds/youtubeLink.ts'
 import type { YoutubeLinksApi } from '../sounds/youtubeLinksApi.ts'
-import { AUDIO_SOURCES, GOAL_MAX_LENGTH, tagLabel, type AudioSource } from './options.ts'
+import { useTagsView } from '../tags/context.ts'
+import { TagDot } from '../tags/TagName.tsx'
+import { AUDIO_SOURCES, GOAL_MAX_LENGTH, type AudioSource } from './options.ts'
 import type { PreferencesStore } from './preferences.ts'
 
 const AUDIO_LABELS: Record<AudioSource, string> = { none: 'None', rain: 'Rain', youtube: 'YouTube' }
@@ -94,7 +95,10 @@ export default function SessionSetup({
 }: SessionSetupProps) {
   const [remembered] = useState(() => preferences.load())
   const [mode, setMode] = useState<Mode>('countdown')
-  const [tag, setTag] = useState<Tag>(remembered.tag)
+  const [pickedTag, setTag] = useState<Tag>(remembered.tag)
+  // A tag that is no longer offered (the last one used was removed, AC7.7) starts on Work.
+  const tagsView = useTagsView()
+  const tag = tagsView.pickable.some((t) => t.id === pickedTag) ? pickedTag : 'work'
   const [goal, setGoal] = useState('')
   const [audio, setAudio] = useState<AudioSource>('none')
   const [youtubeText, setYoutubeText] = useState('')
@@ -116,7 +120,7 @@ export default function SessionSetup({
   // lost on a reload, so a waiting app update holds back while the form is dirty (#244).
   const [initial] = useState(() => ({
     mode,
-    tag,
+    tag: pickedTag,
     goal,
     audio,
     youtubeText,
@@ -132,7 +136,7 @@ export default function SessionSetup({
     JSON.stringify(initial) !==
     JSON.stringify({
       mode,
-      tag,
+      tag: pickedTag,
       goal,
       audio,
       youtubeText,
@@ -308,15 +312,16 @@ export default function SessionSetup({
       <fieldset>
         <legend>Tag</legend>
         <div className="choices">
-          {TAGS.map((t) => (
-            <label key={t} className="choice">
+          {tagsView.pickable.map((t) => (
+            <label key={t.id} className="choice">
               <input
                 type="radio"
                 name={`${groupId}-tag`}
-                checked={tag === t}
-                onChange={() => setTag(t)}
+                checked={tag === t.id}
+                onChange={() => setTag(t.id)}
               />
-              <span>{tagLabel(t)}</span>
+              <TagDot color={t.color} />
+              <span className="tag-name-text">{t.name}</span>
             </label>
           ))}
         </div>

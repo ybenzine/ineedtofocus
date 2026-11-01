@@ -96,6 +96,7 @@ export class SettingsStore {
   #attempt = 0
   #retryTimer: ReturnType<typeof setTimeout> | undefined
   readonly #listeners = new Set<() => void>()
+  readonly #refreshHooks = new Set<() => Promise<void>>()
   #flushing: Promise<void> | null = null
   /** Cache writes started and not finished yet (they queue on the lock). */
   #writing = 0
@@ -435,8 +436,23 @@ export class SettingsStore {
     }
   }
 
-  /** Sends pending edits, then takes the server's copy for everything not edited here. */
+  /**
+   * Runs `hook` whenever settings are loaded (`refresh`), alongside the settings request: the
+   * account's tag list (#401) loads with them. Returns the cleanup.
+   */
+  onRefresh(hook: () => Promise<void>): () => void {
+    this.#refreshHooks.add(hook)
+    return () => this.#refreshHooks.delete(hook)
+  }
+
+  /** Loads what depends on settings, and sends pending edits, then takes the server's copy. */
   async refresh(): Promise<void> {
+    const hooks = [...this.#refreshHooks].map((hook) => hook().catch(() => undefined))
+    await Promise.all([this.#refreshSettings(), ...hooks])
+  }
+
+  /** Sends pending edits, then takes the server's copy for everything not edited here. */
+  async #refreshSettings(): Promise<void> {
     const api = this.#api
     if (!api || !this.#live()) return
     await this.flush()

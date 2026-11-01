@@ -47,6 +47,9 @@ import SettingsScreen from './settings/SettingsScreen.tsx'
 import { settingsDataHook } from './settings/hook.ts'
 import { heldRecordHook } from './timer/hook.ts'
 import { SettingsStore } from './settings/store.ts'
+import { httpTagsApi } from './tags/api.ts'
+import { TagsContext } from './tags/context.ts'
+import { TagsStore } from './tags/store.ts'
 import { type PreferencesStore } from './setup/preferences.ts'
 import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
 import type { AudioSource } from './setup/options.ts'
@@ -67,6 +70,8 @@ export interface AppProps {
   controller?: TimerController
   /** Settings with their device cache and sync; the app uses the Settings API by default. */
   settings?: SettingsStore
+  /** The account's custom tags; the app uses the Tags API by default (not with a given `settings`). */
+  tags?: TagsStore
   /** Overrides the settings-backed last-used Pomodoro config and tag. */
   preferences?: PreferencesStore
   /** How often a finished session that couldn't be saved on the device is tried again. */
@@ -106,7 +111,7 @@ export const SETTINGS_WAIT_MS = 1500
  * in), bound to that user, so nothing of theirs outlives them or reaches the next account.
  */
 export default function App(props: AppProps) {
-  const { settings: given } = props
+  const { settings: given, tags: givenTags } = props
   // Expired at mount (start-up with a timer running): the store is bound to the expired user
   // so it shows their cached settings, but `currentOwner()` is null, so it never fetches,
   // sends or rewrites the cache.
@@ -132,11 +137,34 @@ export default function App(props: AppProps) {
           })),
     [given, mountOwner, anonymous],
   )
+  // The account's custom tags (#401): none without an account, and no request. A test that gives
+  // its own settings gets a store with no API unless it gives `tags` too.
+  const tags = useMemo(
+    () =>
+      givenTags ??
+      (anonymous || given
+        ? new TagsStore()
+        : new TagsStore({
+            api: httpTagsApi,
+            storage: window.localStorage,
+            owner: mountOwner,
+            currentOwner: signedInUserId,
+            onUnauthorized: notifySessionExpired,
+          })),
+    [givenTags, given, mountOwner, anonymous],
+  )
   // Re-armed on every setup: StrictMode runs setup, cleanup, setup on the same instance.
   useEffect(() => {
     settings.arm()
     return () => settings.dispose()
   }, [settings])
+  useEffect(() => {
+    tags.arm()
+    return () => tags.dispose()
+  }, [tags])
+  // The tag list loads whenever settings load, and follows another tab's changes.
+  useEffect(() => settings.onRefresh(() => tags.refresh()), [settings, tags])
+  useEffect(() => tags.start(), [tags])
   // Sign-out sends and counts the settings edits not yet accepted (#129).
   useEffect(() => {
     if (anonymous) return
@@ -144,7 +172,9 @@ export default function App(props: AppProps) {
   }, [settings, anonymous])
   return (
     <SettingsContext.Provider value={settings}>
-      <AppBody {...props} settings={settings} />
+      <TagsContext.Provider value={tags}>
+        <AppBody {...props} settings={settings} />
+      </TagsContext.Provider>
     </SettingsContext.Provider>
   )
 }
