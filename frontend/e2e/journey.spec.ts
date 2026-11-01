@@ -168,6 +168,7 @@ test('YouTube is chosen on New session: Start waits for a link, a recent link is
 
   // A phone: the whole form still fits.
   await page.setViewportSize({ width: 360, height: 740 })
+  await expect(page.locator('nav.tab-bar')).toBeVisible()
   await expectNoSidewaysScroll(page)
 
   await page.getByRole('button', { name: 'A video that was played before' }).click()

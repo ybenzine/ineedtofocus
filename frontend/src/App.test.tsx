@@ -1,3 +1,4 @@
+import { findSignOutButton, signOutButton } from './test/accountMenu.ts'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AlertPlayer, MemoryAlertVolumeStore } from './sounds/alerts.ts'
@@ -47,7 +48,7 @@ describe('App account bar', () => {
 
   it('offers Sign out on the setup screen only, not over the timer', async () => {
     renderSignedIn()
-    expect(await screen.findByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    expect(await findSignOutButton()).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
     await screen.findByRole('timer')
     expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
@@ -57,14 +58,14 @@ describe('App account bar', () => {
     renderSignedIn()
     fireEvent.click(await screen.findByRole('button', { name: 'History' }))
     await screen.findByRole('heading', { name: 'History' })
-    expect(screen.getByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    expect(signOutButton()).toBeInTheDocument()
     // A session running in another tab: Sign out is refused.
     const other = new TimerController({
       store: new LocalActiveSessionStore(),
       saveRecord: () => undefined,
     })
     await other.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'End your session before signing out.',
     )
@@ -90,7 +91,7 @@ describe('App account bar', () => {
       saveRecord: () => undefined,
     })
     await other.start({ config: { mode: 'countdown', minutes: 25 }, tag: 'work', goal: null })
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'End your session before signing out.',
     )
@@ -147,7 +148,7 @@ describe('App sign-out guard with a timer only in memory (#245)', () => {
       </AccountContext.Provider>,
     )
     // The store is empty, so the app opens on the setup screen, which has Sign out.
-    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
+    fireEvent.click(await findSignOutButton())
     expect(await screen.findByRole('alert')).toHaveTextContent(ACTIVE_TIMER_MESSAGE)
     expect(signOut).not.toHaveBeenCalled()
   })
@@ -198,7 +199,7 @@ describe('App sign-out with a finished record held only in memory (#298)', () =>
     fireEvent.click(await screen.findByRole('button', { name: 'History' }))
     await screen.findByRole('heading', { name: 'History' })
     await waitFor(() => expect(screen.getByRole('heading', { name: 'History' })).toHaveFocus())
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     const dialog = await screen.findByRole('alertdialog', { name: 'Confirm sign out' })
     expect(dialog).toHaveTextContent(
       "1 session hasn't synced and will be deleted from this device.",
@@ -224,7 +225,7 @@ describe('App sign-out with a finished record held only in memory (#298)', () =>
     await screen.findByRole('heading', { name: 'History' })
     await waitFor(() => expect(screen.getByRole('heading', { name: 'History' })).toHaveFocus())
     // Here only this hook is registered; in the app the session store's trySync runs beside it.
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(saved).toHaveLength(1)
@@ -247,7 +248,7 @@ describe('App sign-out with a finished record held only in memory (#298)', () =>
     fireEvent.click(await screen.findByRole('button', { name: 'History' }))
     await screen.findByRole('heading', { name: 'History' })
     await waitFor(() => expect(screen.getByRole('heading', { name: 'History' })).toHaveFocus())
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     await screen.findByRole('alertdialog', { name: 'Confirm sign out' })
     fireEvent.click(screen.getByRole('button', { name: 'Sign out anyway' }))
     await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
@@ -261,7 +262,7 @@ describe('App sign-out with a finished record held only in memory (#298)', () =>
 describe('App', () => {
   it('shows the setup screen', async () => {
     setup()
-    expect(await screen.findByRole('heading', { name: 'I Need To Focus' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Start' })).toBeInTheDocument()
   })
 
   it('starts a session and shows the timer screen', async () => {
@@ -312,7 +313,7 @@ describe('App', () => {
     expect(controller.current()).toBeNull()
     expect(screen.getByRole('link', { name: 'View history' })).toHaveAttribute('href', '/history')
     fireEvent.click(screen.getByRole('button', { name: 'New session' }))
-    expect(await screen.findByRole('heading', { name: 'I Need To Focus' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Start' })).toBeInTheDocument()
   })
 
   it('ac6_4 goes straight to the timer when a session was running at reload', async () => {
@@ -337,7 +338,7 @@ describe('App', () => {
     await waitFor(() =>
       expect(screen.getByRole('status')).toHaveTextContent(/ended in another tab/),
     )
-    expect(screen.getByRole('heading', { name: 'I Need To Focus' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument()
   })
 
   it('keeps retrying a session that couldn’t be saved yet and drops the note once it is', async () => {
@@ -390,7 +391,7 @@ describe('App', () => {
         preferences={new MemoryPreferencesStore()}
       />,
     )
-    await screen.findByRole('heading', { name: 'I Need To Focus' })
+    await screen.findByRole('button', { name: 'Start' })
     expect(sync.start).toHaveBeenCalled()
     unmount()
     expect(stop).toHaveBeenCalled()
@@ -408,24 +409,24 @@ describe('App history navigation', () => {
 
   it('moves between setup and History with the navigation, updating the URL', async () => {
     setup()
-    await screen.findByRole('heading', { name: 'I Need To Focus' })
+    await screen.findByRole('button', { name: 'Start' })
     fireEvent.click(screen.getByRole('button', { name: 'History' }))
     expect(await screen.findByRole('heading', { name: 'History' })).toBeInTheDocument()
     expect(window.location.pathname).toBe('/history')
     fireEvent.click(screen.getByRole('button', { name: 'New session' }))
-    expect(await screen.findByRole('heading', { name: 'I Need To Focus' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Start' })).toBeInTheDocument()
     expect(window.location.pathname).toBe('/')
   })
 
   it('follows the back button between setup and History', async () => {
     setup()
-    await screen.findByRole('heading', { name: 'I Need To Focus' })
+    await screen.findByRole('button', { name: 'Start' })
     fireEvent.click(screen.getByRole('button', { name: 'History' }))
     await screen.findByRole('heading', { name: 'History' })
     act(() => {
       window.history.back()
     })
-    expect(await screen.findByRole('heading', { name: 'I Need To Focus' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Start' })).toBeInTheDocument()
   })
 
   it('opens History from the summary link without reloading', async () => {

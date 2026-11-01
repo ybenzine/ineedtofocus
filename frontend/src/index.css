@@ -495,6 +495,9 @@ main > p {
   }
 
   /* The current nav item: the same system-colour fill as a selected chip, since our fills are replaced. */
+  .tab-bar [aria-current='page'],
+  .tab-bar [aria-current='page']:hover:not(:disabled),
+  .tab-bar [aria-current='page']:focus-visible,
   .screen-nav [aria-current='page'],
   .screen-nav [aria-current='page']:hover:not(:disabled),
   .screen-nav [aria-current='page']:focus-visible {
@@ -537,12 +540,145 @@ main > p {
   color: var(--error);
 }
 
-/* Screen navigation: accent text on a surface pill for the current screen. */
+/* App shell (#406): a compact header on every screen with navigation, a bottom tab bar on phones
+   (below 768 px, provisional) and text tabs in the header from 768 px up. */
+.app-header {
+  padding-inline: max(0.75rem, env(safe-area-inset-left)) max(0.75rem, env(safe-area-inset-right));
+}
+
+.app-header-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 3.75rem;
+  max-width: 36rem;
+  margin-inline: auto;
+  padding-inline: 0.5rem 0;
+  box-sizing: border-box;
+}
+
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.wordmark svg {
+  flex: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+
+.wordmark-track {
+  stroke: var(--border);
+}
+
+.wordmark-arc {
+  stroke: var(--accent);
+}
+
+/* The Log in link or the account button, at the header's right end. */
+.account-bar {
+  position: relative;
+  flex: none;
+  margin-inline-start: auto;
+}
+
+.account-bar .auth-link {
+  padding: 0 0.75rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.account-button {
+  width: 2.75rem;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--surface);
+  border-color: var(--control-border);
+  color: var(--accent);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.account-menu {
+  position: absolute;
+  inset-block-start: calc(100% + 0.25rem);
+  inset-inline-end: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  width: min(20rem, calc(100vw - 1.5rem));
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--control-border);
+  border-radius: 1rem;
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}
+
+.account-email {
+  color: var(--muted);
+}
+
+/* Phones: room above the fixed bar, and the bar itself. */
+main:has(~ .tab-bar) {
+  padding-bottom: calc(5rem + env(safe-area-inset-bottom));
+}
+
+.tab-bar {
+  position: fixed;
+  inset-inline: 0;
+  inset-block-end: 0;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  padding: 0.375rem max(0.25rem, env(safe-area-inset-right))
+    calc(0.375rem + env(safe-area-inset-bottom)) max(0.25rem, env(safe-area-inset-left));
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+}
+
+.tab-bar button {
+  flex-direction: column;
+  gap: 0.1875rem;
+  min-height: 3rem;
+  padding: 0;
+  border: 0;
+  border-radius: 0.5rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.tab-bar button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: transparent;
+}
+
+.tab-bar [aria-current='page'],
+.tab-bar [aria-current='page']:hover:not(:disabled),
+.tab-bar [aria-current='page']:focus-visible {
+  background: transparent;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* Wide screens: text tabs after the wordmark, the current one on a surface pill. */
 .screen-nav {
   display: flex;
-  flex-wrap: wrap;
   gap: 0.25rem;
-  margin-bottom: 1rem;
+  margin-inline: 0.5rem;
 }
 
 .screen-nav button {
@@ -565,15 +701,10 @@ main > p {
   font-weight: 600;
 }
 
-.account-bar {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 0.25rem 0.75rem;
-  overflow-wrap: anywhere;
-  font-size: 0.8125rem;
-  color: var(--muted);
+@media (min-width: 768px) {
+  .app-header-inner {
+    max-width: 48rem;
+  }
 }
 
 .account-confirm {

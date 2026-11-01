@@ -214,8 +214,7 @@ export default function SessionSetup({
       onSubmit={(event) => void submit(event)}
       noValidate
     >
-      <h1>I Need To Focus</h1>
-
+      <h1 className="sr-only">New session</h1>
       <fieldset>
         <legend>Timer</legend>
         <div className="choices">

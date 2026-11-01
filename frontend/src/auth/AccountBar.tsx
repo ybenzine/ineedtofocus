@@ -13,7 +13,9 @@ import {
 } from './localData.ts'
 
 /**
- * Who is signed in, and Sign out; without an account (#331), Create account and Log in. Shown on every screen except a running timer or the session summary.
+ * The right-hand end of the header (#406). Without an account (#331): a Log in link. Signed in: a
+ * 44 px account button (the email's first letter) that opens a menu with the email and Sign out.
+ * Shown on every screen except a running timer or the session summary.
  * Sign out is refused while a timer runs; unsynced sessions and edits get one last sync (at most
  * 10 s, skipped offline) and, if any remain, are deleted only after a confirmation (Cancel is
  * the default).
@@ -24,6 +26,9 @@ export default function AccountBar({ controller }: { controller: TimerController
   const [message, setMessage] = useState('')
   const [unsynced, setUnsynced] = useState<UnsyncedCount | null>(null)
   const [busy, setBusy] = useState(false)
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
   const signOutRef = useRef<HTMLButtonElement>(null)
 
@@ -31,23 +36,45 @@ export default function AccountBar({ controller }: { controller: TimerController
     if (unsynced) cancelRef.current?.focus()
   }, [unsynced])
 
+  // The menu closes on a click or focus outside it.
+  useEffect(() => {
+    if (!open) return
+    function outside(event: Event) {
+      if (rootRef.current?.contains(event.target as Node)) return
+      setOpen(false)
+      setUnsynced(null)
+      setMessage('')
+    }
+    document.addEventListener('pointerdown', outside)
+    document.addEventListener('focusin', outside)
+    return () => {
+      document.removeEventListener('pointerdown', outside)
+      document.removeEventListener('focusin', outside)
+    }
+  }, [open])
+
+  function close(refocus: boolean) {
+    setOpen(false)
+    setUnsynced(null)
+    setMessage('')
+    if (refocus) buttonRef.current?.focus()
+  }
+
   function cancelConfirm() {
     setUnsynced(null)
     signOutRef.current?.focus()
   }
 
   if (!account) {
-    // Without an account (#331): no email, no Sign out, just the two ways in.
+    // Without an account (#331): no email, no Sign out, just the way in. The sign-in screen keeps
+    // its switch to creating an account.
     if (!anonymous) return null
     return (
-      <header className="account-bar">
-        <AuthLink form="signup" origin="screen">
-          Create account
-        </AuthLink>
+      <div className="account-bar">
         <AuthLink form="signin" origin="screen">
           Log in
         </AuthLink>
-      </header>
+      </div>
     )
   }
   const { signOut } = account
@@ -83,33 +110,54 @@ export default function AccountBar({ controller }: { controller: TimerController
   }
 
   return (
-    <header className="account-bar">
-      <span>{account.user.email}</span>
-      <button type="button" ref={signOutRef} onClick={() => void request()} disabled={busy}>
-        Sign out
+    <div
+      className="account-bar"
+      ref={rootRef}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && open) close(true)
+      }}
+    >
+      <button
+        type="button"
+        className="account-button"
+        ref={buttonRef}
+        aria-label={account.user.email}
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => (open ? close(false) : setOpen(true))}
+      >
+        <span aria-hidden="true">{account.user.email.charAt(0).toUpperCase()}</span>
       </button>
-      {message && <span role="alert">{message}</span>}
-      {unsynced && (
-        <div
-          role="alertdialog"
-          aria-label="Confirm sign out"
-          className="account-confirm"
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') {
-              event.stopPropagation()
-              cancelConfirm()
-            }
-          }}
-        >
-          <p>{unsyncedWarning(unsynced)}</p>
-          <button type="button" ref={cancelRef} onClick={cancelConfirm}>
-            Cancel
+      {open && (
+        <div className="account-menu" role="group" aria-label="Account">
+          <span className="account-email">{account.user.email}</span>
+          <button type="button" ref={signOutRef} onClick={() => void request()} disabled={busy}>
+            Sign out
           </button>
-          <button type="button" className="danger" onClick={() => void finish()}>
-            Sign out anyway
-          </button>
+          {message && <span role="alert">{message}</span>}
+          {unsynced && (
+            <div
+              role="alertdialog"
+              aria-label="Confirm sign out"
+              className="account-confirm"
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.stopPropagation()
+                  cancelConfirm()
+                }
+              }}
+            >
+              <p>{unsyncedWarning(unsynced)}</p>
+              <button type="button" ref={cancelRef} onClick={cancelConfirm}>
+                Cancel
+              </button>
+              <button type="button" className="danger" onClick={() => void finish()}>
+                Sign out anyway
+              </button>
+            </div>
+          )}
         </div>
       )}
-    </header>
+    </div>
   )
 }

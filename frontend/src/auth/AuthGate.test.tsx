@@ -1,3 +1,4 @@
+import { signOutButton } from '../test/accountMenu.ts'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -133,7 +134,7 @@ describe('AuthGate', () => {
   it('lands a signed-in user on the app', async () => {
     renderGate(makeApi({ me: vi.fn().mockResolvedValue(user) }))
     expect(await screen.findByText('the timer app')).toBeInTheDocument()
-    expect(screen.getByText('a@b.co')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'a@b.co' })).toBeInTheDocument()
   })
 
   it('opens the app offline for a remembered user', async () => {
@@ -285,7 +286,7 @@ describe('AuthGate', () => {
     await screen.findByRole('heading', { name: 'Sign in' })
     fill('a@b.co', 'password1')
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
-    await waitFor(() => expect(screen.getByText('a@b.co')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'a@b.co' })).toBeInTheDocument())
     expect(api.signIn).toHaveBeenCalledTimes(2)
   })
 })
@@ -301,7 +302,7 @@ describe('sign out', () => {
     await signedIn(api)
     seedUserData()
     sessionStorage.setItem('anything', 'x')
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     expect(api.signOut).toHaveBeenCalled()
     for (const key of [SETTINGS_KEY, TAGS_KEY, USER_KEY, OWNER_KEY, YOUTUBE_LINK_KEY]) {
@@ -318,7 +319,7 @@ describe('sign out', () => {
     const api = makeApi({ me: vi.fn().mockResolvedValue(user) })
     document.documentElement.setAttribute('data-theme', 'light')
     await signedIn(api)
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     // The theme is reset in a passive effect, which may not have run when the heading shows up.
     await waitFor(() => expect(document.documentElement).not.toHaveAttribute('data-theme'))
@@ -332,7 +333,7 @@ describe('sign out', () => {
     }
     const unregister = registerLocalDataHook(hook)
     await signedIn(makeApi({ me: vi.fn().mockResolvedValue(user) }))
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     await screen.findByRole('heading', { name: 'Sign in' })
     expect(hook.trySync).toHaveBeenCalled()
     expect(hook.clear).toHaveBeenCalled()
@@ -347,7 +348,7 @@ describe('sign out', () => {
     }
     const unregister = registerLocalDataHook(hook)
     await signedIn(makeApi({ me: vi.fn().mockResolvedValue(user) }))
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(
       await screen.findByText("3 sessions haven't synced and will be deleted from this device."),
     ).toBeInTheDocument()
@@ -361,7 +362,7 @@ describe('sign out', () => {
     const api = makeApi({ me: vi.fn().mockResolvedValue(user) })
     await signedIn(api, controller)
     seedUserData()
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'End your session before signing out.',
     )
@@ -376,7 +377,7 @@ describe('sign out', () => {
     const api = makeApi({ me: vi.fn().mockResolvedValue(user) })
     await signedIn(api, controller)
     seedUserData()
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(
       await screen.findByText("1 session hasn't synced and will be deleted from this device."),
     ).toBeInTheDocument()
@@ -384,12 +385,12 @@ describe('sign out', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus())
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(screen.getByRole('button', { name: 'Sign out' })).toHaveFocus()
+    expect(signOutButton()).toHaveFocus()
     expect(api.signOut).not.toHaveBeenCalled()
     expect(localStorage.getItem(ACTIVE_SESSION_KEY)).not.toBeNull()
     expect(localStorage.getItem(SETTINGS_KEY)).not.toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     fireEvent.click(await screen.findByRole('button', { name: 'Sign out anyway' }))
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     expect(localStorage.getItem(ACTIVE_SESSION_KEY)).toBeNull()
@@ -406,7 +407,7 @@ describe('sign out', () => {
     await controller.stop()
     fail = false
     await signedIn(makeApi({ me: vi.fn().mockResolvedValue(user) }), controller)
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
   })
 
@@ -418,7 +419,7 @@ describe('sign out', () => {
     }
     const unregister = registerLocalDataHook(hook)
     await signedIn(makeApi({ me: vi.fn().mockResolvedValue(user) }))
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(
       await screen.findByText(
         "2 sessions haven't synced and will be deleted from this device. Some changes to sessions haven't synced either.",
@@ -435,7 +436,7 @@ describe('sign out', () => {
     }
     const unregister = registerLocalDataHook(hook)
     await signedIn(makeApi({ me: vi.fn().mockResolvedValue(user) }))
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(
       await screen.findByText(
         "Some changes to sessions haven't synced and will be deleted from this device.",
@@ -455,7 +456,7 @@ describe('sign out', () => {
     const api = makeApi({ me: vi.fn().mockResolvedValue(user) })
     await signedIn(api)
     seedUserData()
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     await screen.findByRole('button', { name: 'Sign out anyway' })
 
     // Meanwhile another tab starts a session.
@@ -490,7 +491,7 @@ describe('sign out', () => {
     const unregisterOther = registerLocalDataHook(other)
     await signedIn(makeApi({ me: vi.fn().mockResolvedValue(user) }))
     seedUserData()
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
     expect(other.clear).toHaveBeenCalled()
     expect(localStorage.getItem(SETTINGS_KEY)).toBeNull()
@@ -509,7 +510,7 @@ describe('sign out', () => {
       signOut: vi.fn().mockRejectedValue(new AuthError('server', 'down')),
     })
     await signedIn(api)
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't sign out. Try again.")
     expect(screen.getByText('the timer app')).toBeInTheDocument()
     expect(localStorage.getItem(PENDING_LOGOUT_KEY)).toBeNull()
@@ -540,7 +541,7 @@ describe('offline sign out', () => {
     renderGate({ ...httpAuthApi, me: vi.fn().mockResolvedValue(user) })
     await screen.findByText('the timer app')
     seedUserData()
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     await waitFor(() => expect(timeouts).toEqual([SIGNOUT_TIMEOUT_MS]))
     expect(SIGNOUT_TIMEOUT_MS).toBe(10000)
     expect(localStorage.getItem(PENDING_LOGOUT_KEY)).toBeNull()
@@ -558,7 +559,7 @@ describe('offline sign out', () => {
     renderGate(api)
     await screen.findByText('the timer app')
     seedUserData()
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(await screen.findByText(OFFLINE_SIGN_OUT_NOTICE)).toBeInTheDocument()
     expect(localStorage.getItem(PENDING_LOGOUT_KEY)).not.toBeNull()
     expect(localStorage.getItem(SETTINGS_KEY)).toBeNull()

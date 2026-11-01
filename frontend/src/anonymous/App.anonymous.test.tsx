@@ -1,3 +1,4 @@
+import { findSignOutButton } from '../test/accountMenu.ts'
 import type { ReactNode } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -129,10 +130,10 @@ describe('first screen and account bar', () => {
     expect(apiCalls()).toEqual([])
   })
 
-  it('shows Create account and Log in in the account bar, with no email or Sign out', async () => {
+  it('shows only Log in in the header, with no email or Sign out', async () => {
     renderApp()
     await screen.findByRole('button', { name: 'Start' })
-    expect(screen.getByRole('link', { name: 'Create account' })).toHaveAttribute('href', '/signup')
+    expect(screen.queryByRole('link', { name: 'Create account' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Log in' })).toHaveAttribute('href', '/login')
     expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
     expect(screen.queryByText(/@/)).not.toBeInTheDocument()
@@ -249,7 +250,9 @@ describe('/signup, /login and Continue without an account', () => {
 
     renderApp()
     fireEvent.click(await screen.findByRole('button', { name: 'History' }))
-    fireEvent.click(await screen.findByRole('link', { name: 'Create account' }))
+    fireEvent.click(await screen.findByRole('link', { name: 'Log in' }))
+    await screen.findByRole('heading', { name: 'Sign in' })
+    fireEvent.click(screen.getByRole('button', { name: 'Create an account' }))
     await screen.findByRole('heading', { name: 'Create your account' })
     fill('a@b.co', 'longenough1')
     fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
@@ -604,7 +607,7 @@ describe('signing up or in from the prompt', () => {
   it('returns to the summary after a sign-out followed by anonymous use', async () => {
     const api = makeApi({ me: vi.fn().mockResolvedValue(alice) })
     const { rig } = renderApp({ api })
-    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }))
+    fireEvent.click(await findSignOutButton())
     fireEvent.click(await screen.findByRole('link', { name: 'Continue without an account' }))
     await finishAnonymousSession()
     fireEvent.click(screen.getByRole('link', { name: 'log in' }))
@@ -709,7 +712,7 @@ describe('a stale anonymous tab after a sign-in in another tab', () => {
         new StorageEvent('storage', { key: USER_KEY, newValue: JSON.stringify(alice) }),
       )
     })
-    expect(await screen.findByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    expect(await findSignOutButton()).toBeInTheDocument()
     expect(
       screen.queryByText(/Without an account, your settings are saved on this device only/),
     ).not.toBeInTheDocument()
@@ -728,7 +731,7 @@ describe('a stale anonymous tab after a sign-in in another tab', () => {
         new StorageEvent('storage', { key: USER_KEY, newValue: JSON.stringify(alice) }),
       )
     })
-    await screen.findByRole('button', { name: 'Sign out' })
+    await findSignOutButton()
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
     await screen.findByRole('timer')
     expect(localStorage.getItem(ANON_ACTIVE_SESSION_KEY)).toBeNull()
@@ -769,7 +772,7 @@ describe('anonymous use never runs beside a signed-in device', () => {
     localStorage.removeItem(ANON_SETTINGS_KEY)
     vi.mocked(api.me).mockRejectedValue(new AuthError('network', 'offline'))
     signInElsewhere()
-    expect(await screen.findByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+    expect(await findSignOutButton()).toBeInTheDocument()
     expect(localStorage.getItem(ANON_SETTINGS_KEY)).toBeNull()
   })
 
