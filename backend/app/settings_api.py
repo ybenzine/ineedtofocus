@@ -69,6 +69,9 @@ class SettingsOut(BaseModel):
         "null means Work (AC7.2)"
     )
     theme: Theme = Field(description="system follows the device's light/dark setting (#214)")
+    countdown_recent_minutes: int | None = Field(
+        description="Last custom Countdown length in minutes (#405); null = none"
+    )
     updated_at: datetime
 
 
@@ -81,7 +84,7 @@ def _drop_defaults(schema: dict[str, Any]) -> None:
 class SettingsPatch(BaseModel):
     """Partial update: send only the fields to change. An omitted field means unchanged; no
     field has a default. `null` is a value for `default_reminder_minutes` (Off),
-    `pomodoro_config` and `last_tag` (back to none)."""
+    `pomodoro_config`, `last_tag` and `countdown_recent_minutes` (back to none)."""
 
     model_config = ConfigDict(extra="forbid", json_schema_extra=_drop_defaults)
 
@@ -93,6 +96,7 @@ class SettingsPatch(BaseModel):
     pomodoro_config: PomodoroConfig | None = None
     last_tag: TagValue | None = None
     theme: Theme = Theme.SYSTEM
+    countdown_recent_minutes: Annotated[StrictInt, Field(ge=1, le=240)] | None = None
 
 
 def _to_out(row: UserSettings) -> SettingsOut:
@@ -107,6 +111,7 @@ def _to_out(row: UserSettings) -> SettingsOut:
         ),
         last_tag=row.effective_last_tag,
         theme=Theme(row.theme),
+        countdown_recent_minutes=row.countdown_recent_minutes,
         updated_at=row.updated_at,
     )
 

@@ -589,6 +589,18 @@
             "title": "Background Volume",
             "type": "integer"
           },
+          "countdown_recent_minutes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Last custom Countdown length in minutes (#405); null = none",
+            "title": "Countdown Recent Minutes"
+          },
           "default_reminder_minutes": {
             "anyOf": [
               {
@@ -660,6 +672,7 @@
           "pomodoro_config",
           "last_tag",
           "theme",
+          "countdown_recent_minutes",
           "updated_at"
         ],
         "title": "SettingsOut",
@@ -667,7 +680,7 @@
       },
       "SettingsPatch": {
         "additionalProperties": false,
-        "description": "Partial update: send only the fields to change. An omitted field means unchanged; no\nfield has a default. `null` is a value for `default_reminder_minutes` (Off),\n`pomodoro_config` and `last_tag` (back to none).",
+        "description": "Partial update: send only the fields to change. An omitted field means unchanged; no\nfield has a default. `null` is a value for `default_reminder_minutes` (Off),\n`pomodoro_config`, `last_tag` and `countdown_recent_minutes` (back to none).",
         "properties": {
           "alert_volume": {
             "maximum": 100.0,
@@ -680,6 +693,19 @@
             "minimum": 0.0,
             "title": "Background Volume",
             "type": "integer"
+          },
+          "countdown_recent_minutes": {
+            "anyOf": [
+              {
+                "maximum": 240.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Countdown Recent Minutes"
           },
           "default_reminder_minutes": {
             "anyOf": [

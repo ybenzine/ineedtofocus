@@ -137,6 +137,51 @@ def test_youtube_title_column_is_nullable_and_old_rows_keep_null(
     command.upgrade(alembic_config, "head")
 
 
+def test_countdown_recent_minutes_is_nullable_and_the_previous_release_ignores_it(
+    alembic_config: Config, test_db_url: str
+) -> None:
+    """0006 (#408) is expand-only: nullable, no default, checked 1-240; it rolls back."""
+    command.upgrade(alembic_config, "0005")
+    run(
+        _exec(
+            test_db_url,
+            "INSERT INTO users (id, email, password_hash) VALUES (:u, 'a@b.c', 'x')",
+            u=USER,
+        )
+    )
+    run(_exec(test_db_url, "INSERT INTO user_settings (user_id) VALUES (:u)", u=USER))
+    command.upgrade(alembic_config, "head")
+
+    def read(conn: Connection) -> Any:
+        return conn.execute(text("SELECT countdown_recent_minutes FROM user_settings")).scalar_one()
+
+    assert run(_with_conn(test_db_url, read)) is None
+
+    # The previous release's statements name the old columns only and still work.
+    run(_exec(test_db_url, "UPDATE user_settings SET alert_volume = 5, theme = 'dark'"))
+    other = "00000000-0000-0000-0000-0000000000b2"
+    run(
+        _exec(
+            test_db_url,
+            "INSERT INTO users (id, email, password_hash) VALUES (:u, 'd@e.f', 'x')",
+            u=other,
+        )
+    )
+    run(_exec(test_db_url, "INSERT INTO user_settings (user_id) VALUES (:u)", u=other))
+    for bad in (0, 241):
+        with pytest.raises((IntegrityError, DBAPIError)):
+            run(_exec(test_db_url, f"UPDATE user_settings SET countdown_recent_minutes = {bad}"))
+    run(_exec(test_db_url, "UPDATE user_settings SET countdown_recent_minutes = 240"))
+
+    command.downgrade(alembic_config, "0005")
+
+    def columns(conn: Connection) -> Any:
+        return {c["name"] for c in inspect(conn).get_columns("user_settings")}
+
+    assert "countdown_recent_minutes" not in run(_with_conn(test_db_url, columns))
+    command.upgrade(alembic_config, "head")
+
+
 def test_single_migration_head(alembic_config: Config) -> None:
     assert len(ScriptDirectory.from_config(alembic_config).get_heads()) == 1
 
@@ -340,7 +385,7 @@ def test_settings_defaults_and_ranges(db: str) -> None:
         return conn.execute(
             text(
                 "SELECT week_start_day, alert_volume, background_volume, keep_screen_awake, "
-                "default_reminder_minutes, theme FROM user_settings"
+                "default_reminder_minutes, theme, countdown_recent_minutes FROM user_settings"
             )
         ).one()
 
@@ -352,6 +397,7 @@ def test_settings_defaults_and_ranges(db: str) -> None:
         False,
         None,
         "system",
+        None,
     )  # Sunday, reminders Off, follow the device
     for bad in (
         "week_start_day = 7",
@@ -360,6 +406,8 @@ def test_settings_defaults_and_ranges(db: str) -> None:
         "last_tag = 'Gaming'",
         "theme = 'sepia'",
         "theme = NULL",
+        "countdown_recent_minutes = 0",
+        "countdown_recent_minutes = 241",
     ):
         with pytest.raises((IntegrityError, DBAPIError)):
             run(_exec(db, f"UPDATE user_settings SET {bad}"))
