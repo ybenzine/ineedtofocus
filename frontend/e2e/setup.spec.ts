@@ -290,3 +290,58 @@ for (const scheme of ['dark', 'light'] as const) {
     })
   }
 }
+
+test('a custom countdown time comes back as a sixth preset on the next setup', async ({ page }) => {
+  await installClock(page)
+  await signUp(page, newEmail())
+  const presets = page.getByRole('group', { name: 'Preset lengths' })
+  await expect(presets.getByRole('button')).toHaveCount(5)
+
+  await duration(page).fill('50')
+  await page.getByRole('button', { name: 'Start' }).click()
+  await expect(page.getByRole('timer', { name: 'Time' })).toBeVisible()
+  await page.getByRole('button', { name: 'Stop' }).click()
+  await page.getByRole('button', { name: 'New session' }).first().click()
+
+  await expect(presets.getByRole('button')).toHaveCount(6)
+  const recent = page.getByRole('button', { name: '50 minutes, your recent custom time' })
+  await expect(recent).toHaveText('50')
+  await expect(recent).toHaveAttribute('aria-pressed', 'false')
+  await recent.click()
+  await expect(duration(page)).toHaveValue('50')
+  await expect(recent).toHaveAttribute('aria-pressed', 'true')
+  await expectNoSidewaysScroll(page)
+})
+
+test.describe('six presets with a three-digit recent time', () => {
+  for (const [width, height] of [
+    [320, 640],
+    [390, 844],
+  ] as const) {
+    test(`fit at ${width} px, 44 px tall, no sideways scroll`, async ({ page }) => {
+      await page.setViewportSize({ width, height })
+      await installClock(page)
+      await signUp(page, newEmail())
+      await duration(page).fill('120')
+      await page.getByRole('button', { name: 'Start' }).click()
+      await expect(page.getByRole('timer', { name: 'Time' })).toBeVisible()
+      await page.getByRole('button', { name: 'Stop' }).click()
+      await page.getByRole('button', { name: 'New session' }).first().click()
+
+      const buttons = page.getByRole('group', { name: 'Preset lengths' }).getByRole('button')
+      await expect(buttons).toHaveCount(6)
+      await expectNoSidewaysScroll(page)
+      for (const box of await buttons.evaluateAll((els) =>
+        els.map((el) => el.getBoundingClientRect().toJSON() as DOMRect),
+      )) {
+        expect(box.height).toBeGreaterThanOrEqual(44)
+        expect(box.left).toBeGreaterThanOrEqual(0)
+        expect(box.right).toBeLessThanOrEqual(width)
+      }
+      const recent = buttons.nth(5)
+      // The label is not clipped by its own button.
+      expect(await recent.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true)
+      await expect(page.getByRole('button', { name: 'Start' })).toBeInViewport({ ratio: 1 })
+    })
+  }
+})

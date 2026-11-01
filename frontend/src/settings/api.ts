@@ -1,5 +1,6 @@
 // The Settings API (#12): GET and partial PATCH of /api/settings.
 
+import { recentCustomMinutes } from '../setup/options.ts'
 import { type Tag } from '../timer/index.ts'
 
 /** The Pomodoro configuration as the API stores it (snake_case, no `mode`). */
@@ -34,6 +35,8 @@ export interface Settings {
   last_tag: Tag | null
   /** #214 */
   theme: ThemeSetting
+  /** The last custom Countdown length (AC2.7, #409); null = none. */
+  countdown_recent_minutes: number | null
 }
 
 export type SettingsPatch = Partial<Settings>
@@ -47,6 +50,7 @@ export const SETTINGS_KEYS = [
   'pomodoro_config',
   'last_tag',
   'theme',
+  'countdown_recent_minutes',
 ] as const satisfies readonly (keyof Settings)[]
 
 /** Defaults for a new user (decision log 2026-10-21, AC12.x). */
@@ -59,6 +63,7 @@ export const DEFAULT_SETTINGS: Settings = {
   pomodoro_config: null,
   last_tag: null,
   theme: 'system',
+  countdown_recent_minutes: null,
 }
 
 export type SettingsErrorKind = 'network' | 'unauthorized' | 'invalid' | 'server'
@@ -124,6 +129,7 @@ export function parseSettings(value: unknown): Settings {
     theme: (THEME_SETTINGS as readonly unknown[]).includes(value.theme)
       ? (value.theme as ThemeSetting)
       : d.theme,
+    countdown_recent_minutes: recentCustomMinutes(value.countdown_recent_minutes),
   }
 }
 

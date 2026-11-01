@@ -8,6 +8,7 @@ import {
   type Preferences,
   type PreferencesStore,
 } from '../setup/preferences.ts'
+import { recentCustomMinutes } from '../setup/options.ts'
 import { validateConfig, type PomodoroConfig } from '../timer/index.ts'
 import type { ApiPomodoroConfig } from './api.ts'
 import type { SettingsStore } from './store.ts'
@@ -43,8 +44,12 @@ export class SettingsPreferencesStore implements PreferencesStore {
   }
 
   load(): Preferences {
-    const { last_tag, pomodoro_config } = this.#settings.values
-    return { tag: last_tag ?? 'work', pomodoro: fromApiPomodoro(pomodoro_config) }
+    const { last_tag, pomodoro_config, countdown_recent_minutes } = this.#settings.values
+    return {
+      tag: last_tag ?? 'work',
+      pomodoro: fromApiPomodoro(pomodoro_config),
+      countdownRecent: countdown_recent_minutes,
+    }
   }
 
   save(preferences: Preferences): void {
@@ -53,6 +58,11 @@ export class SettingsPreferencesStore implements PreferencesStore {
     if (preferences.tag !== current.tag) patch.last_tag = preferences.tag
     if (JSON.stringify(preferences.pomodoro) !== JSON.stringify(current.pomodoro)) {
       patch.pomodoro_config = toApiPomodoro(preferences.pomodoro)
+    }
+    // Left out (older callers) means unchanged.
+    if (preferences.countdownRecent !== undefined) {
+      const recent = recentCustomMinutes(preferences.countdownRecent)
+      if (recent !== current.countdownRecent) patch.countdown_recent_minutes = recent
     }
     this.#settings.update(patch)
   }

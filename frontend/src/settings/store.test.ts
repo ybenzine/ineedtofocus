@@ -7,6 +7,8 @@ import {
   type SettingsApi,
   type SettingsPatch,
 } from './api.ts'
+import { ANON_SETTINGS_KEY, clearAnonymousData } from '../anonymous/keys.ts'
+import { DEFAULT_PREFERENCES } from '../setup/preferences.ts'
 import { SETTINGS_KEY, SettingsStore } from './store.ts'
 
 afterEach(() => localStorage.clear())
@@ -230,5 +232,73 @@ describe('SettingsAlertVolumeStore (AC5.2, AC12.2)', () => {
     await store.flush()
     expect(patches).toEqual([{ alert_volume: 100 }])
     expect(localStorage.getItem('ineedtofocus.alertVolume')).toBe('5') // untouched
+  })
+})
+
+describe('countdown_recent_minutes (#409)', () => {
+  it('is none by default and ignores a preset or out-of-range value from the cache', () => {
+    expect(DEFAULT_SETTINGS.countdown_recent_minutes).toBeNull()
+    for (const bad of [30, 0, 241, 1.5, '50', undefined]) {
+      localStorage.setItem(
+        SETTINGS_KEY,
+        JSON.stringify({ owner: null, values: { countdown_recent_minutes: bad } }),
+      )
+      expect(
+        new SettingsStore({ storage: localStorage }).values.countdown_recent_minutes,
+      ).toBeNull()
+    }
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ owner: null, values: { countdown_recent_minutes: 50 } }),
+    )
+    expect(new SettingsStore({ storage: localStorage }).values.countdown_recent_minutes).toBe(50)
+  })
+
+  it('signed in, goes through the settings store: kept on the device and sent as a patch', async () => {
+    const { api, patches } = fakeServer()
+    const store = new SettingsStore({ api, storage: localStorage, owner: 'u1' })
+    const prefs = new SettingsPreferencesStore(store)
+    prefs.save({ ...prefs.load(), countdownRecent: 50 })
+    expect(prefs.load().countdownRecent).toBe(50)
+    await store.flush()
+    expect(patches).toEqual([{ countdown_recent_minutes: 50 }])
+    expect(
+      JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}').values.countdown_recent_minutes,
+    ).toBe(50)
+  })
+
+  it('offline, the edit stays pending and is sent when the connection returns', async () => {
+    const { api, server, patches } = fakeServer()
+    server.online = false
+    const store = new SettingsStore({ api, storage: localStorage, owner: 'u1' })
+    const prefs = new SettingsPreferencesStore(store)
+    prefs.save({ ...prefs.load(), countdownRecent: 75 })
+    await store.flush()
+    expect(store.hasPending()).toBe(true)
+    server.online = true
+    await store.flush()
+    expect(patches).toEqual([{ countdown_recent_minutes: 75 }])
+  })
+
+  it('does not save a preset or out-of-range value', async () => {
+    const { api, patches } = fakeServer()
+    const store = new SettingsStore({ api, storage: localStorage, owner: 'u1' })
+    const prefs = new SettingsPreferencesStore(store)
+    for (const bad of [30, 0, 500]) prefs.save({ ...prefs.load(), countdownRecent: bad })
+    await store.flush()
+    expect(patches).toEqual([])
+    expect(prefs.load().countdownRecent).toBeNull()
+  })
+
+  it('as a guest, lives under the anonymous key and sign-in clears it', () => {
+    const store = new SettingsStore({ storage: localStorage, key: ANON_SETTINGS_KEY })
+    new SettingsPreferencesStore(store).save({ ...DEFAULT_PREFERENCES, countdownRecent: 50 })
+    expect(localStorage.getItem(ANON_SETTINGS_KEY)).toContain('"countdown_recent_minutes":50')
+    // Never in the account's cache.
+    expect(localStorage.getItem(SETTINGS_KEY)).toBeNull()
+    clearAnonymousData()
+    expect(localStorage.getItem(ANON_SETTINGS_KEY)).toBeNull()
+    const account = new SettingsStore({ storage: localStorage, owner: 'u1' })
+    expect(account.values.countdown_recent_minutes).toBeNull()
   })
 })

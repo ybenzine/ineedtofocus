@@ -779,3 +779,105 @@ describe('cleanGoal', () => {
     expect(cleanGoal('write\nthe\r\nreport')).toBe('write the report')
   })
 })
+
+describe('SessionSetup recent custom time (#409)', () => {
+  const recentButton = (minutes: number) =>
+    screen.getByRole('button', { name: `${minutes} minutes, your recent custom time` })
+  const withRecent = (countdownRecent: number | null) =>
+    new MemoryPreferencesStore({ ...DEFAULT_PREFERENCES, countdownRecent })
+
+  it('has five buttons without a recent value', () => {
+    setup()
+    expect(
+      within(screen.getByRole('group', { name: 'Preset lengths' })).getAllByRole('button'),
+    ).toHaveLength(5)
+  })
+
+  it('shows a sixth button after 90, labelled and with the clock icon', () => {
+    setup(withRecent(50))
+    const buttons = within(screen.getByRole('group', { name: 'Preset lengths' })).getAllByRole(
+      'button',
+    )
+    expect(buttons.map((b) => b.textContent)).toEqual(['15', '30', '45', '60', '90', '50'])
+    const sixth = recentButton(50)
+    expect(sixth).toBe(buttons[5])
+    expect(sixth).toHaveClass('preset-recent')
+    expect(sixth.querySelector('svg')).toHaveAttribute('width', '12')
+  })
+
+  it('sets the dial from it and shows it as selected only when the length equals it', () => {
+    setup(withRecent(50))
+    expect(recentButton(50)).toHaveAttribute('aria-pressed', 'false')
+    fireEvent.click(recentButton(50))
+    expect(duration()).toHaveValue('50')
+    expect(recentButton(50)).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(screen.getByRole('button', { name: '60 minutes' }))
+    expect(recentButton(50)).toHaveAttribute('aria-pressed', 'false')
+    typeDuration('50')
+    expect(recentButton(50)).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  it('fits a three-digit value', () => {
+    setup(withRecent(120))
+    expect(recentButton(120)).toHaveTextContent('120')
+  })
+
+  it('ignores a stored value that is a preset or out of range', () => {
+    for (const bad of [30, 0, 241, 12.5]) {
+      const { unmount } = render(<SessionSetup preferences={withRecent(bad)} onStart={vi.fn()} />)
+      expect(screen.queryByRole('button', { name: /your recent custom time/ })).toBeNull()
+      unmount()
+    }
+  })
+
+  it('stores a custom Countdown length on start, replacing an older one', async () => {
+    const { onStart, preferences } = setup()
+    typeDuration('50')
+    fireEvent.click(start())
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(preferences.load().countdownRecent).toBe(50))
+    typeDuration('75')
+    fireEvent.click(start())
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(preferences.load().countdownRecent).toBe(75))
+  })
+
+  it('stores it even when the session would be too short to save', async () => {
+    const { onStart, preferences } = setup()
+    typeDuration('1')
+    fireEvent.click(start())
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(preferences.load().countdownRecent).toBe(1))
+  })
+
+  it('leaves it as it is when a preset is started', async () => {
+    const { onStart, preferences } = setup(withRecent(50))
+    fireEvent.click(screen.getByRole('button', { name: '45 minutes' }))
+    fireEvent.click(start())
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1))
+    expect(preferences.load().countdownRecent).toBe(50)
+  })
+
+  it('leaves it as it is in Pomodoro and Unlimited', async () => {
+    const { onStart, preferences } = setup(withRecent(50))
+    chooseMode('Pomodoro')
+    typeFocus('40')
+    fireEvent.click(start())
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(1))
+    expect(preferences.load().countdownRecent).toBe(50)
+    chooseMode('Unlimited')
+    fireEvent.click(start())
+    await waitFor(() => expect(onStart).toHaveBeenCalledTimes(2))
+    expect(preferences.load().countdownRecent).toBe(50)
+  })
+
+  it('does not store it when the start fails', async () => {
+    const preferences = new MemoryPreferencesStore()
+    const onStart = vi.fn().mockRejectedValue(new Error('nope'))
+    render(<SessionSetup preferences={preferences} onStart={onStart} />)
+    typeDuration('50')
+    fireEvent.click(start())
+    await screen.findByRole('alert')
+    expect(preferences.load().countdownRecent ?? null).toBeNull()
+  })
+})
