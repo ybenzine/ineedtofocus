@@ -88,6 +88,7 @@ const NAMES = [
   'muted',
   'accent',
   'accent-hover',
+  'accent-light',
   'on-accent',
   'error',
 ]
@@ -103,6 +104,7 @@ describe('design tokens (#213, #214)', () => {
       muted: '#ababd3',
       accent: '#949aff',
       'accent-hover': '#b9bdff',
+      'accent-light': '#cdd0ff',
       'on-accent': '#0d0d33',
       error: '#ff8a80',
     })
@@ -118,6 +120,7 @@ describe('design tokens (#213, #214)', () => {
       muted: '#4a4a7c',
       accent: '#4146d1',
       'accent-hover': '#2a2ea8',
+      'accent-light': '#7276e0',
       'on-accent': '#fafaff',
       error: '#b3261e',
     })
@@ -253,6 +256,19 @@ describe.each([
   })
   it.each(['bg', 'surface'])('the focus ring (accent) on %s', (bg) => {
     expect(contrast(tk(set, 'accent'), tk(set, bg))).toBeGreaterThanOrEqual(3)
+  })
+})
+
+describe.each([
+  ['dark', DARK],
+  ['light', LIGHT],
+])('%s set: the dial laps (#407, AC9.5)', (_name, set) => {
+  it.each(['accent', 'accent-light'])('%s reaches 3:1 against the page and the ring track', (t) => {
+    expect(contrast(tk(set, t), tk(set, 'bg'))).toBeGreaterThanOrEqual(3)
+    expect(contrast(tk(set, t), tk(set, 'surface'))).toBeGreaterThanOrEqual(3)
+  })
+  it('the two laps differ by at least 1.5:1', () => {
+    expect(contrast(tk(set, 'accent'), tk(set, 'accent-light'))).toBeGreaterThanOrEqual(1.5)
   })
 })
 

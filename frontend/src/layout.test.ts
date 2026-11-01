@@ -84,9 +84,9 @@ describe('timer screen status gap (#286)', () => {
 })
 
 describe('fieldset legends are pills (#330)', () => {
-  it('shares one rule between New session and Settings with the requested styles', () => {
-    const match = css.match(/\.setup legend,\s*\.settings fieldset\.field legend\s*\{([^}]*)\}/)
-    if (!match) throw new Error('no shared legend rule')
+  it('gives the Settings legends the requested styles', () => {
+    const match = css.match(/\.settings fieldset\.field legend\s*\{([^}]*)\}/)
+    if (!match) throw new Error('no legend rule')
     const legend = match[1] ?? ''
     expect(legend).toMatch(/font-weight:\s*600/)
     expect(legend).toMatch(/background-color:\s*var\(--surface\)/)

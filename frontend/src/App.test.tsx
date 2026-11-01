@@ -280,8 +280,8 @@ describe('App', () => {
   it('starts a session and shows the timer screen', async () => {
     const { controller } = setup()
     fireEvent.click(await screen.findByRole('button', { name: 'Start' }))
-    expect(await screen.findByRole('timer')).toHaveTextContent('25:00')
-    expect(controller.current()?.config).toEqual({ mode: 'countdown', minutes: 25 })
+    expect(await screen.findByRole('timer')).toHaveTextContent('30:00')
+    expect(controller.current()?.config).toEqual({ mode: 'countdown', minutes: 30 })
   })
 
   it('unlocks audio on the Start press (browsers block it before a gesture)', async () => {
@@ -347,9 +347,7 @@ describe('App', () => {
     await screen.findByRole('timer')
     store.clear()
     window.dispatchEvent(new StorageEvent('storage', { key: ACTIVE_SESSION_KEY }))
-    await waitFor(() =>
-      expect(screen.getByRole('status')).toHaveTextContent(/ended in another tab/),
-    )
+    await waitFor(() => expect(screen.getByText(/ended in another tab/)).toBeInTheDocument())
     expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument()
   })
 

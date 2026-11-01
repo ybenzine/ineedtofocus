@@ -5,6 +5,7 @@ import { SettingsContext } from '../settings/SettingsContext.ts'
 import SettingsScreen from '../settings/SettingsScreen.tsx'
 import { SettingsStore } from '../settings/store.ts'
 import { MemoryPreferencesStore } from '../setup/preferences.ts'
+import { closeSheet, openSheet } from '../test/setupUi.ts'
 import SessionSetup, { type SessionRequest } from '../setup/SessionSetup.tsx'
 import { MemoryActiveSessionStore, TimerController } from '../timer/index.ts'
 import TimerScreen from '../timerscreen/TimerScreen.tsx'
@@ -47,7 +48,11 @@ function renderSetup() {
   return { onStart }
 }
 
-const pick = (name: string) => fireEvent.click(screen.getByRole('radio', { name }))
+// The sound sheet stays open while a source is picked, as when a user tries them in turn.
+const pick = (name: string) => {
+  if (!screen.queryByRole('dialog')) openSheet('Sound')
+  fireEvent.click(screen.getByRole('radio', { name }))
+}
 
 describe('Settings hint', () => {
   it('shows the sentence after the previews and describes both buttons with it', () => {
@@ -90,10 +95,10 @@ describe('Setup hint', () => {
   it('shows only while Rain is selected, and again when switching back', () => {
     device(IPHONE, 5)
     renderSetup()
-    const fieldset = screen.getByRole('group', { name: 'Background audio' })
-    expect(within(fieldset).queryByText(SETUP_SILENT_HINT)).not.toBeInTheDocument()
+    const sheetUnder = () => screen.queryByRole('dialog')
+    expect(sheetUnder()).toBeNull()
     pick('Rain')
-    const hint = within(fieldset).getByText(SETUP_SILENT_HINT)
+    const hint = within(screen.getByRole('dialog')).getByText(SETUP_SILENT_HINT)
     expect(hint.tagName).toBe('P')
     expect(hint).not.toHaveAttribute('role')
     expect(hint).not.toHaveAttribute('aria-live')
@@ -121,6 +126,7 @@ describe('Setup hint', () => {
     device(IPHONE, 5)
     const { onStart } = renderSetup()
     pick('Rain')
+    closeSheet()
     const start = screen.getByRole('button', { name: 'Start' })
     expect(start).toBeEnabled()
     fireEvent.click(start)

@@ -1,5 +1,11 @@
 import type { Tag } from '../src/timer/config.ts'
-import { expect, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test'
+import {
+  expect,
+  type APIRequestContext,
+  type BrowserContext,
+  type Locator,
+  type Page,
+} from '@playwright/test'
 
 export const PASSWORD = 'correct horse battery'
 
@@ -65,17 +71,48 @@ export interface CountdownOptions {
   goal?: string
 }
 
+/** Opens one of the New session rows (Tag, Goal or Sound) and returns its sheet. */
+export async function openSheet(page: Page, row: 'Tag' | 'Goal' | 'Sound'): Promise<Locator> {
+  await page.getByRole('button', { name: new RegExp(`^${row}\\b`) }).click()
+  const sheet = page.getByRole('dialog')
+  await expect(sheet).toBeVisible()
+  return sheet
+}
+
+export async function closeSheet(page: Page): Promise<void> {
+  await page.getByRole('dialog').getByRole('button', { name: 'Done' }).click()
+  await expect(page.getByRole('dialog')).toHaveCount(0)
+}
+
+/** Picks a tag in the Tag & goal sheet and closes it. */
+export async function pickTag(page: Page, name: string): Promise<void> {
+  const sheet = await openSheet(page, 'Tag')
+  await sheet.getByRole('radio', { name, exact: true }).check()
+  await closeSheet(page)
+}
+
+/** Types the goal in the Tag & goal sheet and closes it. */
+export async function typeGoal(page: Page, goal: string): Promise<void> {
+  const sheet = await openSheet(page, 'Goal')
+  await sheet.getByLabel('Goal', { exact: true }).fill(goal)
+  await closeSheet(page)
+}
+
+/** Picks the background sound in the Sound sheet; leaves the sheet open for YouTube. */
+export async function pickSound(page: Page, name: 'None' | 'Rain' | 'YouTube'): Promise<void> {
+  const sheet = await openSheet(page, 'Sound')
+  await sheet.getByRole('radio', { name, exact: true }).check()
+  if (name !== 'YouTube') await closeSheet(page)
+}
+
 /** Starts a countdown from the setup screen. */
 export async function startCountdown(page: Page, options: CountdownOptions = {}): Promise<void> {
   const { minutes = 1, tag, goal } = options
   await page.getByRole('radio', { name: 'Countdown' }).check()
-  await page.getByLabel('Duration').fill(String(minutes))
+  await page.getByLabel('Duration in minutes, 1 to 240').fill(String(minutes))
   // The radio labels are capitalised ("Study"); the tag keys are not.
-  if (tag)
-    await page
-      .getByRole('radio', { name: tag.charAt(0).toUpperCase() + tag.slice(1), exact: true })
-      .check()
-  if (goal) await page.getByLabel(/What are you focusing on/).fill(goal)
+  if (tag) await pickTag(page, tag.charAt(0).toUpperCase() + tag.slice(1))
+  if (goal) await typeGoal(page, goal)
   await page.getByRole('button', { name: 'Start' }).click()
   await expect(page.getByRole('timer', { name: 'Time' })).toBeVisible()
 }

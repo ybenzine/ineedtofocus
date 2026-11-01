@@ -3,6 +3,7 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App.tsx'
+import { openSheet } from './test/setupUi.ts'
 import { AccountContext, type Account } from './auth/AccountContext.tsx'
 import { makeRecord } from './test/fakeSessionsServer.ts'
 import { DEFAULT_SETTINGS } from './settings/api.ts'
@@ -31,6 +32,8 @@ describe('App and the tag list', () => {
         tags={new TagsStore({ api: tagsApi, owner: null })}
       />,
     )
+    await screen.findByRole('button', { name: 'Start' })
+    expect(openSheet('Tag')).toBeInTheDocument()
     expect(await screen.findByRole('radio', { name: 'Deep work' })).toBeInTheDocument()
     expect(tagsApi.calls).toContain('list')
   })
@@ -52,6 +55,8 @@ describe('App and the tag list', () => {
         tags={new TagsStore({ api: tagsApi, owner: null })}
       />,
     )
+    await screen.findByRole('button', { name: 'Start' })
+    expect(openSheet('Tag')).toBeInTheDocument()
     expect(await screen.findByRole('radio', { name: 'Deep work' })).toBeInTheDocument()
   })
 
