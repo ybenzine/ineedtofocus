@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { TimerController } from '../timer/index.ts'
 import { useAnonymous } from '../anonymous/AnonymousContext.ts'
 import { AuthLink } from '../anonymous/AuthLink.tsx'
@@ -27,6 +27,12 @@ export default function AccountBar({ controller }: { controller: TimerController
   const [unsynced, setUnsynced] = useState<UnsyncedCount | null>(null)
   const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(false)
+  const menuId = useId()
+  // Mirrors `open` for the sign-out sync, which can outlive the menu (up to 10 s).
+  const openRef = useRef(false)
+  useEffect(() => {
+    openRef.current = open
+  }, [open])
   const rootRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
@@ -102,6 +108,8 @@ export default function AccountBar({ controller }: { controller: TimerController
       await controller.retryPending()
       await trySyncAll()
       const count = await countUnsynced()
+      // The menu was closed meanwhile: that cancels this sign-out, with no stale confirmation.
+      if (!openRef.current) return
       if (count.sessions > 0 || count.edits > 0 || (count.settings ?? 0) > 0) setUnsynced(count)
       else await finish()
     } finally {
@@ -122,14 +130,14 @@ export default function AccountBar({ controller }: { controller: TimerController
         className="account-button"
         ref={buttonRef}
         aria-label={account.user.email}
-        aria-haspopup="true"
+        aria-controls={open ? menuId : undefined}
         aria-expanded={open}
         onClick={() => (open ? close(false) : setOpen(true))}
       >
         <span aria-hidden="true">{account.user.email.charAt(0).toUpperCase()}</span>
       </button>
       {open && (
-        <div className="account-menu" role="group" aria-label="Account">
+        <div id={menuId} className="account-menu" role="group" aria-label="Account">
           <span className="account-email">{account.user.email}</span>
           <button type="button" ref={signOutRef} onClick={() => void request()} disabled={busy}>
             Sign out

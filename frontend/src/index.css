@@ -137,6 +137,7 @@ main {
   max-width: 36rem;
   margin-inline: auto;
   padding: 1rem;
+  padding-bottom: max(1rem, env(safe-area-inset-bottom));
   box-sizing: border-box;
 }
 
@@ -819,7 +820,7 @@ main:has(~ .tab-bar) {
 main.focus-screen {
   min-height: 100vh;
   min-height: 100dvh;
-  padding-block: 1.5rem;
+  padding-block: 1.5rem max(1.5rem, env(safe-area-inset-bottom));
   display: grid;
   place-items: center;
 }

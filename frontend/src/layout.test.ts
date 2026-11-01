@@ -33,6 +33,11 @@ describe('360 px layout (#131)', () => {
     expect(rule('.wordmark')).toMatch(/white-space:\s*nowrap/)
   })
 
+  it('pads every screen for the bottom safe area (#406)', () => {
+    expect(rule('main')).toMatch(/env\(safe-area-inset-bottom\)/)
+    expect(rule('main.focus-screen')).toMatch(/env\(safe-area-inset-bottom\)/)
+  })
+
   it('breaks long goals in history rows', () => {
     expect(rule('.history-row-goal')).toMatch(/overflow-wrap:\s*anywhere/)
   })

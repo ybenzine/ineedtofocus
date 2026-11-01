@@ -29,6 +29,13 @@ async function runningStore() {
   return store
 }
 
+/** No header, account button or Screens nav: the timer and the summary have none (#406). */
+function expectNoShell() {
+  expect(screen.queryByRole('banner')).not.toBeInTheDocument()
+  expect(document.querySelector('.account-button')).toBeNull()
+  expect(screen.queryByRole('navigation', { name: 'Screens' })).not.toBeInTheDocument()
+}
+
 describe('App account bar', () => {
   const account = {
     user: { id: 'u', email: 'a@b.co', created_at: '' },
@@ -48,10 +55,13 @@ describe('App account bar', () => {
 
   it('offers Sign out on the setup screen only, not over the timer', async () => {
     renderSignedIn()
+    expect(await screen.findByRole('banner')).toBeInTheDocument()
+    expect(screen.getByRole('navigation', { name: 'Screens' })).toBeInTheDocument()
     expect(await findSignOutButton()).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
     await screen.findByRole('timer')
     expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+    expectNoShell()
   })
 
   it('offers Sign out on the History screen, refused while a session runs, not on the summary', async () => {
@@ -106,12 +116,14 @@ describe('App account bar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
     expect(await screen.findByRole('heading', { name: 'Session not saved' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+    expectNoShell()
   })
 
   it('does not offer Sign out over a session restored at reload', async () => {
     renderSignedIn(await runningStore())
     await screen.findByRole('timer')
     expect(screen.queryByRole('button', { name: 'Sign out' })).not.toBeInTheDocument()
+    expectNoShell()
   })
 })
 
