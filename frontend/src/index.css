@@ -1317,6 +1317,7 @@ button[aria-pressed='true'] .tag-dot {
 }
 
 .tag-field > label {
+  overflow-wrap: anywhere;
   font-size: 0.9375rem;
   color: var(--muted);
 }

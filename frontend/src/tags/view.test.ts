@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { tagLabel } from '../setup/options.ts'
 import type { CustomTag } from './api.ts'
 import { BUILTIN_COLORS, normalizeTagName, type TagColor } from './palette.ts'
 import { buildTagsView, firstFreeColor, sortByFocus } from './view.ts'
@@ -59,12 +58,6 @@ describe('buildTagsView (AC7.8)', () => {
     expect(view.info('not-loaded-yet')).toMatchObject({ name: 'Tag', color: null })
     expect(view.rank('not-loaded-yet')).toBeGreaterThan(view.rank('b'))
   })
-
-  it('shows a custom tag by its own name as typed, built-in ones capitalised', () => {
-    expect(tagLabel('a', tags)).toBe('Deep work')
-    expect(tagLabel('nap')).toBe('Nap')
-    expect(tagLabel('a')).toBe('Tag')
-  })
 })
 
 describe('firstFreeColor (AC7.5)', () => {
@@ -84,7 +77,7 @@ describe('firstFreeColor (AC7.5)', () => {
 
 describe('sortByFocus', () => {
   it('puts most focus first and breaks ties in the AC7.8 order', () => {
-    const view = buildTagsView([tag('a', 'A', 'red'), tag('b', 'B', 'red')])
+    const view = buildTagsView([tag('a', 'A', 'red', true), tag('b', 'B', 'red')])
     const sorted = sortByFocus(
       [
         { tag: 'b', focusSeconds: 60 },

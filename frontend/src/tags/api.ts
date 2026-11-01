@@ -116,7 +116,8 @@ async function call(
   if (response.status === 409) {
     throw new TagsError('conflict', 'Conflict.', await conflictOf(response))
   }
-  // A malformed id (422) and an unknown one (404) both mean there is no such tag to change.
+  // 404: no such tag (unknown or another account's). 422: the request was invalid (a bad name,
+  // colour or malformed id).
   if (response.status === 404) throw new TagsError('missing', 'No such tag.')
   if (response.status === 422) throw new TagsError('invalid', 'The server rejected the tag.')
   if (!response.ok) throw new TagsError('server', 'The server could not change tags.')

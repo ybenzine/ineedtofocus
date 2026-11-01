@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { AlertPlayer } from './sounds/alerts.ts'
 import AudioControls from './sounds/AudioControls.tsx'
 import {
@@ -163,7 +163,8 @@ export default function App(props: AppProps) {
     return () => tags.dispose()
   }, [tags])
   // The tag list loads whenever settings load, and follows another tab's changes.
-  useEffect(() => settings.onRefresh(() => tags.refresh()), [settings, tags])
+  // A layout effect, so it is in place before any child's effect calls `settings.refresh()`.
+  useLayoutEffect(() => settings.onRefresh(() => tags.refresh()), [settings, tags])
   useEffect(() => tags.start(), [tags])
   // Sign-out sends and counts the settings edits not yet accepted (#129).
   useEffect(() => {

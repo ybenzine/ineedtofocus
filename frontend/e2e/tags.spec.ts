@@ -170,6 +170,12 @@ for (const scheme of ['dark', 'light'] as const) {
       await expectNoSidewaysScroll(page)
       await audit()
       await tagsSection(page).getByRole('button', { name: 'Cancel' }).click()
+      await tagsSection(page)
+        .getByRole('button', { name: `Rename ${name}` })
+        .click()
+      await expectNoSidewaysScroll(page)
+      await audit()
+      await tagsSection(page).getByRole('button', { name: 'Cancel' }).click()
 
       await openScreen(page, 'New session')
       await page.getByRole('group', { name: 'Tag' }).getByRole('radio', { name }).check()
@@ -187,6 +193,15 @@ for (const scheme of ['dark', 'light'] as const) {
       await audit()
       await page.getByRole('button', { name: /^Edit session/ }).click()
       await expectNoSidewaysScroll(page)
+      await page.getByRole('button', { name: 'Cancel' }).click()
+
+      // Archive, with the long name in it.
+      await page.getByRole('button', { name: /^Archive session/ }).click()
+      await expect(page.getByText('Session archived.')).toBeVisible()
+      await openScreen(page, 'Archive')
+      await expect(page.locator('.history-row')).toHaveCount(1)
+      await expectNoSidewaysScroll(page)
+      await audit()
     })
   })
 }

@@ -362,11 +362,9 @@ export default function TagsSection() {
         <p className="field-hint">{OFFLINE_NOTE}</p>
       )}
 
-      {message?.kind === 'status' && (
-        <p role="status" className="field-hint">
-          {message.text}
-        </p>
-      )}
+      <p role="status" className="field-hint">
+        {message?.kind === 'status' ? message.text : ''}
+      </p>
       {message?.kind === 'error' && (
         <p role="alert" className="field-hint field-error">
           {message.text}

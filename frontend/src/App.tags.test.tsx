@@ -3,6 +3,8 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App.tsx'
+import { AccountContext, type Account } from './auth/AccountContext.tsx'
+import { makeRecord } from './test/fakeSessionsServer.ts'
 import { DEFAULT_SETTINGS } from './settings/api.ts'
 import { SettingsStore } from './settings/store.ts'
 import { FakeTagsApi } from './test/fakeTagsApi.ts'
@@ -60,5 +62,36 @@ describe('App and the tag list', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Start' })).toBeInTheDocument())
     expect(fetchMock).not.toHaveBeenCalled()
     vi.unstubAllGlobals()
+  })
+
+  it('loads the tags after signing in from the save prompt (the app opens on the handed-over summary)', async () => {
+    const tagsApi = new FakeTagsApi()
+    tagsApi.add('Deep work', 'teal')
+    const settings = new SettingsStore({
+      api: { get: vi.fn().mockResolvedValue(DEFAULT_SETTINGS), patch: vi.fn() },
+    })
+    const account = {
+      user: { id: 'u1', email: 'a@b.co', created_at: '2026-11-01T00:00:00Z' },
+      expired: false,
+      leaveExpired: vi.fn(),
+      signOut: vi.fn(),
+      accountDeleted: vi.fn(),
+      handedOver: {
+        snapshot: null,
+        events: [],
+        outcome: { kind: 'saved', record: makeRecord() },
+        recordPending: false,
+      },
+    } as unknown as Account
+    render(
+      <AccountContext.Provider value={account}>
+        <App
+          controller={controller()}
+          settings={settings}
+          tags={new TagsStore({ api: tagsApi, owner: null })}
+        />
+      </AccountContext.Provider>,
+    )
+    await waitFor(() => expect(tagsApi.calls).toContain('list'))
   })
 })

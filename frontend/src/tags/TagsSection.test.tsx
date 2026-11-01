@@ -71,7 +71,9 @@ describe('Settings → Tags (AC7.4–AC7.7)', () => {
     const { api } = await renderSection()
     fireEvent.click(screen.getByRole('radio', { name: 'Teal' }))
     addTag('  Deep\n work  ')
-    expect(await screen.findByRole('status')).toHaveTextContent('Added the tag Deep work.')
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Added the tag Deep work.'),
+    )
     expect(api.tags[0]).toMatchObject({ name: 'Deep work', color: 'teal' })
     expect(nameField()).toHaveValue('')
     expect(
@@ -97,7 +99,7 @@ describe('Settings → Tags (AC7.4–AC7.7)', () => {
     await renderSection(api)
     expect(chosenColor()).toBe('Red')
     addTag('Two') // Red
-    await screen.findByRole('status')
+    await waitFor(() => expect(screen.getByRole('status')).not.toBeEmptyDOMElement())
     expect(chosenColor()).toBe('Indigo')
   })
 
@@ -111,7 +113,7 @@ describe('Settings → Tags (AC7.4–AC7.7)', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Use 24 characters or fewer.')
     expect(api.calls).toEqual([])
     addTag('x'.repeat(24))
-    expect(await screen.findByRole('status')).toHaveTextContent('Added the tag')
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Added the tag'))
   })
 
   it('shows the name clash message for a built-in name and for a tag in use (case-insensitive)', async () => {
@@ -155,7 +157,9 @@ describe('Settings → Tags (AC7.4–AC7.7)', () => {
     expect(screen.queryByRole('list', { name: 'Your tags' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('radio', { name: 'Red' }))
     addTag('writing')
-    expect(await screen.findByRole('status')).toHaveTextContent('Brought back the tag Writing.')
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Brought back the tag Writing.'),
+    )
     const mine = within(screen.getByRole('list', { name: 'Your tags' }))
     expect(mine.getByText('Writing')).toBeInTheDocument() // its stored name, not "writing"
     expect(api.tags).toHaveLength(100)
@@ -194,7 +198,9 @@ describe('Settings → Tags (AC7.4–AC7.7)', () => {
     )
     fireEvent.change(input, { target: { value: 'Writing' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
-    expect(await screen.findByRole('status')).toHaveTextContent('Renamed the tag to Writing.')
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Renamed the tag to Writing.'),
+    )
     expect(screen.queryByLabelText('New name for Deep work')).not.toBeInTheDocument()
     expect(api.tags[0]?.name).toBe('Writing')
   })
@@ -220,7 +226,9 @@ describe('Settings → Tags (AC7.4–AC7.7)', () => {
     const group = screen.getByRole('group', { name: 'Colour of Deep work' })
     expect(within(group).getByRole('radio', { name: 'Teal' })).toBeChecked()
     fireEvent.click(within(group).getByRole('radio', { name: 'Red' }))
-    expect(await screen.findByRole('status')).toHaveTextContent('Deep work is now Red.')
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Deep work is now Red.'),
+    )
     expect(api.tags[0]?.color).toBe('red')
     await waitFor(() =>
       expect(
@@ -246,7 +254,9 @@ describe('Settings → Tags (AC7.4–AC7.7)', () => {
     expect(api.tags[0]?.removedAt).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Remove Deep work' }))
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
-    expect(await screen.findByRole('status')).toHaveTextContent('Removed the tag Deep work.')
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent('Removed the tag Deep work.'),
+    )
     expect(api.tags[0]?.removedAt).not.toBeNull()
     expect(screen.queryByRole('list', { name: 'Your tags' })).not.toBeInTheDocument()
   })

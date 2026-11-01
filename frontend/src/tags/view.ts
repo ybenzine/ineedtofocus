@@ -31,7 +31,7 @@ export interface TagsView {
   /** Custom tags in use, oldest first. */
   custom: readonly TagInfo[]
   info(id: string): TagInfo
-  /** Position in the AC7.8 order; unknown ids sort last. */
+  /** Position in the breakdown's tie order (server order: removed tags keep their place); unknown ids last. */
   rank(id: string): number
 }
 
@@ -54,7 +54,10 @@ export function buildTagsView(tags: readonly CustomTag[]): TagsView {
   const removed = tags.filter((t) => t.removedAt !== null).map(customInfo)
   const byId = new Map<string, TagInfo>([...builtin, ...tags.map(customInfo)].map((t) => [t.id, t]))
   const all = [...builtin, ...inUse, ...removed]
-  const ranks = new Map(all.map((t, i) => [t.id, i]))
+  // The breakdown's ties follow the server: built-ins, then every custom tag oldest first,
+  // removed or not (unlike the pickers and the filter).
+  const ranked = [...builtin, ...tags.map(customInfo)]
+  const ranks = new Map(ranked.map((t, i) => [t.id, i]))
   return {
     pickable: [...builtin, ...inUse],
     all,
@@ -67,7 +70,7 @@ export function buildTagsView(tags: readonly CustomTag[]): TagsView {
         builtin: false,
         removed: false,
       },
-    rank: (id) => ranks.get(id) ?? all.length,
+    rank: (id) => ranks.get(id) ?? ranked.length,
   }
 }
 
