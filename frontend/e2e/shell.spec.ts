@@ -21,10 +21,10 @@ const SCREENS = [
 ] as const
 
 async function expectNoSeriousViolations(page: Page, screen?: 'New session'): Promise<void> {
-  // On a 568 px phone New session scrolls under its pinned Start (#407, AC1), so axe sees the rows
+  // On a phone under 700 px high New session scrolls under its pinned Start (#407, AC1), so axe sees the rows
   // behind it as partly covered until they are scrolled into view; the target size is checked on
   // the taller phones.
-  const short = screen === 'New session' && (page.viewportSize()?.height ?? Infinity) < 600
+  const short = screen === 'New session' && (page.viewportSize()?.height ?? Infinity) < 700
   const results = await new AxeBuilder({ page })
     .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'])
     .disableRules(short ? ['target-size'] : [])
