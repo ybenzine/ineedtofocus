@@ -6,6 +6,11 @@ export const FOCUSABLE =
 /**
  * What Tab can reach: the focusable elements, except the radios it skips (one radio per group is
  * a tab stop: the checked one, or the first when none is checked).
+ *
+ * Edge cases: with no radio checked in a group the first one is the stop, so Shift+Tab out of the
+ * start lands on the last radio of that group, which the browser then moves from (the trap wraps
+ * on the first and last stops listed here, not on the radios Tab skips). Radios with no `name`
+ * share the empty name and so count as one group; the sheets always name theirs.
  */
 export function tabbable(root: HTMLElement): HTMLElement[] {
   const all = [...root.querySelectorAll<HTMLElement>(FOCUSABLE)]

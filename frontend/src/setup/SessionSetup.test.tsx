@@ -762,29 +762,6 @@ describe('SessionSetup starting', () => {
   })
 })
 
-describe('SessionSetup after a start', () => {
-  it('begins the next setup from what the session saved', async () => {
-    const preferences = new MemoryPreferencesStore()
-    const onStart = vi.fn()
-    const first = render(<SessionSetup preferences={preferences} onStart={onStart} />)
-    chooseMode('Pomodoro')
-    typeFocus('40')
-    fireEvent.click(start())
-    await waitFor(() => expect(preferences.load().pomodoro.focusMinutes).toBe(40))
-    await waitFor(() => expect(start()).toBeEnabled())
-    // The next setup shows 40; typing 40 again is not a change from where it began.
-    chooseMode('Pomodoro')
-    typeFocus('40')
-    chooseMode('Countdown')
-    expect(document.querySelector('form')).not.toHaveAttribute('data-holds-update')
-    chooseMode('Pomodoro')
-    typeFocus('45')
-    chooseMode('Countdown')
-    expect(document.querySelector('form')).toHaveAttribute('data-holds-update')
-    first.unmount()
-  })
-})
-
 describe('SessionSetup touch targets', () => {
   it('gives every control on the screen a class that sizes it to at least 44 px', () => {
     setup()

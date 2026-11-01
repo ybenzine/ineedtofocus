@@ -3,6 +3,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
 import App from './App.tsx'
+import { hasOpenEdit } from './update/autoUpdate.ts'
 import { MemoryPreferencesStore } from './setup/preferences.ts'
 import {
   chooseMode,
@@ -112,5 +113,38 @@ describe('a setup in progress', () => {
     chooseMode('Unlimited')
     expect(screen.getByRole('radio', { name: 'Off' })).toBeChecked()
     expect(screen.getByRole('button', { name: /^Tag\b.*Work/ })).toBeInTheDocument()
+  })
+
+  it('begins the next setup from what the session saved, so repeating it is no change', async () => {
+    renderApp()
+    await screen.findByRole('button', { name: 'Start' })
+    chooseMode('Pomodoro')
+    fireEvent.change(screen.getByLabelText('Focus length in minutes, 5 to 90'), {
+      target: { value: '35' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Start' }))
+    await screen.findByRole('timer')
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    await screen.findByRole('heading', { name: 'Session not saved' })
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }))
+    await screen.findByRole('button', { name: 'Start' })
+
+    // The new setup shows the saved 35. Typing 35 again changes nothing from where it began...
+    chooseMode('Pomodoro')
+    const focus = () => screen.getByLabelText('Focus length in minutes, 5 to 90')
+    expect(focus()).toHaveValue('35')
+    fireEvent.change(focus(), { target: { value: '35' } })
+    chooseMode('Countdown')
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    await screen.findByRole('heading', { name: 'History' })
+    expect(hasOpenEdit()).toBe(false)
+    // ...and typing 40 does.
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }))
+    chooseMode('Pomodoro')
+    fireEvent.change(focus(), { target: { value: '40' } })
+    chooseMode('Countdown')
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    await screen.findByRole('heading', { name: 'History' })
+    expect(hasOpenEdit()).toBe(true)
   })
 })

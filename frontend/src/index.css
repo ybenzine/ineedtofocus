@@ -1489,6 +1489,11 @@ body:has(.tab-bar) {
   --tab-bar-height: calc(3.8125rem + env(safe-area-inset-bottom));
 }
 
+/* The pinned Start footer: the button and the padding above and below it (see .setup-footer). */
+body {
+  --start-footer-height: 4.625rem;
+}
+
 main.setup-screen {
   padding: 0.5rem 1.25rem 0;
 }
@@ -1518,10 +1523,17 @@ main.setup-screen:has(~ .tab-bar) {
   padding-bottom: 0.5rem;
 }
 
+/* A focused control scrolls clear of the pinned Start and the tab bar (WCAG 2.4.11). */
+.setup-body :is(button, input, a, label) {
+  scroll-margin-bottom: calc(var(--tab-bar-height) + var(--start-footer-height) + 0.5rem);
+}
+
 .setup-footer {
   position: sticky;
   bottom: var(--tab-bar-height);
   z-index: 2;
+  box-sizing: border-box;
+  min-height: var(--start-footer-height);
   padding-block: 0.625rem;
   background: var(--bg);
 }
@@ -1791,8 +1803,9 @@ main.setup-screen:has(~ .tab-bar) {
 
 .reminder-pills {
   display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 0.3125rem;
+  /* 44 px at the least: seven fit in 320 px (a 360 px phone) with 2 px gaps; narrower, they wrap. */
+  grid-template-columns: repeat(auto-fit, minmax(2.75rem, 1fr));
+  gap: 0.125rem;
 }
 
 .pill {

@@ -119,6 +119,113 @@ test('the Sound sheet keeps Tab inside with None or Rain chosen', async ({ page 
   }
 })
 
+const TARGETS = [
+  'main button',
+  'main label.mode-option span',
+  'main input[type=text]',
+  'main label.pill',
+  'main label.switch-row',
+  '[role=dialog] button',
+  '[role=dialog] label.pill',
+  '[role=dialog] a',
+  '[role=dialog] input[type=text]',
+].join(', ')
+
+/** Names of the visible targets smaller than 44 px either way. */
+async function smallTargets(page: Page): Promise<string[]> {
+  return page.evaluate((selector) => {
+    const small: string[] = []
+    for (const el of document.querySelectorAll<HTMLElement>(selector)) {
+      const box = el.getBoundingClientRect()
+      if (box.height > 0 && (box.height < 43.5 || box.width < 43.5)) {
+        const name = el.textContent?.trim() || el.getAttribute('aria-label') || el.tagName
+        small.push(`${name} ${Math.round(box.width)}x${Math.round(box.height)}`)
+      }
+    }
+    return small
+  }, TARGETS)
+}
+
+test('every target is at least 44 x 44 px in every mode and both sheets, from 320 to 390 px wide', async ({
+  page,
+}) => {
+  await installClock(page)
+  await signUp(page, newEmail())
+  for (const width of [320, 360, 375, 390]) {
+    await page.setViewportSize({ width, height: 844 })
+    const at = (what: string) => `${width}px, ${what}`
+    await page.getByRole('radio', { name: 'Countdown' }).check()
+    expect(await smallTargets(page), at('Countdown')).toEqual([])
+    await page.getByRole('radio', { name: 'Pomodoro' }).check()
+    await page.getByRole('switch', { name: /long break/i }).uncheck()
+    expect(await smallTargets(page), at('Pomodoro')).toEqual([])
+    await page.getByRole('switch', { name: /long break/i }).check()
+    expect(await smallTargets(page), at('Pomodoro with Long break')).toEqual([])
+    await page.getByRole('radio', { name: 'Unlimited' }).check()
+    expect(await smallTargets(page), at('Unlimited')).toEqual([])
+    await page.getByRole('radio', { name: 'Countdown' }).check()
+    await openSheet(page, 'Tag')
+    expect(await smallTargets(page), at('Tag & goal sheet')).toEqual([])
+    await closeSheet(page)
+    const sound = await openSheet(page, 'Sound')
+    expect(await smallTargets(page), at('Sound sheet')).toEqual([])
+    await sound.getByRole('radio', { name: 'YouTube' }).check()
+    expect(await smallTargets(page), at('Sound sheet, YouTube')).toEqual([])
+    await sound.getByRole('radio', { name: 'None' }).check()
+    await closeSheet(page)
+  }
+})
+
+// WCAG 2.4.11: a control that takes focus is never left behind the pinned Start.
+for (const [width, height] of [
+  [360, 640],
+  [320, 568],
+  [375, 667],
+] as const) {
+  test(`Tab never leaves a focused control behind Start at ${width}x${height}`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height })
+    await installClock(page)
+    await signUp(page, newEmail())
+    for (const [mode, longBreak] of [
+      ['Countdown', false],
+      ['Pomodoro', false],
+      ['Pomodoro', true],
+      ['Unlimited', false],
+    ] as const) {
+      await page.getByRole('radio', { name: mode }).check()
+      if (mode === 'Pomodoro') {
+        await page.getByRole('switch', { name: /long break/i })[longBreak ? 'check' : 'uncheck']()
+      }
+      await page.evaluate(() => window.scrollTo(0, 0))
+      await page.locator('.dial-input, .dial-infinity').first().focus()
+      const seen: string[] = []
+      for (let i = 0; i < 40; i++) {
+        await page.keyboard.press('Tab')
+        const state = await page.evaluate(() => {
+          const el = document.activeElement as HTMLElement
+          const footer = document.querySelector('.setup-footer')?.getBoundingClientRect()
+          const box = el.getBoundingClientRect()
+          return {
+            name: el.textContent?.trim() || el.getAttribute('aria-label') || el.tagName,
+            bottom: box.bottom,
+            footerTop: footer?.top ?? 0,
+            isStart: el.classList.contains('start-button'),
+          }
+        })
+        if (state.isStart) break
+        seen.push(state.name)
+        expect(
+          state.bottom,
+          `${mode}${longBreak ? ' + long break' : ''}: "${state.name}" is behind Start`,
+        ).toBeLessThanOrEqual(state.footerTop + 0.5)
+      }
+      expect(seen.length, `${mode}: reached Start`).toBeGreaterThan(3)
+    }
+  })
+}
+
 // Layout: no sideways scroll and Start in view at a small phone, a phone and a desktop; at 390 x 844
 // the whole screen fits without scrolling, in each mode and both themes.
 for (const scheme of ['dark', 'light'] as const) {
