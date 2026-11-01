@@ -12,7 +12,6 @@ import { httpYoutubeLinksApi, type YoutubeLinksApi } from './sounds/youtubeLinks
 import type { LoadYoutubeApi } from './sounds/ytApi.ts'
 import { RainPlayer } from './sounds/rain.ts'
 import { useAccount } from './auth/AccountContext.tsx'
-import AccountBar from './auth/AccountBar.tsx'
 import { useAnonymous } from './anonymous/AnonymousContext.ts'
 import { AnonymousArchive, AnonymousHistory } from './anonymous/AnonymousScreens.tsx'
 import { anonymousYoutubeApi } from './anonymous/youtube.ts'
@@ -34,7 +33,7 @@ import {
   trySyncAll,
 } from './auth/localData.ts'
 import { registerMemoryHolder, registerUpdateFlush, setViewBusy } from './update/idle.ts'
-import ScreenNav from './nav/ScreenNav.tsx'
+import AppShell from './nav/AppShell.tsx'
 import { pathForScreen, screenFromPath, type ScreenId } from './nav/screens.ts'
 import { httpSettingsApi } from './settings/api.ts'
 import {
@@ -538,9 +537,12 @@ function AppBody({
 
   if (view.name === 'history') {
     return (
-      <main className="history-screen">
-        <AccountBar controller={timer} />
-        <ScreenNav current="history" onNavigate={goTo} />
+      <AppShell
+        current="history"
+        controller={timer}
+        onNavigate={goTo}
+        mainClassName="history-screen"
+      >
         {anonymous ? (
           <AnonymousHistory />
         ) : (
@@ -550,34 +552,33 @@ function AppBody({
             onNewSession={() => goTo('setup')}
           />
         )}
-      </main>
+      </AppShell>
     )
   }
 
   if (view.name === 'archive') {
     return (
-      <main className="history-screen">
-        <AccountBar controller={timer} />
-        <ScreenNav current="archive" onNavigate={goTo} />
+      <AppShell
+        current="archive"
+        controller={timer}
+        onNavigate={goTo}
+        mainClassName="history-screen"
+      >
         {anonymous ? <AnonymousArchive /> : <ArchiveScreen sessions={services.sessions} />}
-      </main>
+      </AppShell>
     )
   }
 
   if (view.name === 'settings') {
     return (
-      <main>
-        <AccountBar controller={timer} />
-        <ScreenNav current="settings" onNavigate={goTo} />
+      <AppShell current="settings" controller={timer} onNavigate={goTo}>
         <SettingsScreen player={player} controller={timer} />
-      </main>
+      </AppShell>
     )
   }
 
   return (
-    <main>
-      <AccountBar controller={timer} />
-      <ScreenNav current="setup" onNavigate={goTo} />
+    <AppShell current="setup" controller={timer} onNavigate={goTo}>
       {notice && <p role="status">{notice}</p>}
       {foreignPending && <p role="status">{FOREIGN_PENDING_MESSAGE}</p>}
       <SessionSetup
@@ -586,6 +587,6 @@ function AppBody({
         onStart={start}
         youtubeApi={youtube?.api}
       />
-    </main>
+    </AppShell>
   )
 }

@@ -22,7 +22,7 @@ test('run a session without an account, sign up from the prompt, and find it in 
   await page.goto('/')
   // The first screen is New session, not a sign-in screen.
   await expect(page.getByRole('button', { name: 'Start' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Create account' })).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Create account' })).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'Log in' })).toBeVisible()
 
   await finishCountdown(page, { minutes: 1, tag: 'study', goal: 'Anonymous goal' })

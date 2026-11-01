@@ -1,3 +1,4 @@
+import { signOutButton } from '../test/accountMenu.ts'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { LocalActiveSessionStore, TimerController } from '../timer/index.ts'
@@ -37,13 +38,13 @@ describe('sign-out confirmation keyboard use (#151)', () => {
         <AccountBar controller={controller} />
       </AccountContext.Provider>,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     const cancel = await screen.findByRole('button', { name: 'Cancel' })
     await waitFor(() => expect(cancel).toHaveFocus())
 
     fireEvent.keyDown(cancel, { key: 'Escape' })
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Sign out' })).toHaveFocus()
+    expect(signOutButton()).toHaveFocus()
     expect(signOut).not.toHaveBeenCalled()
     unregister()
   })
@@ -75,12 +76,12 @@ describe('sign-out with a timer only in memory (#245)', () => {
         <AccountBar controller={controller} />
       </AccountContext.Provider>,
     )
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     expect(await screen.findByRole('alert')).toHaveTextContent(ACTIVE_TIMER_MESSAGE)
     expect(signOut).not.toHaveBeenCalled()
 
     memoryOnly = false
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
   })
 })

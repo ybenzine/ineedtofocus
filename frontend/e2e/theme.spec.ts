@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import {
+  openAccountMenu,
   expectNoSidewaysScroll,
   finishCountdown,
   installClock,
@@ -57,10 +58,10 @@ async function check(page: Page, name: string, palette: Palette): Promise<void> 
 }
 
 /** The current item stays accent on a surface pill, even hovered or focused (touch keeps hover after a tap). */
-async function expectCurrentNavIsAccent(page: Page, palette: Palette): Promise<void> {
+async function expectCurrentNavIsAccent(page: Page, palette: Palette, width = 1280): Promise<void> {
   const current = page.getByRole('navigation', { name: 'Screens' }).locator('[aria-current]')
   await expect(current).toHaveCSS('color', palette.accent)
-  await expect(current).toHaveCSS('background-color', palette.surface)
+  if (width >= 768) await expect(current).toHaveCSS('background-color', palette.surface) // phones: a bar, no pill
 }
 
 async function expectNavOnOneRow(page: Page): Promise<void> {
@@ -114,7 +115,7 @@ for (const [palette, width] of RUNS) {
       // Back from the dark timer, the page is in the device's theme again.
       await check(page, 'history', palette)
       if (width >= 768) await expectNavOnOneRow(page)
-      await expectCurrentNavIsAccent(page, palette)
+      await expectCurrentNavIsAccent(page, palette, width)
 
       // Selected history view and tag: accent fill with its text colour; the rest are outlined.
       const day = page.getByRole('group', { name: 'View' }).getByRole('button', { name: 'Day' })
@@ -133,13 +134,13 @@ for (const [palette, width] of RUNS) {
       await expect(page.getByText('Session archived.')).toBeVisible()
       await openScreen(page, 'Archive')
       await expect(page.locator('.history-row')).toHaveCount(1)
-      await expectCurrentNavIsAccent(page, palette) // the pointer is still on the item just clicked
+      await expectCurrentNavIsAccent(page, palette, width) // the pointer is still on the item just clicked
       await check(page, 'archive', palette)
       if (width >= 768) await expectNavOnOneRow(page)
 
       await openScreen(page, 'Settings')
       await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
-      await expectCurrentNavIsAccent(page, palette)
+      await expectCurrentNavIsAccent(page, palette, width)
       await check(page, 'settings', palette)
       if (width >= 768) await expectNavOnOneRow(page)
     })
@@ -232,6 +233,7 @@ test.describe('signing out', () => {
     await openScreen(page, 'Settings')
     await page.getByRole('radio', { name: 'Light' }).check()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+    await openAccountMenu(page)
     await page.getByRole('button', { name: 'Sign out' }).click()
     await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible()
     await expect(page.locator('html')).not.toHaveAttribute('data-theme', /.*/)

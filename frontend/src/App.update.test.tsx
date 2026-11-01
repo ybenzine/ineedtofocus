@@ -34,7 +34,7 @@ describe('App tells the updater when it is idle', () => {
     await waitFor(() => expect(isViewBusy()).toBe(true))
 
     fireEvent.click(screen.getByRole('button', { name: 'New session' }))
-    await screen.findByRole('heading', { name: 'I Need To Focus' })
+    await screen.findByRole('button', { name: 'Start' })
     await waitFor(() => expect(isViewBusy()).toBe(false))
   })
 

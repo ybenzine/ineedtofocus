@@ -26,10 +26,22 @@ describe('360 px layout (#131)', () => {
     expect(rule('main')).toMatch(/margin-inline:\s*auto/)
   })
 
-  it('wraps the Screens nav and the account bar', () => {
-    expect(rule('.screen-nav')).toMatch(/flex-wrap:\s*wrap/)
-    expect(rule('.account-bar')).toMatch(/flex-wrap:\s*wrap/)
-    expect(rule('.account-bar')).toMatch(/overflow-wrap:\s*anywhere/)
+  it('keeps the phone shell inside the viewport (#406)', () => {
+    expect(rule('.tab-bar')).toMatch(/grid-template-columns:\s*repeat\(4,\s*minmax\(0,\s*1fr\)\)/)
+    expect(rule('.account-menu')).toMatch(/overflow-wrap:\s*anywhere/)
+    expect(rule('.account-menu')).toMatch(/width:\s*min\(20rem,/)
+    expect(rule('.wordmark')).toMatch(/white-space:\s*nowrap/)
+  })
+
+  it('pads every screen for the bottom safe area (#406)', () => {
+    expect(rule('main')).toMatch(/env\(safe-area-inset-bottom\)/)
+    expect(rule('main.focus-screen')).toMatch(/env\(safe-area-inset-bottom\)/)
+  })
+
+  it('keeps the timer screen from scrolling under the bottom safe area (#406)', () => {
+    expect(rule('.timer-screen')).toMatch(
+      /min-height:\s*calc\(100dvh - 1\.5rem - max\(1\.5rem, env\(safe-area-inset-bottom\)\)\)/,
+    )
   })
 
   it('breaks long goals in history rows', () => {

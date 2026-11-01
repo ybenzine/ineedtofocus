@@ -1,6 +1,7 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 import {
+  openAccountMenu,
   expectNoSidewaysScroll,
   finishCountdown,
   installClock,
@@ -222,6 +223,7 @@ for (const scheme of SCHEMES) {
       await openScreen(page, 'History')
       await expect(page.locator('.history-row').first()).toBeVisible()
       await expectNoSeriousViolations(page)
+      await openAccountMenu(page)
       await page.getByRole('button', { name: 'Sign out' }).click()
       await expect(page.getByRole('alertdialog', { name: 'Confirm sign out' })).toBeVisible()
       await expectNoSeriousViolations(page)
@@ -328,6 +330,7 @@ test.describe('touch targets at 360 px', () => {
     await openScreen(page, 'New session')
     await finishCountdown(page, { minutes: 1 })
     await page.getByRole('button', { name: 'New session' }).click()
+    await openAccountMenu(page)
     await page.getByRole('button', { name: 'Sign out' }).click()
     await expect(page.getByRole('alertdialog', { name: 'Confirm sign out' })).toBeVisible()
     expect(await smallTargets(page), 'sign-out confirmation').toEqual([])
@@ -372,7 +375,13 @@ for (const width of [360, 768, 1280]) {
 function focused(page: Page): Promise<string> {
   return page.evaluate(() => {
     const el = document.activeElement as HTMLInputElement | null
-    return (el?.labels?.[0]?.textContent ?? el?.textContent ?? el?.tagName ?? '').trim()
+    return (
+      el?.labels?.[0]?.textContent ??
+      el?.getAttribute('aria-label') ??
+      el?.textContent ??
+      el?.tagName ??
+      ''
+    ).trim()
   })
 }
 
@@ -388,7 +397,8 @@ test.describe('keyboard and screen readers', () => {
     }
     const at = (name: string | RegExp) =>
       order.findIndex((entry) => (typeof name === 'string' ? entry === name : name.test(entry)))
-    expect(order.slice(0, 5)).toEqual(['Sign out', 'New session', 'History', 'Archive', 'Settings'])
+    expect(order.slice(0, 4)).toEqual(['New session', 'History', 'Archive', 'Settings'])
+    expect(order[4]).toMatch(/@/) // the account button, last in the header
     expect(at('Start')).toBeGreaterThan(-1)
     // Start comes after the duration, the tag and the goal field.
     expect(at('Duration')).toBeGreaterThan(4)
@@ -577,6 +587,7 @@ test.describe('keyboard and screen readers', () => {
     await context.setOffline(true)
     await finishCountdown(page, { minutes: 1 })
     await page.getByRole('button', { name: 'New session' }).click()
+    await openAccountMenu(page)
     const opener = page.getByRole('button', { name: 'Sign out' })
     const dialog = page.getByRole('alertdialog', { name: 'Confirm sign out' })
 

@@ -1,3 +1,4 @@
+import { signOutButton } from '../test/accountMenu.ts'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -82,7 +83,7 @@ describe('sign-out and unsent settings edits (#129)', () => {
   it('sends pending settings first when online, so no confirmation shows', async () => {
     const { store, sent, signOut } = await setup({ online: true })
     expect(store.hasPending()).toBe(true)
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     await waitFor(() => expect(signOut).toHaveBeenCalled())
     expect(sent).toEqual([{ week_start_day: 3 }])
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
@@ -91,7 +92,7 @@ describe('sign-out and unsent settings edits (#129)', () => {
 
   it('asks first when only settings edits are unsent, with that line as the whole message', async () => {
     const { signOut } = await setup({ online: false })
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     const dialog = await screen.findByRole('alertdialog', { name: 'Confirm sign out' })
     expect(dialog.querySelector('p')?.textContent).toBe(SETTINGS_LINE)
     await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus())
@@ -100,7 +101,7 @@ describe('sign-out and unsent settings edits (#129)', () => {
 
   it('adds the settings line after the session lines', async () => {
     await setup({ online: false, sessions: 2 })
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     const dialog = await screen.findByRole('alertdialog')
     expect(dialog.querySelector('p')?.textContent).toBe(
       `2 sessions haven't synced and will be deleted from this device. ${SETTINGS_LINE}`,
@@ -111,21 +112,21 @@ describe('sign-out and unsent settings edits (#129)', () => {
     const { store, signOut } = await setup({ online: true })
     await store.flush()
     expect(store.hasPending()).toBe(false)
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     await waitFor(() => expect(signOut).toHaveBeenCalled())
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
   })
 
   it('keeps the edits pending on Cancel, and signs out on Sign out anyway', async () => {
     const { store, signOut } = await setup({ online: false })
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
     expect(signOut).not.toHaveBeenCalled()
     expect(store.hasPending()).toBe(true)
     expect(pendingInStorage()).toEqual({ week_start_day: 3 })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    fireEvent.click(signOutButton())
     fireEvent.click(await screen.findByRole('button', { name: 'Sign out anyway' }))
     await waitFor(() => expect(signOut).toHaveBeenCalledTimes(1))
     // The sign-out removes the cache with the edits, as clearLocalUserData does.

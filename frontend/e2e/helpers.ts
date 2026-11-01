@@ -88,6 +88,12 @@ export async function finishCountdown(page: Page, options: CountdownOptions = {}
   await expect(page.getByRole('heading', { name: 'Session complete' })).toBeVisible()
 }
 
+/** Opens the header's account menu (#406) if it is closed. */
+export async function openAccountMenu(page: Page): Promise<void> {
+  const button = page.locator('.account-button')
+  if ((await button.getAttribute('aria-expanded')) !== 'true') await button.click()
+}
+
 export async function openScreen(
   page: Page,
   name: 'New session' | 'History' | 'Archive' | 'Settings',
