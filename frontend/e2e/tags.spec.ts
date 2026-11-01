@@ -93,11 +93,15 @@ test('create a tag, use it, rename it, remove it and bring it back by name', asy
   expect(await dotClass(row)).toContain('tag-dot-red')
   await expect(filter.getByRole('button', { name: 'Writing', exact: true })).toBeVisible()
   await openScreen(page, 'New session')
+  await openSheet(page, 'Tag')
   await expect(page.getByRole('radio', { name: 'Writing' })).toBeVisible()
+  await closeSheet(page)
 
   // A reload reads the list back from the account.
   await page.reload()
+  await openSheet(page, 'Tag')
   await expect(page.getByRole('radio', { name: 'Writing' })).toBeVisible()
+  await closeSheet(page)
 })
 
 test('a tag made on one device shows on another after a reload, and offline hides the controls', async ({
@@ -117,6 +121,7 @@ test('a tag made on one device shows on another after a reload, and offline hide
   await second.getByLabel('Email').fill(email)
   await second.getByLabel('Password').fill('correct horse battery')
   await second.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await openSheet(second, 'Tag')
   await expect(second.getByRole('radio', { name: 'Deep work' })).toBeVisible()
   await other.close()
 

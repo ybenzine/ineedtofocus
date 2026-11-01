@@ -248,6 +248,7 @@ test.describe('a light device', () => {
 
   test('selected options use the light accent fill; the others are outlined', async ({ page }) => {
     await signUp(page, newEmail())
+    await openScreen(page, 'Settings') // New session has no chips of this kind since #407
     const selected = page.locator('.choice:has(input:checked)').first()
     await expect(selected).toHaveCSS('background-color', LIGHT.accent)
     await expect(selected).toHaveCSS('color', LIGHT.onAccent)
@@ -263,6 +264,7 @@ test.describe('a dark device', () => {
     page,
   }) => {
     await signUp(page, newEmail())
+    await openScreen(page, 'Settings') // New session has no chips of this kind since #407
     const selected = page.locator('.choice:has(input:checked)').first()
     await expect(selected).toHaveCSS('background-color', DARK.accent)
     await expect(selected).toHaveCSS('color', DARK.onAccent)
