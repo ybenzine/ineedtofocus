@@ -15,6 +15,7 @@ import { HttpSessionsApi } from '../sync/api.ts'
 import { IndexedDbSessionStore } from '../sync/sessionStore.ts'
 import { FakeSessionsServer, freshDbName, makeRecord } from '../test/fakeSessionsServer.ts'
 import { FakeTagsApi } from '../test/fakeTagsApi.ts'
+import { closeSheet, openSheet, pickTag } from '../test/setupUi.ts'
 import SessionSummary from '../timerscreen/SessionSummary.tsx'
 import TimerScreen from '../timerscreen/TimerScreen.tsx'
 import {
@@ -65,6 +66,7 @@ describe('the setup picker (AC7.1, AC7.2, AC7.7)', () => {
     api.add('Old', 'red', true)
     api.add('Writing', 'yellow')
     await setup(api)
+    openSheet('Tag')
     const group = screen.getByRole('group', { name: 'Tag' })
     expect(
       within(group)
@@ -80,7 +82,7 @@ describe('the setup picker (AC7.1, AC7.2, AC7.7)', () => {
     const api = new FakeTagsApi()
     const deep = api.add('Deep work', 'teal')
     const { onStart } = await setup(api)
-    fireEvent.click(screen.getByRole('radio', { name: 'Deep work' }))
+    pickTag('Deep work')
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
     await waitFor(() => expect(onStart).toHaveBeenCalledOnce())
     expect(onStart.mock.calls[0]?.[0].tag).toBe(deep.id)
@@ -90,6 +92,8 @@ describe('the setup picker (AC7.1, AC7.2, AC7.7)', () => {
     const api = new FakeTagsApi()
     const deep = api.add('Deep work', 'teal')
     await setup(api, deep.id)
+    expect(screen.getByRole('button', { name: /^Tag\b.*Deep work/ })).toBeInTheDocument()
+    openSheet('Tag')
     expect(screen.getByRole('radio', { name: 'Deep work' })).toBeChecked()
   })
 
@@ -97,8 +101,10 @@ describe('the setup picker (AC7.1, AC7.2, AC7.7)', () => {
     const api = new FakeTagsApi()
     const gone = api.add('Gone', 'red', true)
     const { onStart } = await setup(api, gone.id)
+    openSheet('Tag')
     expect(screen.queryByRole('radio', { name: 'Gone' })).not.toBeInTheDocument()
     expect(screen.getByRole('radio', { name: 'Work' })).toBeChecked()
+    closeSheet()
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
     await waitFor(() => expect(onStart).toHaveBeenCalledOnce())
     expect(onStart.mock.calls[0]?.[0].tag).toBe('work')
@@ -111,7 +117,9 @@ describe('the setup picker (AC7.1, AC7.2, AC7.7)', () => {
         onStart={vi.fn<(request: SessionRequest) => void>()}
       />,
     )
+    openSheet('Tag')
     expect(within(screen.getByRole('group', { name: 'Tag' })).getAllByRole('radio')).toHaveLength(6)
+    expect(screen.queryByRole('link', { name: 'Manage tags' })).not.toBeInTheDocument()
   })
 })
 

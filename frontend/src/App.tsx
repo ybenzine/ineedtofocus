@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AlertPlayer } from './sounds/alerts.ts'
 import AudioControls from './sounds/AudioControls.tsx'
 import {
@@ -51,6 +51,7 @@ import { TagsContext } from './tags/context.ts'
 import { TagsStore } from './tags/store.ts'
 import { type PreferencesStore } from './setup/preferences.ts'
 import SessionSetup, { type SessionRequest } from './setup/SessionSetup.tsx'
+import { defaultValues, useSetupModel } from './setup/model.ts'
 import type { AudioSource } from './setup/options.ts'
 import SessionSummary from './timerscreen/SessionSummary.tsx'
 import TimerScreen from './timerscreen/TimerScreen.tsx'
@@ -245,6 +246,10 @@ function AppBody({
     [youtubeProp, anonymous],
   )
   const { values } = useSettingsState()
+  // The New session setup, kept here so a trip to another screen and back doesn't lose it. It
+  // is gone with this component: loading the app and every sign-in, sign-up, sign-out or
+  // account deletion mount a fresh one (AC2.6).
+  const setup = useSetupModel(defaultValues(prefs.load(), values.default_reminder_minutes))
   const account = useAccount()
   // The anonymous session just saved from the summary's prompt: the app opens on its summary,
   // signed in (#331).
@@ -389,6 +394,18 @@ function AppBody({
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
+
+  // "Manage tags" in the Tag & goal sheet opens Settings at the Tags section (AC7.10).
+  const scrollToTags = useRef(false)
+  useEffect(() => {
+    if (!scrollToTags.current || view.name !== 'settings') return
+    scrollToTags.current = false
+    document.querySelector('.tags-section')?.scrollIntoView?.()
+  }, [view.name])
+  function manageTags() {
+    scrollToTags.current = true
+    goTo('settings')
+  }
 
   function goTo(screen: ScreenId) {
     const path = pathForScreen(screen)
@@ -542,6 +559,7 @@ function AppBody({
         controller={timer}
         onNavigate={goTo}
         mainClassName="history-screen"
+        holdsUpdate={setup.changed}
       >
         {anonymous ? (
           <AnonymousHistory />
@@ -563,6 +581,7 @@ function AppBody({
         controller={timer}
         onNavigate={goTo}
         mainClassName="history-screen"
+        holdsUpdate={setup.changed}
       >
         {anonymous ? <AnonymousArchive /> : <ArchiveScreen sessions={services.sessions} />}
       </AppShell>
@@ -571,14 +590,20 @@ function AppBody({
 
   if (view.name === 'settings') {
     return (
-      <AppShell current="settings" controller={timer} onNavigate={goTo}>
+      <AppShell current="settings" controller={timer} onNavigate={goTo} holdsUpdate={setup.changed}>
         <SettingsScreen player={player} controller={timer} />
       </AppShell>
     )
   }
 
   return (
-    <AppShell current="setup" controller={timer} onNavigate={goTo}>
+    <AppShell
+      current="setup"
+      controller={timer}
+      onNavigate={goTo}
+      mainClassName="setup-screen"
+      holdsUpdate={setup.changed}
+    >
       {notice && <p role="status">{notice}</p>}
       {foreignPending && <p role="status">{FOREIGN_PENDING_MESSAGE}</p>}
       <SessionSetup
@@ -586,6 +611,8 @@ function AppBody({
         defaultReminderMinutes={values.default_reminder_minutes}
         onStart={start}
         youtubeApi={youtube?.api}
+        model={setup}
+        onManageTags={manageTags}
       />
     </AppShell>
   )

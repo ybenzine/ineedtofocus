@@ -4,11 +4,16 @@ import App from './App.tsx'
 import { hasOpenEdit } from './update/autoUpdate.ts'
 import { holdsMemoryOnlyData, isViewBusy } from './update/idle.ts'
 import { MemoryPreferencesStore } from './setup/preferences.ts'
+import { typeDuration, typeGoal } from './test/setupUi.ts'
 import {
+  DEFAULT_POMODORO,
   MemoryActiveSessionStore,
   TimerController,
   type ActiveSessionStore,
 } from './timer/index.ts'
+
+// Screens change the URL; the next test starts on New session.
+afterEach(() => window.history.replaceState(null, '', '/'))
 
 function renderApp() {
   const controller = new TimerController({
@@ -40,23 +45,58 @@ describe('App tells the updater when it is idle', () => {
 
   it('a goal typed on the setup screen holds the update', async () => {
     renderApp()
-    const goal = await screen.findByLabelText(/what are you focusing on/i)
+    await screen.findByRole('button', { name: 'Start' })
     expect(hasOpenEdit()).toBe(false)
-    fireEvent.change(goal, { target: { value: 'Write the report' } })
+    typeGoal('Write the report')
     expect(hasOpenEdit()).toBe(true)
-    fireEvent.change(goal, { target: { value: '' } })
+    typeGoal('')
     expect(hasOpenEdit()).toBe(false)
   })
 
   it('a duration typed on the setup screen holds the update after the field loses focus', async () => {
     renderApp()
-    const minutes = await screen.findByLabelText(/minutes|duration/i)
+    const minutes = await screen.findByLabelText('Duration in minutes, 1 to 240')
     minutes.focus()
     fireEvent.change(minutes, { target: { value: '45' } })
     minutes.blur()
     expect(document.activeElement).not.toBe(minutes)
     expect(hasOpenEdit()).toBe(true)
-    fireEvent.change(minutes, { target: { value: '25' } })
+    // Back to the 30 a new setup begins with: nothing to lose.
+    fireEvent.change(minutes, { target: { value: '30' } })
+    expect(hasOpenEdit()).toBe(false)
+  })
+
+  it('a changed setup that is kept holds the update on every other screen (AC2.6, AC8.8)', async () => {
+    renderApp()
+    await screen.findByRole('button', { name: 'Start' })
+    typeDuration('45')
+    for (const screenName of ['History', 'Archive', 'Settings']) {
+      fireEvent.click(screen.getByRole('button', { name: screenName }))
+      await screen.findByRole('heading', { name: screenName })
+      expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument()
+      expect(hasOpenEdit(), screenName).toBe(true)
+    }
+    // Back to what it began with: the hold is gone, on the same screen.
+    fireEvent.click(screen.getByRole('button', { name: 'New session' }))
+    expect(screen.getByLabelText('Duration in minutes, 1 to 240')).toHaveValue('45')
+    typeDuration('30')
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    await screen.findByRole('heading', { name: 'History' })
+    expect(hasOpenEdit()).toBe(false)
+  })
+
+  it('a setup nobody touched does not hold the update, even after a default changes', async () => {
+    const preferences = new MemoryPreferencesStore()
+    const controller = new TimerController({
+      store: new MemoryActiveSessionStore(),
+      saveRecord: () => undefined,
+    })
+    const { rerender } = render(<App controller={controller} preferences={preferences} />)
+    await screen.findByRole('button', { name: 'Start' })
+    preferences.save({ tag: 'study', pomodoro: { ...DEFAULT_POMODORO, focusMinutes: 40 } })
+    rerender(<App controller={controller} preferences={preferences} />)
+    fireEvent.click(screen.getByRole('button', { name: 'History' }))
+    await screen.findByRole('heading', { name: 'History' })
     expect(hasOpenEdit()).toBe(false)
   })
 })

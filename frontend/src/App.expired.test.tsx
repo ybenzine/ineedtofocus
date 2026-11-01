@@ -13,6 +13,7 @@ import {
 import { AlertPlayer, MemoryAlertVolumeStore } from './sounds/alerts.ts'
 import { MemoryPreferencesStore } from './setup/preferences.ts'
 import { SettingsStore } from './settings/store.ts'
+import { typeDuration } from './test/setupUi.ts'
 import { OwnedActiveSessionStore } from './sync/index.ts'
 import { LocalActiveSessionStore, TimerController, type SessionRecord } from './timer/index.ts'
 
@@ -75,6 +76,7 @@ describe('a 401 while a timer runs (#120)', () => {
 
   async function startTimer() {
     await act(() => vi.advanceTimersByTimeAsync(2000))
+    typeDuration('25')
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
     await act(() => vi.advanceTimersByTimeAsync(10))
     expect(screen.getByRole('timer')).toBeInTheDocument()

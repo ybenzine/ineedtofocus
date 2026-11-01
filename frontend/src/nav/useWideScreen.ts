@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-/** The width from which the screens are text tabs in the header instead of a bottom bar (provisional, #406). */
+/** The width from which the screens are text tabs in the header instead of a bottom bar. */
 export const WIDE_QUERY = '(min-width: 768px)'
 
 /** True from 768 px wide. Without `matchMedia` (jsdom) the screen counts as a phone. */

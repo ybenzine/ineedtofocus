@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from '../App.tsx'
+import { pickSound, pickSoundOpen } from '../test/setupUi.ts'
 import { MemoryPreferencesStore } from '../setup/preferences.ts'
 import SessionSetup from '../setup/SessionSetup.tsx'
 import { MemoryActiveSessionStore, TimerController } from '../timer/index.ts'
@@ -408,7 +409,7 @@ describe('SessionSetup offline suggestion (AC8.7)', () => {
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
     render(<SessionSetup preferences={new MemoryPreferencesStore()} onStart={vi.fn()} />)
     expect(screen.queryByRole('button', { name: 'Use Rain instead' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('radio', { name: 'YouTube' }))
+    pickSoundOpen('YouTube')
     fireEvent.click(screen.getByRole('button', { name: 'Use Rain instead' }))
     expect(screen.getByRole('radio', { name: 'Rain' })).toBeChecked()
     vi.restoreAllMocks()
@@ -437,7 +438,8 @@ describe('App rain', () => {
 
   it('starts rain with the session, pauses with the timer and stops at session end', async () => {
     const { sources } = app(new MemoryActiveSessionStore(), new MemoryAudioSourceStore())
-    fireEvent.click(await screen.findByRole('radio', { name: 'Rain' }))
+    await screen.findByRole('button', { name: /^Sound\b/ })
+    pickSound('Rain')
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
     await screen.findByRole('timer')
     await vi.waitFor(() => expect(sources).toHaveLength(1))
@@ -458,7 +460,8 @@ describe('App rain', () => {
     const store = new MemoryActiveSessionStore()
     const audioStore = new MemoryAudioSourceStore()
     const first = app(store, audioStore)
-    fireEvent.click(await screen.findByRole('radio', { name: 'Rain' }))
+    await screen.findByRole('button', { name: /^Sound\b/ })
+    pickSound('Rain')
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
     await screen.findByRole('timer')
     first.view.unmount()
@@ -473,7 +476,8 @@ describe('App rain', () => {
     const store = new MemoryActiveSessionStore()
     const audioStore = new MemoryAudioSourceStore()
     const first = app(store, audioStore)
-    fireEvent.click(await screen.findByRole('radio', { name: 'Rain' }))
+    await screen.findByRole('button', { name: /^Sound\b/ })
+    pickSound('Rain')
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
     await screen.findByRole('timer')
     first.view.unmount()
@@ -491,7 +495,8 @@ describe('App rain', () => {
   it('forgets the source when the session ends', async () => {
     const audioStore = new MemoryAudioSourceStore()
     app(new MemoryActiveSessionStore(), audioStore)
-    fireEvent.click(await screen.findByRole('radio', { name: 'Rain' }))
+    await screen.findByRole('button', { name: /^Sound\b/ })
+    pickSound('Rain')
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
     await screen.findByRole('timer')
     expect(audioStore.load()).toBe('rain')

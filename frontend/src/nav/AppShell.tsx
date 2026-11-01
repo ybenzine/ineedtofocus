@@ -15,12 +15,15 @@ export default function AppShell({
   controller,
   onNavigate,
   mainClassName,
+  holdsUpdate = false,
   children,
 }: {
   current: ScreenId
   controller: TimerController
   onNavigate: (screen: ScreenId) => void
   mainClassName?: string
+  /** A setup in progress is kept (#407): the automatic update waits, whichever screen this is. */
+  holdsUpdate?: boolean
   children: ReactNode
 }) {
   const wide = useWideScreen()
@@ -39,7 +42,10 @@ export default function AppShell({
           <AccountBar controller={controller} />
         </div>
       </header>
-      <main className={mainClassName}>{children}</main>
+      <main className={mainClassName}>
+        {holdsUpdate && <span hidden data-holds-update="" />}
+        {children}
+      </main>
       {!wide && <ScreenNav variant="bar" current={current} onNavigate={onNavigate} />}
     </>
   )

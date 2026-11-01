@@ -1,10 +1,12 @@
 import { expect, test, type Page } from '@playwright/test'
 import {
+  closeSheet,
   expectNoSidewaysScroll,
   finishCountdown,
   expectTotals,
   installClock,
   openHistoryFromSummary,
+  pickSound,
   serverSessionCount,
   newEmail,
   openScreen,
@@ -46,9 +48,10 @@ test('a Pomodoro run with breaks is one History entry counting focus time only',
   await signUp(page, newEmail())
 
   await page.getByRole('radio', { name: 'Pomodoro' }).check()
-  await page.getByLabel('Focus', { exact: true }).fill('5')
-  await page.getByLabel('Short break').fill('1')
-  await page.getByLabel('Focus blocks').fill('2')
+  await page.getByLabel('Focus length in minutes, 5 to 90').fill('5')
+  for (let i = 0; i < 4; i++)
+    await page.getByRole('button', { name: 'Break, 1 minute less' }).click()
+  for (let i = 0; i < 2; i++) await page.getByRole('button', { name: 'One block fewer' }).click()
   await page.getByRole('button', { name: 'Start' }).click()
   await expect(page.getByRole('heading', { name: 'Focus', exact: true })).toBeVisible()
 
@@ -141,7 +144,7 @@ test('YouTube is chosen on New session: Start waits for a link, a recent link is
     'A video that was played before',
   )
 
-  await page.getByRole('radio', { name: 'YouTube' }).check()
+  await pickSound(page, 'YouTube')
   // One play glyph per recent-link row (one seeded link), no YouTube mark (#344).
   await expect(page.locator('.play-glyph')).toHaveCount(1)
   await expect(page.locator('.youtube-icon')).toHaveCount(0)
@@ -172,6 +175,7 @@ test('YouTube is chosen on New session: Start waits for a link, a recent link is
   await expectNoSidewaysScroll(page)
 
   await page.getByRole('button', { name: 'A video that was played before' }).click()
+  await closeSheet(page)
   await expect(start).toBeEnabled()
   await start.click()
   await expect(page.getByRole('timer', { name: 'Time' })).toBeVisible()

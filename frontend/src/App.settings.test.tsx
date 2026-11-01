@@ -43,11 +43,11 @@ describe('App with settings (#22)', () => {
     }
     renderWith(new SettingsStore({ api }))
     await screen.findByRole('button', { name: 'Start' })
-    expect(screen.getByRole('radio', { name: 'Study' })).toBeChecked()
+    expect(screen.getByRole('button', { name: /^Tag\b.*Study/ })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('radio', { name: 'Pomodoro' }))
     expect(screen.getByDisplayValue('40')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('radio', { name: 'Unlimited' }))
-    expect(screen.getByLabelText('Reminder')).toHaveValue('30')
+    expect(screen.getByRole('radio', { name: '30 minutes' })).toBeChecked()
   })
 
   it('still opens offline, using the device copy', async () => {
@@ -59,7 +59,7 @@ describe('App with settings (#22)', () => {
     settings.update({ last_tag: 'nap' })
     renderWith(settings)
     await screen.findByRole('button', { name: 'Start' })
-    expect(screen.getByRole('radio', { name: 'Nap' })).toBeChecked()
+    expect(screen.getByRole('button', { name: /^Tag\b.*Nap/ })).toBeInTheDocument()
   })
 
   it('opens setup from the device copy when the server is slow', async () => {
@@ -72,7 +72,7 @@ describe('App with settings (#22)', () => {
       await act(() => vi.advanceTimersByTimeAsync(SETTINGS_WAIT_MS - 100))
       expect(screen.queryByRole('button', { name: 'Start' })).not.toBeInTheDocument()
       await act(() => vi.advanceTimersByTimeAsync(200))
-      expect(screen.getByRole('radio', { name: 'Read' })).toBeChecked()
+      expect(screen.getByRole('button', { name: /^Tag\b.*Read/ })).toBeInTheDocument()
     } finally {
       vi.useRealTimers()
     }

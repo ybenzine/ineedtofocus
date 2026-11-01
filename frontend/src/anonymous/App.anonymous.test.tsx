@@ -1,3 +1,11 @@
+import {
+  closeSheet,
+  openSheet,
+  pickSoundOpen,
+  pickTag,
+  typeDuration,
+  typeGoal,
+} from '../test/setupUi.ts'
 import { findSignOutButton } from '../test/accountMenu.ts'
 import type { ReactNode } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -328,8 +336,12 @@ describe('what an anonymous user can do', () => {
 
   it('offers only the six built-in tags, and the Tags section points to sign-up and log-in, with no /api/tags call (AC1.8, AC7.9)', async () => {
     renderApp()
-    const picker = await screen.findByRole('group', { name: 'Tag' })
+    await screen.findByRole('button', { name: 'Start' })
+    openSheet('Tag')
+    const picker = screen.getByRole('group', { name: 'Tag' })
     expect(within(picker).getAllByRole('radio')).toHaveLength(6)
+    expect(screen.queryByRole('link', { name: 'Manage tags' })).not.toBeInTheDocument()
+    closeSheet()
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
     await screen.findByRole('heading', { name: 'Tags' })
     const tags = screen.getByRole('region', { name: 'Tags' })
@@ -345,10 +357,12 @@ describe('what an anonymous user can do', () => {
 
   it('remembers the audio source and YouTube link under the anonymous keys, with no recent list', async () => {
     renderApp()
-    fireEvent.click(await screen.findByRole('radio', { name: 'YouTube' }))
+    await screen.findByRole('button', { name: 'Start' })
+    pickSoundOpen('YouTube')
     fireEvent.change(screen.getByLabelText('YouTube link'), {
       target: { value: 'https://youtu.be/dQw4w9WgXcQ' },
     })
+    closeSheet()
     fireEvent.click(screen.getByRole('button', { name: 'Start' }))
     await screen.findByRole('timer')
     expect(localStorage.getItem(ANON_AUDIO_SOURCE_KEY)).toBe('youtube')
@@ -388,9 +402,8 @@ describe('the summary prompt', () => {
 
   it('keeps the finished record out of every storage and the marker names it', async () => {
     renderApp()
-    fireEvent.change(await screen.findByLabelText(/What are you focusing on/), {
-      target: { value: 'private goal' },
-    })
+    await screen.findByRole('button', { name: 'Start' })
+    typeGoal('private goal')
     await startAndStop(120)
     await screen.findByText(isPrompt)
     expect(localStorage.getItem(ANON_ACTIVE_SESSION_KEY)).toBeNull()
@@ -419,7 +432,7 @@ describe('the summary prompt', () => {
     expect(await screen.findByRole('button', { name: 'Start' })).toBeInTheDocument()
     expect(localStorage.getItem(ANON_HELD_ID_KEY)).toBeNull()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.queryByText(/ended in another tab/)).not.toBeInTheDocument()
   })
 
   it('discards it on a reload', async () => {
@@ -524,7 +537,7 @@ describe('signing up or in from the prompt', () => {
     expect(rig.saveRecord.mock.calls[0]?.[0]).toEqual({
       id: expect.any(String),
       mode: 'countdown',
-      modeConfig: { mode: 'countdown', minutes: 25 },
+      modeConfig: { mode: 'countdown', minutes: 30 },
       tag: 'work',
       goal: null,
       status: 'ended_early',
@@ -879,5 +892,40 @@ describe('a stale anonymous tab whose follow does not adopt a user (#396)', () =
     expect(await screen.findByText('This session was ended in another tab.')).toBeInTheDocument()
     await act(async () => undefined)
     expect(screen.getByText('This session was ended in another tab.')).toBeInTheDocument()
+  })
+})
+
+describe('a new setup on a change of account (#407, AC2.6)', () => {
+  it('a guest’s goal and tag are gone after logging in', async () => {
+    renderApp()
+    await screen.findByRole('button', { name: 'Start' })
+    typeGoal('guest goal')
+    pickTag('Study')
+    typeDuration('45')
+    fireEvent.click(screen.getByRole('link', { name: 'Log in' }))
+    await screen.findByRole('heading', { name: 'Sign in' })
+    fill('a@b.co', 'longenough1')
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    await screen.findByRole('button', { name: 'Start' })
+    expect(screen.getByRole('button', { name: /^Goal\b.*Add a goal/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Tag\b.*Work/ })).toBeInTheDocument()
+    expect(screen.getByLabelText('Duration in minutes, 1 to 240')).toHaveValue('30')
+  })
+
+  it('a signed-in user’s goal is gone after signing out and in again', async () => {
+    window.history.replaceState(null, '', '/login')
+    renderApp()
+    await screen.findByRole('heading', { name: 'Sign in' })
+    fill('a@b.co', 'longenough1')
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    await screen.findByRole('button', { name: 'Start' })
+    typeGoal('account goal')
+    expect(screen.getByRole('button', { name: /^Goal\b.*account goal/ })).toBeInTheDocument()
+    fireEvent.click(await findSignOutButton())
+    await screen.findByRole('heading', { name: 'Sign in' })
+    fill('a@b.co', 'longenough1')
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    await screen.findByRole('button', { name: 'Start' })
+    expect(screen.getByRole('button', { name: /^Goal\b.*Add a goal/ })).toBeInTheDocument()
   })
 })

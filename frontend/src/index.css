@@ -27,6 +27,7 @@
   --muted: #ababd3; /* labels, secondary text, inactive nav */
   --accent: #949aff; /* primary buttons, selected states, active nav, chart bars, links */
   --accent-hover: #b9bdff; /* hover or pressed accent */
+  --accent-light: #cdd0ff; /* the dial's alternate lap (AC9.5): 3:1 on --bg and --surface, 1.5:1 beside --accent */
   --on-accent: #0d0d33; /* text on accent fills */
   --error: #ff8a80; /* error text (#149) */
   /* Tag colours (#401, AC7.5): decorative dots, 3:1 against --bg and --surface of the set. */
@@ -60,6 +61,7 @@
     --muted: #4a4a7c;
     --accent: #4146d1;
     --accent-hover: #2a2ea8;
+    --accent-light: #7276e0;
     --on-accent: #fafaff;
     --error: #b3261e;
     --tag-indigo: #4146d1;
@@ -83,6 +85,7 @@
   --muted: #4a4a7c;
   --accent: #4146d1;
   --accent-hover: #2a2ea8;
+  --accent-light: #7276e0;
   --on-accent: #fafaff;
   --error: #b3261e;
   --tag-indigo: #4146d1;
@@ -106,6 +109,7 @@
   --muted: #ababd3;
   --accent: #949aff;
   --accent-hover: #b9bdff;
+  --accent-light: #cdd0ff;
   --on-accent: #0d0d33;
   --error: #ff8a80;
   --tag-indigo: #8c93ff;
@@ -412,17 +416,7 @@ main > p {
   margin-top: 1rem;
 }
 
-.setup fieldset {
-  border: 1px solid var(--border);
-  border-radius: 1rem;
-  background: var(--surface);
-  margin: 0;
-  padding: 0.75rem 1rem 1rem;
-  min-width: 0;
-}
-
-/* Fieldset legends are centred pills on the fieldset's top border, on New session and Settings (#330). */
-.setup legend,
+/* Fieldset legends are centred pills on the fieldset's top border in Settings (#330; New session has none since #407). */
 .settings fieldset.field legend {
   font-weight: 600;
   background-color: var(--surface);
@@ -542,7 +536,7 @@ main > p {
 }
 
 /* App shell (#406): a compact header on every screen with navigation, a bottom tab bar on phones
-   (below 768 px, provisional) and text tabs in the header from 768 px up. */
+   (below 768 px) and text tabs in the header from 768 px up. */
 .app-header {
   padding-inline: max(0.75rem, env(safe-area-inset-left)) max(0.75rem, env(safe-area-inset-right));
 }
@@ -1480,4 +1474,706 @@ button[aria-pressed='true'] .tag-dot {
 /* A select is as wide as its longest option: keep a 24-character tag name inside the form (#401). */
 .history-edit .field {
   min-width: 0;
+}
+
+/*
+ * New session, dial first (#407). The mode switch, a dial that previews the session, the presets
+ * or reminders, a card of rows, and Start pinned above the tab bar on phones. The dial follows the
+ * app theme (AC9.5); the timer's own ring stays dark.
+ */
+body {
+  --tab-bar-height: 0px;
+}
+
+body:has(.tab-bar) {
+  --tab-bar-height: calc(3.8125rem + env(safe-area-inset-bottom));
+}
+
+/* The pinned Start footer: the button and the padding above and below it (see .setup-footer). */
+body {
+  --start-footer-height: 4.625rem;
+}
+
+main.setup-screen {
+  padding: 0.5rem 1.25rem 0;
+}
+
+main.setup-screen:has(~ .tab-bar) {
+  padding-bottom: var(--tab-bar-height);
+}
+
+.setup-dial {
+  /* On a phone the form fills the screen between the header and the tab bar, so Start sits at the bottom. */
+  min-height: calc(100dvh - 3.75rem - 0.5rem - var(--tab-bar-height));
+  gap: 0;
+}
+
+.setup-dial fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.setup-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding-bottom: 0.25rem;
+}
+
+/* A focused control scrolls clear of the pinned Start and the tab bar (WCAG 2.4.11). */
+.setup-body :is(button, input, a, label) {
+  scroll-margin-bottom: calc(var(--tab-bar-height) + var(--start-footer-height) + 0.5rem);
+}
+
+.setup-footer {
+  position: sticky;
+  bottom: var(--tab-bar-height);
+  z-index: 2;
+  box-sizing: border-box;
+  min-height: var(--start-footer-height);
+  padding-block: 0.625rem;
+  background: var(--bg);
+}
+
+@media (min-width: 768px) {
+  .setup-dial {
+    min-height: 0;
+  }
+
+  .setup-footer {
+    position: static;
+  }
+}
+
+.start-button {
+  width: 100%;
+  min-height: 3.375rem;
+  border-radius: 0.875rem;
+  font-size: 1.0625rem;
+  font-weight: 700;
+}
+
+.caption {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* The mode switch: three radios drawn as one segmented control. */
+.setup-dial .mode-switch {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: var(--surface);
+  border-radius: 0.875rem;
+}
+
+.mode-option {
+  position: relative;
+  display: flex;
+}
+
+.mode-option input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.mode-option span {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  border-radius: 0.625rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
+.mode-option:has(input:checked) span {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+.mode-option:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 0.625rem;
+}
+
+/* The dial. */
+.dial-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.dial-row-single {
+  justify-content: center;
+}
+
+.dial {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 14.25rem;
+  aspect-ratio: 1;
+  margin-inline: auto;
+  container-type: inline-size;
+}
+
+.dial-row-single .dial {
+  flex: 0 1 14.25rem;
+}
+
+.dial-small {
+  max-width: 12.5rem;
+}
+
+.dial-ring {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.dial-track,
+.dial-arc {
+  fill: none;
+}
+
+.dial-track {
+  stroke: var(--surface);
+}
+
+.dial-inner {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 1.5;
+}
+
+.dial-arc-accent {
+  stroke: var(--accent);
+}
+
+.dial-arc-light {
+  stroke: var(--accent-light);
+}
+
+.dial-tick {
+  stroke: var(--accent);
+  stroke-width: 4;
+  stroke-linecap: butt;
+}
+
+.dial-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.125rem;
+}
+
+.setup-dial .dial-input {
+  width: 6ch;
+  max-width: 60cqw;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--text);
+  text-align: center;
+  font-size: clamp(2.5rem, 27cqw, 4rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+.setup-dial .dial-input[aria-invalid='true'] {
+  color: var(--error);
+}
+
+.dial-infinity {
+  font-size: clamp(2.5rem, 27cqw, 4rem);
+  font-weight: 500;
+  line-height: 1.1;
+}
+
+.dial-unit {
+  font-size: 0.9375rem;
+  color: var(--muted);
+}
+
+.dial-line {
+  min-height: 1.25rem;
+  margin-top: 0.375rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.step-button {
+  flex: none;
+  width: 2.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--accent);
+}
+
+.setup-dial .step-button-large {
+  width: 3.25rem;
+  height: 3.25rem;
+  border: 1px solid var(--control-border);
+  color: var(--text);
+}
+
+.setup-dial .step-button:hover:not(:disabled) {
+  background: var(--surface);
+  border-color: var(--control-border);
+  color: var(--accent-hover);
+}
+
+.setup-errors {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.875rem;
+  text-align: center;
+}
+
+/* An empty live region adds no height, nor the two flex gaps around it. */
+.setup-errors:empty {
+  margin-block: -0.5rem;
+}
+
+/* Presets and reminders: chips that show their state. */
+.presets {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 0.5rem;
+}
+
+.setup-dial .preset {
+  padding: 0;
+  border-radius: 999px;
+  border-color: var(--control-border);
+  font-size: 0.9375rem;
+  font-weight: 400;
+}
+
+.setup-dial .preset[aria-pressed='true'],
+.setup-dial .preset[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--surface);
+  border-color: transparent;
+  box-shadow: inset 0 0 0 2px var(--accent);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.reminders {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.reminders legend {
+  padding: 0;
+  margin-bottom: 0.5rem;
+}
+
+.reminder-pills {
+  display: grid;
+  /* 44 px at the least: seven fit in 320 px (a 360 px phone) with 2 px gaps; narrower, they wrap. */
+  grid-template-columns: repeat(auto-fit, minmax(2.75rem, 1fr));
+  gap: 0.125rem;
+}
+
+.pill {
+  position: relative;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 100%;
+  min-height: 2.75rem;
+  padding: 0 1rem 0 0.875rem;
+  border: 1px solid var(--control-border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.9375rem;
+  cursor: pointer;
+}
+
+.pill input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.pill:has(input:checked) {
+  border-color: transparent;
+  box-shadow: inset 0 0 0 2px var(--accent);
+  font-weight: 600;
+}
+
+.pill:has(input:focus-visible) {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.pill-small {
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  font-size: 0.875rem;
+}
+
+.pill-small:has(input:checked) {
+  background: var(--surface);
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.pill-check {
+  display: none;
+  color: var(--accent);
+}
+
+.pill:has(input:checked) .pill-check {
+  display: inline-flex;
+}
+
+.pill .tag-name-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The card of rows. */
+.setup-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: 1rem;
+  overflow: hidden;
+}
+
+.setup-row {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 3rem;
+  padding: 0 0.875rem 0 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.setup-row:last-child {
+  border-bottom: 0;
+}
+
+.setup-dial .row-button {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 400;
+  text-align: start;
+}
+
+.setup-dial .row-button:last-child {
+  border-bottom: 0;
+}
+
+.setup-dial .row-button:hover:not(:disabled) {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.row-button:focus-visible {
+  outline-offset: -3px;
+}
+
+.row-icon,
+.row-chevron,
+.row-sound-icon {
+  flex: none;
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.row-sound-icon {
+  color: var(--accent);
+}
+
+.row-label {
+  flex: none;
+  margin-inline-end: auto;
+  font-size: 1rem;
+}
+
+.row-note {
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+
+.row-value {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.9375rem;
+  color: var(--muted);
+}
+
+.row-value-strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.row-value-goal {
+  flex: 1 1 0;
+  display: block;
+  text-align: end;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-value-set {
+  color: var(--text);
+}
+
+.row-value .tag-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stepper-value {
+  min-width: 3.25rem;
+  text-align: center;
+  font-size: 1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.setup-dial .stepper-field {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.setup-dial .stepper-field input {
+  width: 3rem;
+  padding: 0;
+  text-align: center;
+  font-size: 1rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.stepper-row .row-label {
+  flex: 1;
+  margin-inline-end: 0;
+}
+
+.switch-row {
+  position: relative;
+  cursor: pointer;
+}
+
+.setup-dial .switch-input {
+  position: absolute;
+  inset-inline-end: 1rem;
+  width: 3rem;
+  height: 1.75rem;
+  opacity: 0;
+  z-index: 1;
+}
+
+.switch {
+  flex: none;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  width: 3rem;
+  height: 1.75rem;
+  padding: 0.1875rem;
+  border: 1px solid var(--control-border);
+  border-radius: 0.875rem;
+}
+
+.switch::after {
+  content: '';
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 0.15s;
+}
+
+.switch-input:checked ~ .switch {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.switch-input:checked ~ .switch::after {
+  background: var(--on-accent);
+  transform: translateX(1.25rem);
+}
+
+.switch-input:focus-visible ~ .switch {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Sheets. */
+.sheet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+.sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--bg);
+  opacity: 0.72;
+}
+
+.sheet {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  max-width: 36rem;
+  max-height: 90dvh;
+  margin-inline: auto;
+  padding: 0.5rem 1.25rem calc(1.5rem + env(safe-area-inset-bottom));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 1.5rem 1.5rem 0 0;
+  color: var(--text);
+}
+
+.sheet:focus {
+  outline: none;
+}
+
+.sheet-grip {
+  align-self: center;
+  width: 2.25rem;
+  height: 0.3125rem;
+  border-radius: 3px;
+  background: var(--border);
+}
+
+.sheet-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sheet-head h2 {
+  font-size: 1.125rem;
+}
+
+.sheet .sheet-done {
+  padding: 0 0.25rem 0 0.75rem;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.sheet-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sheet-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sheet-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.sheet-optional {
+  font-size: 0.8125rem;
+  color: var(--muted);
+}
+
+.sheet .pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.1875rem;
+  border: 0;
+}
+
+.sheet .tag-pills {
+  max-height: 18.5rem;
+  overflow-y: auto;
+}
+
+.sheet .sheet-goal {
+  min-height: 3.25rem;
+  padding: 0 0.875rem;
+  font-size: 1rem;
+  border-radius: 0.75rem;
+}
+
+.sheet .sheet-goal:focus {
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.sheet-count {
+  align-self: flex-end;
+  font-variant-numeric: tabular-nums;
 }

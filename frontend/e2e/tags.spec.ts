@@ -1,11 +1,14 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 import {
+  closeSheet,
   expectNoSidewaysScroll,
   installClock,
   newEmail,
   openHistoryFromSummary,
   openScreen,
+  openSheet,
+  pickTag,
   signUp,
   startCountdown,
 } from './helpers'
@@ -38,9 +41,11 @@ test('create a tag, use it, rename it, remove it and bring it back by name', asy
 
   // A 1-minute session with it.
   await openScreen(page, 'New session')
-  const picker = page.getByRole('group', { name: 'Tag' })
+  const sheet = await openSheet(page, 'Tag')
+  const picker = sheet.getByRole('group', { name: 'Tag' })
   await expect(picker.locator('.tag-dot')).toHaveCount(7)
   await picker.getByRole('radio', { name: 'Deep work' }).check()
+  await closeSheet(page)
   await startCountdown(page, { minutes: 1 })
   await expect(page.locator('.timer-meta .tag-dot-teal')).toBeVisible()
   await page.clock.fastForward(62_000)
@@ -88,11 +93,15 @@ test('create a tag, use it, rename it, remove it and bring it back by name', asy
   expect(await dotClass(row)).toContain('tag-dot-red')
   await expect(filter.getByRole('button', { name: 'Writing', exact: true })).toBeVisible()
   await openScreen(page, 'New session')
+  await openSheet(page, 'Tag')
   await expect(page.getByRole('radio', { name: 'Writing' })).toBeVisible()
+  await closeSheet(page)
 
   // A reload reads the list back from the account.
   await page.reload()
+  await openSheet(page, 'Tag')
   await expect(page.getByRole('radio', { name: 'Writing' })).toBeVisible()
+  await closeSheet(page)
 })
 
 test('a tag made on one device shows on another after a reload, and offline hides the controls', async ({
@@ -112,6 +121,7 @@ test('a tag made on one device shows on another after a reload, and offline hide
   await second.getByLabel('Email').fill(email)
   await second.getByLabel('Password').fill('correct horse battery')
   await second.getByRole('button', { name: 'Sign in', exact: true }).click()
+  await openSheet(second, 'Tag')
   await expect(second.getByRole('radio', { name: 'Deep work' })).toBeVisible()
   await other.close()
 
@@ -132,7 +142,10 @@ test('guest mode shows only the built-in tags and no /api/tags call', async ({ p
   await installClock(page)
   await page.goto('/')
   await expect(page.getByRole('button', { name: 'Start' })).toBeVisible()
+  await openSheet(page, 'Tag')
   await expect(page.getByRole('group', { name: 'Tag' }).getByRole('radio')).toHaveCount(6)
+  await expect(page.getByRole('link', { name: 'Manage tags' })).toHaveCount(0)
+  await closeSheet(page)
   await openScreen(page, 'Settings')
   await expect(tagsSection(page)).toContainText('Create an account or log in to add your own tags.')
   await expect(tagsSection(page).getByRole('link', { name: 'Create an account' })).toHaveAttribute(
@@ -178,7 +191,7 @@ for (const scheme of ['dark', 'light'] as const) {
       await tagsSection(page).getByRole('button', { name: 'Cancel' }).click()
 
       await openScreen(page, 'New session')
-      await page.getByRole('group', { name: 'Tag' }).getByRole('radio', { name }).check()
+      await pickTag(page, name)
       await expectNoSidewaysScroll(page)
       await audit()
       await startCountdown(page, { minutes: 1 })

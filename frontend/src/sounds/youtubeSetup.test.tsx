@@ -3,6 +3,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from '../App.tsx'
+import { pickSound, pickSoundOpen } from '../test/setupUi.ts'
 import { MemoryPreferencesStore } from '../setup/preferences.ts'
 import SessionSetup, { type SessionRequest } from '../setup/SessionSetup.tsx'
 import { MemoryActiveSessionStore, TimerController } from '../timer/index.ts'
@@ -22,7 +23,7 @@ function fakeApi(links: RecentLink[] = []) {
   }
 }
 
-const pickYoutube = () => fireEvent.click(screen.getByRole('radio', { name: 'YouTube' }))
+const pickYoutube = () => pickSoundOpen('YouTube')
 const start = () => screen.getByRole('button', { name: 'Start' })
 const typeLink = (value: string) =>
   fireEvent.change(screen.getByLabelText('YouTube link'), { target: { value } })
@@ -54,7 +55,7 @@ describe('SessionSetup with YouTube', () => {
     setup()
     pickYoutube()
     expect(start()).toBeDisabled()
-    expect(start()).toHaveAccessibleDescription(/Paste a YouTube link/)
+    expect(start()).toHaveAccessibleDescription(/YouTube link/)
     typeLink('https://example.com/watch?v=dQw4w9WgXcQ')
     expect(start()).toBeDisabled()
     typeLink(URL1)
@@ -198,7 +199,7 @@ describe('App starting a session with a YouTube link', () => {
     const audioStore = new MemoryAudioSourceStore()
     const linkStore = new MemoryYoutubeLinkStore()
     const first = app(store, audioStore, linkStore)
-    await screen.findByRole('radio', { name: 'YouTube' })
+    await screen.findByRole('button', { name: /^Sound\b/ })
     pickYoutube()
     await screen.findByLabelText('YouTube link')
     typeLink(URL1)
@@ -225,7 +226,8 @@ describe('App starting a session with a YouTube link', () => {
   it('does not touch the link store when starting without YouTube', async () => {
     const linkStore = new MemoryYoutubeLinkStore()
     const { api } = app(new MemoryActiveSessionStore(), new MemoryAudioSourceStore(), linkStore)
-    fireEvent.click(await screen.findByRole('radio', { name: 'Rain' }))
+    await screen.findByRole('button', { name: /^Sound\b/ })
+    pickSound('Rain')
     fireEvent.click(start())
     await screen.findByRole('timer')
     expect(linkStore.load()).toBeNull()

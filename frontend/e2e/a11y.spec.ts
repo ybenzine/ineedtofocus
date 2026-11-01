@@ -1,7 +1,10 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 import {
+  closeSheet,
   openAccountMenu,
+  openSheet,
+  pickSound,
   expectNoSidewaysScroll,
   finishCountdown,
   installClock,
@@ -131,6 +134,11 @@ for (const scheme of SCHEMES) {
       await page.getByRole('radio', { name: 'Unlimited' }).check()
       await expectNoSeriousViolations(page)
       await page.getByRole('radio', { name: 'Countdown' }).check()
+      // The Tag & goal sheet and the Sound sheet, open.
+      await openSheet(page, 'Tag')
+      await expectNoSeriousViolations(page)
+      await closeSheet(page)
+      await openSheet(page, 'Sound')
       for (const source of ['Rain', 'YouTube']) {
         await page.getByRole('radio', { name: source }).check()
         if (source === 'YouTube') {
@@ -140,12 +148,16 @@ for (const scheme of SCHEMES) {
         await expectNoSeriousViolations(page)
       }
       await page.getByRole('radio', { name: 'None' }).check()
+      await closeSheet(page)
 
       // Timer running, paused, in a break (always dark), then the summary.
       await page.getByRole('radio', { name: 'Pomodoro' }).check()
-      await page.getByLabel('Focus', { exact: true }).fill('5')
-      await page.getByLabel('Short break').fill('1')
-      await page.getByLabel('Focus blocks').fill('2')
+      await page.getByLabel('Focus length in minutes, 5 to 90').fill('5')
+      for (let i = 0; i < 4; i++) {
+        await page.getByRole('button', { name: 'Break, 1 minute less' }).click()
+      }
+      for (let i = 0; i < 2; i++)
+        await page.getByRole('button', { name: 'One block fewer' }).click()
       await page.getByRole('button', { name: 'Start' }).click()
       await expect(page.getByRole('timer', { name: 'Time' })).toBeVisible()
       await expectNoSeriousViolations(page)
@@ -266,10 +278,11 @@ async function visitEveryScreen(
   await check('setup')
   await page.getByRole('radio', { name: 'Pomodoro' }).check()
   await check('setup, Pomodoro')
-  await page.getByRole('radio', { name: 'YouTube' }).check()
+  await pickSound(page, 'YouTube')
   await expect(page.getByRole('button', { name: LONG_TITLE })).toBeVisible()
   await check('setup, YouTube')
   await page.getByRole('radio', { name: 'None' }).check()
+  await closeSheet(page)
   await page.getByRole('radio', { name: 'Countdown' }).check()
   await startCountdown(page, { minutes: 1, tag: 'work', goal: 'W'.repeat(120) })
   await check('timer')
@@ -400,12 +413,12 @@ test.describe('keyboard and screen readers', () => {
     expect(order.slice(0, 4)).toEqual(['New session', 'History', 'Archive', 'Settings'])
     expect(order[4]).toMatch(/@/) // the account button, last in the header
     expect(at('Start')).toBeGreaterThan(-1)
-    // Start comes after the duration, the tag and the goal field.
-    expect(at('Duration')).toBeGreaterThan(4)
-    expect(at('Start')).toBeGreaterThan(at('Duration'))
-    expect(at('Start')).toBeGreaterThan(at('Work'))
-    expect(at('Start')).toBeGreaterThan(at(/What are you focusing on/))
-    expect(at(/What are you focusing on/)).toBeGreaterThan(at('Work'))
+    // The dial, then the Tag, Goal and Sound rows, then Start.
+    expect(at(/^Duration/)).toBeGreaterThan(4)
+    expect(at(/^Tag/)).toBeGreaterThan(at(/^Duration/))
+    expect(at(/^Goal/)).toBeGreaterThan(at(/^Tag/))
+    expect(at(/^Sound/)).toBeGreaterThan(at(/^Goal/))
+    expect(at('Start')).toBeGreaterThan(at(/^Sound/))
 
     await page.getByLabel('Duration').focus()
     await page.keyboard.press('Enter')
@@ -704,6 +717,7 @@ for (const scheme of SCHEMES) {
       await installClock(page)
       await signUp(page, newEmail())
 
+      await openSheet(page, 'Sound')
       await page.getByRole('radio', { name: 'Rain' }).check()
       const setupHint = 'On iPhone and iPad, rain and alerts are off while silent mode is on.'
       await expect(page.getByText(setupHint)).toBeVisible()
@@ -712,6 +726,7 @@ for (const scheme of SCHEMES) {
       await expectNoSeriousViolations(page)
       await page.getByRole('radio', { name: 'None' }).check()
       await expect(page.getByText(setupHint)).toHaveCount(0)
+      await closeSheet(page)
 
       await openScreen(page, 'Settings')
       const settingsHint =
