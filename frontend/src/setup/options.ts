@@ -8,6 +8,17 @@ export type AudioSource = (typeof AUDIO_SOURCES)[number]
 /** AC2.6. The row can grow by one: the recent custom time (#409) goes after these. */
 export const COUNTDOWN_PRESETS: readonly number[] = [15, 30, 45, 60, 90]
 
+/** A custom Countdown length worth remembering: whole minutes in 1-240 that no preset covers (AC2.7). */
+export function recentCustomMinutes(value: unknown): number | null {
+  return typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= 240 &&
+    !COUNTDOWN_PRESETS.includes(value)
+    ? value
+    : null
+}
+
 /** The end time under the dial is recomputed this often; it only repaints, never announces. */
 export const CLOCK_REFRESH_MS = 20_000
 

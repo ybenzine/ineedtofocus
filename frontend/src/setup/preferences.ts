@@ -10,6 +10,8 @@ export interface Preferences {
   tag: Tag
   /** Last-used Pomodoro configuration; the AC3.1 defaults for a new user. */
   pomodoro: PomodoroConfig
+  /** The last custom Countdown length, shown as a sixth preset (AC2.7, #409); null when none. */
+  countdownRecent?: number | null
 }
 
 export const DEFAULT_PREFERENCES: Preferences = { tag: 'work', pomodoro: DEFAULT_POMODORO }

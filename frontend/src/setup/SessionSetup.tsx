@@ -29,13 +29,20 @@ import {
   NoSoundIcon,
   PlusIcon,
   RainIcon,
+  RecentIcon,
   SoundIcon,
   TagIcon,
   YoutubeIcon,
 } from './icons.tsx'
 import { chimeLine, formatLength, pomodoroTotalMinutes, summaryLine } from './length.ts'
 import { defaultValues, useSetupModel, type SetupModel } from './model.ts'
-import { AUDIO_LABELS, CLOCK_REFRESH_MS, COUNTDOWN_PRESETS, type AudioSource } from './options.ts'
+import {
+  AUDIO_LABELS,
+  CLOCK_REFRESH_MS,
+  COUNTDOWN_PRESETS,
+  recentCustomMinutes,
+  type AudioSource,
+} from './options.ts'
 import type { PreferencesStore } from './preferences.ts'
 import { SoundSheet, TagGoalSheet } from './SetupSheets.tsx'
 
@@ -153,6 +160,7 @@ export default function SessionSetup({
   locale,
 }: SessionSetupProps) {
   const remembered = preferences.load()
+  const recent = recentCustomMinutes(remembered.countdownRecent)
   const defaults = defaultValues(remembered, defaultReminderMinutes)
   const own = useSetupModel(defaults)
   const model = given ?? own
@@ -279,8 +287,15 @@ export default function SessionSetup({
         audio,
         youtubeLink,
       })
-      if (toStart.mode === 'pomodoro') preferences.save({ tag, pomodoro: toStart })
-      else preferences.save({ ...preferences.load(), tag })
+      // A custom Countdown length is remembered from the moment it starts, whatever becomes of
+      // the session; a preset, Pomodoro or Unlimited leave it as it is (AC2.7).
+      const latest = preferences.load()
+      const countdownRecent =
+        toStart.mode === 'countdown'
+          ? (recentCustomMinutes(toStart.minutes) ?? latest.countdownRecent)
+          : latest.countdownRecent
+      if (toStart.mode === 'pomodoro') preferences.save({ tag, pomodoro: toStart, countdownRecent })
+      else preferences.save({ ...latest, tag, countdownRecent })
       // The next setup is a new one (AC2.6), beginning from what this session just saved.
       model.reset(defaultValues(preferences.load(), defaultReminderMinutes))
     } catch (error) {
@@ -434,18 +449,24 @@ export default function SessionSetup({
 
         {mode === 'countdown' && (
           <div className="presets" role="group" aria-label="Preset lengths">
-            {COUNTDOWN_PRESETS.map((minutes) => (
-              <button
-                key={minutes}
-                type="button"
-                className="preset"
-                aria-label={`${minutes} minutes`}
-                aria-pressed={countdownValid && countdownMinutes === minutes}
-                onClick={() => model.edit({ countdown: String(minutes) })}
-              >
-                {minutes}
-              </button>
-            ))}
+            {[...COUNTDOWN_PRESETS, ...(recent === null ? [] : [recent])].map((minutes, index) => {
+              const isRecent = index >= COUNTDOWN_PRESETS.length
+              return (
+                <button
+                  key={isRecent ? 'recent' : minutes}
+                  type="button"
+                  className={isRecent ? 'preset preset-recent' : 'preset'}
+                  aria-label={
+                    isRecent ? `${minutes} minutes, your recent custom time` : `${minutes} minutes`
+                  }
+                  aria-pressed={countdownValid && countdownMinutes === minutes}
+                  onClick={() => model.edit({ countdown: String(minutes) })}
+                >
+                  {isRecent && <RecentIcon />}
+                  {minutes}
+                </button>
+              )
+            })}
           </div>
         )}
 

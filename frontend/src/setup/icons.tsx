@@ -96,3 +96,23 @@ export const MinusIcon = ({ size = 20 }: { size?: number }) => (
     <path d="M5 12h14" />
   </Icon>
 )
+
+/** A small clock: marks the recent custom time among the presets (#409). */
+export const RecentIcon = () => (
+  <svg
+    aria-hidden="true"
+    focusable="false"
+    className="preset-recent-icon"
+    width={12}
+    height={12}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={2.2}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </svg>
+)

@@ -1781,6 +1781,25 @@ main.setup-screen:has(~ .tab-bar) {
   font-weight: 400;
 }
 
+/* The recent custom time (#409): a sixth pill, dashed so it reads as the user's own. */
+.setup-dial .presets {
+  gap: 6px;
+}
+
+.setup-dial .preset-recent {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border-style: dashed;
+  min-width: 0;
+}
+
+.preset-recent-icon {
+  flex: none;
+  opacity: 0.75;
+}
+
 .setup-dial .preset[aria-pressed='true'],
 .setup-dial .preset[aria-pressed='true']:hover:not(:disabled) {
   background: var(--surface);
