@@ -38,6 +38,12 @@ describe('360 px layout (#131)', () => {
     expect(rule('main.focus-screen')).toMatch(/env\(safe-area-inset-bottom\)/)
   })
 
+  it('keeps the timer screen from scrolling under the bottom safe area (#406)', () => {
+    expect(rule('.timer-screen')).toMatch(
+      /min-height:\s*calc\(100dvh - 1\.5rem - max\(1\.5rem, env\(safe-area-inset-bottom\)\)\)/,
+    )
+  })
+
   it('breaks long goals in history rows', () => {
     expect(rule('.history-row-goal')).toMatch(/overflow-wrap:\s*anywhere/)
   })

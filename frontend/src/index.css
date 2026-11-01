@@ -847,7 +847,7 @@ main.focus-screen {
 .timer-screen {
   /* Fill the page so the bottom area (audio card, Keep screen awake) sits at the bottom; Pause
      and Stop sit below the tag and goal line (AC9.4). */
-  min-height: calc(100dvh - 3rem);
+  min-height: calc(100dvh - 1.5rem - max(1.5rem, env(safe-area-inset-bottom)));
   align-items: stretch;
 }
 
