@@ -49,6 +49,7 @@ def test_all_tables_registered() -> None:
         "focus_sessions",
         "youtube_recent_links",
         "auth_sessions",
+        "custom_tags",
     }
 
 

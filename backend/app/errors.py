@@ -50,6 +50,14 @@ class ErrorResponse(BaseModel):
     error: ErrorInfo
 
 
+class ApiError(StarletteHTTPException):
+    """An HTTP error that also carries `details` (`{field, message, type}` items) in the body."""
+
+    def __init__(self, status_code: int, message: str, details: list[ErrorDetail]) -> None:
+        super().__init__(status_code, message)
+        self.details = details
+
+
 def error_body(code: str, message: str, details: Any = None) -> dict[str, Any]:
     body: dict[str, Any] = {"code": code, "message": message}
     if details is not None:
@@ -99,9 +107,10 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(StarletteHTTPException)
     async def http(_: Request, exc: StarletteHTTPException) -> Response:
+        details = [d.model_dump() for d in exc.details] if isinstance(exc, ApiError) else None
         return JSONResponse(
             status_code=exc.status_code,
-            content=error_body(_CODES.get(exc.status_code, "error"), str(exc.detail)),
+            content=error_body(_CODES.get(exc.status_code, "error"), str(exc.detail), details),
             headers=exc.headers,
         )
 

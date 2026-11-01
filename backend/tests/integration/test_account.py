@@ -66,6 +66,7 @@ def test_ac2_export_is_complete_and_scoped(ada: TestClient, bob: TestClient) -> 
         "account",
         "settings",
         "sessions",
+        "tags",
         "youtube_links",
     ]
     assert body["format_version"] == 1
@@ -104,7 +105,7 @@ def test_ac2_export_is_complete_and_scoped(ada: TestClient, bob: TestClient) -> 
 
 def test_ac2_export_of_a_new_account_is_empty(ada: TestClient) -> None:
     body = ada.get("/api/account/export").json()
-    assert body["sessions"] == [] and body["youtube_links"] == []
+    assert body["sessions"] == [] and body["youtube_links"] == [] and body["tags"] == []
     assert body["settings"]["alert_volume"] == 80
 
 

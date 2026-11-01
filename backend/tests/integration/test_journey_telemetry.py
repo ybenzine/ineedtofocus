@@ -36,7 +36,8 @@ pytestmark = pytest.mark.integration
 EMAIL = "leaky-person@example.com"
 GOAL = "Secret goal about the merger"
 YOUTUBE = "https://www.youtube.com/watch?v=SECRETVIDEO"
-SECRETS = (EMAIL, "leaky-person", GOAL, "merger", "SECRETVIDEO", PASSWORD)
+TAG_NAME = "Zebrafish ledger"
+SECRETS = (EMAIL, "leaky-person", GOAL, "merger", "SECRETVIDEO", PASSWORD, "Zebrafish", "ledger")
 
 _reader = InMemoryMetricReader()
 
@@ -150,6 +151,34 @@ def test_no_customer_data_in_any_exported_attribute_event_or_name(
 
     c.app.include_router(failing)  # type: ignore[attr-defined]
     assert c.get("/api/_boom").status_code == 500
+    # Tags (AC7.9): create, clash, rename, remove, bring back, and a statement that fails on a
+    # tag name (the unique-name error text quotes it).
+    made = c.post("/api/tags", json={"name": TAG_NAME, "color": "teal"})
+    assert made.status_code == 201
+    tag_id = made.json()["id"]
+    assert c.post("/api/tags", json={"name": TAG_NAME.upper(), "color": "red"}).status_code == 409
+    assert c.patch(f"/api/tags/{tag_id}", json={"name": TAG_NAME + " 2"}).status_code == 200
+    assert c.post("/api/sessions", json=make_session(tag=tag_id)).status_code == 201
+    assert c.patch("/api/settings", json={"last_tag": tag_id}).status_code == 200
+    assert c.get(f"/api/history?view=all&tz=UTC&tag={tag_id}").status_code == 200
+    assert c.post(f"/api/tags/{tag_id}/remove").status_code == 200
+    assert c.post("/api/tags", json={"name": TAG_NAME + " 2", "color": "red"}).status_code == 200
+    assert c.get("/api/tags").status_code == 200
+    assert c.get("/api/account/export").status_code == 200
+    duplicate = APIRouter()
+
+    @duplicate.get("/api/_dup_tag")
+    async def dup_tag(db: DbSession) -> dict[str, str]:
+        await db.execute(
+            text(
+                "INSERT INTO custom_tags (user_id, name, color) "
+                "SELECT user_id, upper(name), 'red' FROM custom_tags"
+            )
+        )
+        return {}
+
+    c.app.include_router(duplicate)  # type: ignore[attr-defined]
+    assert c.get("/api/_dup_tag").status_code == 500
     assert c.get(f"/api/nope/{EMAIL}").status_code == 404
     assert c.get(f"/api/nope/{YOUTUBE.replace('/', '%2F')}").status_code == 404
     assert c.get(f"/api/sessions/{uuid.uuid4()}?goal={GOAL}").status_code in (404, 405)
@@ -173,6 +202,7 @@ def test_no_customer_data_in_any_exported_attribute_event_or_name(
     assert cookies, "expected a session cookie to look for"
     for secret in (*SECRETS, *cookies):
         assert secret not in dumped, secret
+    assert "zebrafish" not in dumped.lower()  # the unique-name error quotes it in lower case
     paths = {(s.attributes or {}).get("url.path") for s in spans if s.kind.name == "SERVER"}
     assert "UNMATCHED" in paths
     assert "/api/sessions/{session_id}" in paths

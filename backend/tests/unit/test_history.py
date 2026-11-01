@@ -304,6 +304,21 @@ def test_ac10_3_totals_and_tag_breakdown() -> None:
     assert summary.sessions == sessions  # input order (newest first) is kept
 
 
+def test_ac7_8_breakdown_ties_follow_the_given_tag_order_with_custom_tags_last() -> None:
+    order = {"work": 0, "study": 1, "c-old": 6, "c-new": 7}
+    sessions = [
+        S(utc("2026-10-23T08:00:00"), 600, "c-new"),
+        S(utc("2026-10-23T09:00:00"), 600, "c-old"),
+        S(utc("2026-10-23T10:00:00"), 600, "study"),
+        S(utc("2026-10-23T11:00:00"), 600, "unknown-to-the-order"),
+        S(utc("2026-10-23T12:00:00"), 700, "c-new"),
+    ]
+    summary = summarize(
+        sessions, PARIS, View.DAY, DateRange(d("2026-10-23"), d("2026-10-23")), order
+    )
+    assert [t for t, _ in summary.tags] == ["c-new", "study", "c-old", "unknown-to-the-order"]
+
+
 @pytest.mark.parametrize(
     ("start", "end", "ok"),
     [

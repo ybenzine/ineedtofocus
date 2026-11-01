@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 from app.models.enums import GOAL_MAX_LENGTH, MODES, STATUSES, TAGS, in_list
+from app.models.tag_ref import effective_tag, set_tag
 
 
 class FocusSession(Base):
@@ -27,6 +28,14 @@ class FocusSession(Base):
         Index("ix_focus_sessions_user_started", "user_id", text("started_at DESC")),
         # History filtered by tag (AC10.2).
         Index("ix_focus_sessions_user_tag_started", "user_id", "tag", text("started_at DESC")),
+        # History filtered by a custom tag.
+        Index(
+            "ix_focus_sessions_user_custom_tag_started",
+            "user_id",
+            "custom_tag_id",
+            text("started_at DESC"),
+            postgresql_where=text("custom_tag_id IS NOT NULL"),
+        ),
         # Archive view (AC11.3); only archived rows are indexed.
         Index(
             "ix_focus_sessions_user_archived",
@@ -41,7 +50,13 @@ class FocusSession(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE")
     )
     mode: Mapped[str] = mapped_column(String(16))
+    # A built-in tag identifier. A session with a custom tag stores "work" here and the tag in
+    # `custom_tag_id`, so the release before (whose CHECK allows only the built-ins) still
+    # reads it, as Work. Use `effective_tag` to read, `set_tag` to write (AC7.4, #400).
     tag: Mapped[str] = mapped_column(String(16))
+    custom_tag_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("custom_tags.id"), nullable=True
+    )
     goal: Mapped[str | None] = mapped_column(String(GOAL_MAX_LENGTH), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -54,3 +69,12 @@ class FocusSession(Base):
     blocks_completed: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    @property
+    def effective_tag(self) -> str:
+        """The tag as the API shows it: a built-in identifier or a custom tag's id."""
+        return effective_tag(self.tag, self.custom_tag_id)
+
+    def set_tag(self, value: str) -> None:
+        """Store a built-in identifier or a custom tag's id (see `tag`)."""
+        self.tag, self.custom_tag_id = set_tag(value)

@@ -31,8 +31,16 @@ from app.deps import CurrentUser, DbSession
 from app.errors import ErrorDetail, ErrorInfo, ErrorResponse, error_field
 from app.faults import maybe_fail_save
 from app.metrics import SESSION_SAVE_DURATION, SESSION_SAVES, SYNC_BATCH_SIZE, observe
-from app.models import FocusSession, Mode, Status, Tag
-from app.models.enums import GOAL_MAX_LENGTH
+from app.models import FocusSession, Mode, Status
+from app.models.enums import GOAL_MAX_LENGTH, TAGS
+from app.models.tag_ref import is_stale, set_tag
+from app.tags_api import (
+    TagValue,
+    is_known,
+    owned_tag_ids,
+    unknown_tag_detail,
+    unknown_tag_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +133,7 @@ class SessionIn(BaseModel):
 
     id: uuid.UUID  # client-generated; the idempotency key (AC13.4)
     mode: Mode
-    tag: Tag
+    tag: TagValue
     goal: Goal = None
     started_at: AwareDatetime
     ended_at: AwareDatetime
@@ -193,7 +201,7 @@ class SessionEdit(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    tag: Tag | None = None
+    tag: TagValue | None = None
     goal: Goal = None
 
     @model_validator(mode="after")
@@ -208,7 +216,10 @@ class SessionEdit(BaseModel):
 class SessionOut(BaseModel):
     id: uuid.UUID
     mode: Mode
-    tag: Tag
+    tag: str = Field(
+        description="A built-in tag identifier or the id of a custom tag (AC7.4); the id of a "
+        "removed tag stays on its sessions (AC7.7)"
+    )
     goal: str | None
     started_at: datetime
     ended_at: datetime
@@ -250,7 +261,9 @@ class DeletedCount(BaseModel):
 
 
 def _out(row: FocusSession) -> SessionOut:
-    return SessionOut.model_validate(row, from_attributes=True)
+    out = SessionOut.model_validate(row, from_attributes=True)
+    out.tag = row.effective_tag  # a custom tag's id, or the built-in tag
+    return out
 
 
 _ERRORS: dict[int | str, dict[str, Any]] = {
@@ -277,7 +290,8 @@ async def _save(
             "id": i.id,
             "user_id": user_id,
             "mode": i.mode.value,
-            "tag": i.tag.value,
+            "tag": set_tag(i.tag)[0],
+            "custom_tag_id": set_tag(i.tag)[1],
             "goal": i.goal,
             "started_at": i.started_at,  # already UTC (SessionIn._to_utc)
             "ended_at": i.ended_at,
@@ -322,6 +336,8 @@ async def save_session(
     the stored session and changes nothing."""
     with observe(SESSION_SAVES, SESSION_SAVE_DURATION, {"kind": "single"}):
         _injected_fault(request)
+        if body.tag not in TAGS and body.tag not in await owned_tag_ids(db, user.id):
+            raise unknown_tag_error("body", "tag")
         created, rows = await _save(db, user.id, [body])
         if body.id not in rows:
             raise HTTPException(409, "A session id is already in use")
@@ -393,6 +409,20 @@ async def sync_sessions(
                 )
             else:
                 valid.append((index, item))
+        if any(item.tag not in TAGS for _, item in valid):
+            owned = await owned_tag_ids(db, user.id)
+            still_valid = []
+            for index, item in valid:
+                if is_known(item.tag, owned):
+                    still_valid.append((index, item))
+                else:  # unknown, or another account's: the same answer, so nothing leaks
+                    error = _item_error(
+                        "validation_error", "Session validation failed", [unknown_tag_detail()]
+                    )
+                    results[index] = SyncItemResult(
+                        index=index, id=item.id, status="rejected", error=error
+                    )
+            valid = still_valid
         created, rows = await _save(db, user.id, [item for _, item in valid])
         seen: set[uuid.UUID] = set()
         for index, item in valid:
@@ -458,6 +488,10 @@ async def _owned(db: DbSession, user_id: uuid.UUID, session_id: uuid.UUID) -> Fo
     )
     if row is None:
         raise HTTPException(404, "Session not found")
+    if is_stale(row.tag, row.custom_tag_id):
+        # The release before changed a custom tag to a built-in one during a rollback: that
+        # edit wins, and this write drops the leftover custom id (#400).
+        row.custom_tag_id = None
     return row
 
 
@@ -471,7 +505,9 @@ async def edit_session(
     if row.archived_at is not None:
         raise HTTPException(409, "Archived sessions can't be edited; restore it first")
     if body.tag is not None:
-        row.tag = body.tag.value
+        if body.tag not in TAGS and body.tag not in await owned_tag_ids(db, user.id):
+            raise unknown_tag_error("body", "tag")
+        row.set_tag(body.tag)
     if "goal" in body.model_fields_set:
         row.goal = body.goal
     await db.commit()
