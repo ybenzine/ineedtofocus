@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app import __version__
 from app.account import router as account_router
 from app.auth import router as auth_router
+from app.calendar_api import new_limiters
+from app.calendar_api import router as calendar_router
 from app.config import Settings, get_settings
 from app.db import ReadinessCheck, create_engine, database_check
 from app.errors import fix_openapi, register_error_handlers
@@ -74,6 +76,7 @@ def create_app(
         settings.signup_max_per_client,
         settings.signup_window_seconds,
     )
+    app.state.calendar_limiter, app.state.calendar_bad_limiter = new_limiters()
     register_error_handlers(app)
     fix_openapi(app)
     app.include_router(health_router)
@@ -83,6 +86,7 @@ def create_app(
     app.include_router(settings_router)
     app.include_router(history_router)
     app.include_router(tags_router)
+    app.include_router(calendar_router)
     mount_frontend(app, settings.frontend_dist)
     return app
 

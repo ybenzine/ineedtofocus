@@ -10,6 +10,8 @@ import time
 from collections import deque
 from collections.abc import Callable
 
+SWEEP_EVERY = 512  # calls to `try_acquire` between sweeps of stale clients
+
 
 def client_key(host: str | None) -> str:
     """The rate-limit key for a client address: IPv6 clients group by their /64 prefix, so
@@ -39,11 +41,19 @@ class FailureLimiter:
         self._window = window_seconds
         self._clock = clock
         self._failures: dict[str, deque[float]] = {}
+        self._calls = 0
 
     @staticmethod
     def _keys(client: str, email: str) -> tuple[str, str]:
         pair = hashlib.sha256(f"{client}\0{email}".encode()).hexdigest()
         return f"p:{pair}", f"c:{client}"
+
+    def _sweep(self) -> None:
+        """Forget clients that haven't been seen for a whole window, so a stream of one-off
+        addresses (an open endpoint such as the calendar feed, #381) can't grow the table."""
+        cutoff = self._clock() - self._window
+        for key in [k for k, q in self._failures.items() if not q or q[-1] <= cutoff]:
+            del self._failures[key]
 
     def _recent(self, key: str) -> deque[float]:
         q = self._failures.setdefault(key, deque())
@@ -60,6 +70,9 @@ class FailureLimiter:
         Returns None when the attempt may proceed (it is now counted), or the seconds to
         wait when over the limit (then nothing is counted). Call `succeeded` on success.
         """
+        self._calls += 1
+        if self._calls % SWEEP_EVERY == 0:
+            self._sweep()
         keys = self._keys(client, email)
         waits = []
         for key, limit in zip(keys, self._limits, strict=True):

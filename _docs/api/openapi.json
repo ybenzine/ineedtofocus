@@ -216,6 +216,67 @@
         "title": "ExportOut",
         "type": "object"
       },
+      "FeedCreated": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "path": {
+            "description": "`/api/calendar/<secret>.ics`, returned once; the app adds its own origin",
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "created_at"
+        ],
+        "title": "FeedCreated",
+        "type": "object"
+      },
+      "FeedStatus": {
+        "properties": {
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "enabled": {
+            "description": "Whether a link exists. The link itself is never returned",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "last_fetched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When a calendar app last fetched the feed (to the minute); null = not yet",
+            "title": "Last Fetched At"
+          }
+        },
+        "required": [
+          "enabled",
+          "created_at",
+          "last_fetched_at"
+        ],
+        "title": "FeedStatus",
+        "type": "object"
+      },
       "HistoryOut": {
         "properties": {
           "bucket": {
@@ -589,6 +650,43 @@
             "title": "Background Volume",
             "type": "integer"
           },
+          "calendar_excluded_tags": {
+            "description": "The tags left out of the subscription feed (AC12.8): built-in identifiers or custom tag ids, removed ones included; a tag created later is in",
+            "items": {
+              "type": "string"
+            },
+            "title": "Calendar Excluded Tags",
+            "type": "array"
+          },
+          "calendar_include_description": {
+            "title": "Calendar Include Description",
+            "type": "boolean"
+          },
+          "calendar_include_goal": {
+            "title": "Calendar Include Goal",
+            "type": "boolean"
+          },
+          "calendar_min_minutes": {
+            "description": "Sessions with less focus time are left out of the feed and the download",
+            "enum": [
+              0,
+              5,
+              10,
+              15
+            ],
+            "title": "Calendar Min Minutes",
+            "type": "integer"
+          },
+          "calendar_name": {
+            "description": "1-60 characters",
+            "title": "Calendar Name",
+            "type": "string"
+          },
+          "calendar_title_template": {
+            "description": "Event title template (AC14.3), at most 120 characters",
+            "title": "Calendar Title Template",
+            "type": "string"
+          },
           "countdown_recent_minutes": {
             "anyOf": [
               {
@@ -673,6 +771,12 @@
           "last_tag",
           "theme",
           "countdown_recent_minutes",
+          "calendar_title_template",
+          "calendar_include_goal",
+          "calendar_include_description",
+          "calendar_excluded_tags",
+          "calendar_min_minutes",
+          "calendar_name",
           "updated_at"
         ],
         "title": "SettingsOut",
@@ -693,6 +797,44 @@
             "minimum": 0.0,
             "title": "Background Volume",
             "type": "integer"
+          },
+          "calendar_excluded_tags": {
+            "items": {
+              "description": "A built-in tag identifier (work, study, nap, read, meditation, exercise) or the id of one of the user's own custom tags, removed ones included",
+              "type": "string"
+            },
+            "maxItems": 106,
+            "title": "Calendar Excluded Tags",
+            "type": "array"
+          },
+          "calendar_include_description": {
+            "title": "Calendar Include Description",
+            "type": "boolean"
+          },
+          "calendar_include_goal": {
+            "title": "Calendar Include Goal",
+            "type": "boolean"
+          },
+          "calendar_min_minutes": {
+            "enum": [
+              0,
+              5,
+              10,
+              15
+            ],
+            "title": "Calendar Min Minutes",
+            "type": "integer"
+          },
+          "calendar_name": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Calendar Name",
+            "type": "string"
+          },
+          "calendar_title_template": {
+            "maxLength": 120,
+            "title": "Calendar Title Template",
+            "type": "string"
           },
           "countdown_recent_minutes": {
             "anyOf": [
@@ -1632,6 +1774,310 @@
         "summary": "Sign Up",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/calendar/export.ics": {
+      "get": {
+        "description": "The sessions a History view counts (AC14.6), as an `.ics` file. Takes the parameters of\n`GET /api/history` and validates them the same way. Sessions under the minimum length are\nleft out; the calendar's tag setting doesn't apply (the History filter already chose).",
+        "operationId": "download_history_api_calendar_export_ics_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "view",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/View"
+            }
+          },
+          {
+            "description": "IANA time zone, e.g. Europe/Paris (AC10.5)",
+            "in": "query",
+            "name": "tz",
+            "required": true,
+            "schema": {
+              "description": "IANA time zone, e.g. Europe/Paris (AC10.5)",
+              "maxLength": 64,
+              "title": "Tz",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Any local date in the day, week or month to show",
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Any local date in the day, week or month to show",
+              "title": "Date"
+            }
+          },
+          {
+            "description": "Custom range start (inclusive)",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Custom range start (inclusive)",
+              "title": "Start"
+            }
+          },
+          {
+            "description": "Custom range end (inclusive)",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Custom range end (inclusive)",
+              "title": "End"
+            }
+          },
+          {
+            "description": "Repeat to filter by any of several tags, built-in or the user's own custom tags, removed ones included (AC10.2); none = all",
+            "in": "query",
+            "name": "tag",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "description": "A built-in tag identifier (work, study, nap, read, meditation, exercise) or the id of one of the user's own custom tags, removed ones included",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Repeat to filter by any of several tags, built-in or the user's own custom tags, removed ones included (AC10.2); none = all",
+              "title": "Tag"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/calendar": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "iCalendar"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Download History",
+        "tags": [
+          "calendar"
+        ]
+      }
+    },
+    "/api/calendar/feed": {
+      "delete": {
+        "description": "Turn the link off (AC14.4). Idempotent: 204 whether or not there was one.",
+        "operationId": "delete_feed_api_calendar_feed_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          }
+        },
+        "summary": "Delete Feed",
+        "tags": [
+          "calendar"
+        ]
+      },
+      "get": {
+        "description": "Whether the account has a subscription link, and when it was made and last fetched.\nNever the link itself: it is shown once, when made (AC14.4).",
+        "operationId": "feed_status_api_calendar_feed_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          }
+        },
+        "summary": "Feed Status",
+        "tags": [
+          "calendar"
+        ]
+      },
+      "post": {
+        "description": "Make the link (201), or replace it (200, Reset): the old secret stops working at once.\nThe path with the new secret is returned only here, once.",
+        "operationId": "create_feed_api_calendar_feed_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedCreated"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FeedCreated"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          }
+        },
+        "summary": "Create Feed",
+        "tags": [
+          "calendar"
+        ]
+      }
+    },
+    "/api/calendar/{secret}.ics": {
+      "get": {
+        "description": "The private subscription feed (AC14.4, AC14.5), read without signing in. Every\nnon-archived session of the account whose tag is in the calendar and whose focus time meets\nthe minimum length, newest first. An unknown, malformed, reset or turned-off secret is the\nsame plain 404. A weak `ETag` lets a refresh with `If-None-Match` get a 304.",
+        "operationId": "subscription_feed_api_calendar__secret__ics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "secret",
+            "required": true,
+            "schema": {
+              "title": "Secret",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/calendar": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "iCalendar"
+          },
+          "304": {
+            "description": "The feed has not changed since `If-None-Match`"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unknown, reset or turned-off link"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests; see Retry-After"
+          }
+        },
+        "summary": "Subscription Feed",
+        "tags": [
+          "calendar"
         ]
       }
     },

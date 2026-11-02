@@ -18,6 +18,7 @@ from opentelemetry.trace import NoOpTracerProvider, SpanKind, Status, StatusCode
 
 from app.config import Settings
 from app.main import app_factory, create_app
+from app.rate_limit import FailureLimiter
 from app.telemetry import (
     ALLOWED_EVENT_ATTRIBUTES,
     ALLOWED_SPAN_ATTRIBUTES,
@@ -212,6 +213,36 @@ def test_allowlist_runs_before_an_exporter_registered_first() -> None:
     assert dict(done.attributes or {}) == {"http.route": "/r"}
     assert done.status.status_code == StatusCode.ERROR
     assert done.status.description is None
+
+
+def test_calendar_feed_secret_never_reaches_a_span(tmp_path: Path) -> None:
+    """#381: the feed's secret is in the URL path, so the span carries the route template
+    `/api/calendar/{secret}.ics` instead (and `UNMATCHED` for a path no route matches)."""
+    app, exporter = _traced_app(tmp_path, scrub=True)
+    secret = "kR3tZ0-Ab_9xYw7QpLm2NvCdEfGhIjKl4MnOpQrStUv"
+    assert len(secret) == 43
+    # The limiter answers 429 before any database lookup, so no database is needed here.
+    app.state.calendar_limiter = FailureLimiter(1, 1, 60.0)
+    app.state.calendar_limiter.try_acquire("testclient", "")
+    with TestClient(app) as c:
+        assert c.get(f"/api/calendar/{secret}.ics?token={secret}").status_code == 429
+        assert c.get(f"/api/calendar/{secret}.ics/extra").status_code == 404
+    spans = exporter.get_finished_spans()
+    dumped = repr(
+        [
+            (s.name, dict(s.attributes or {}), [dict(e.attributes or {}) for e in s.events])
+            for s in spans
+        ]
+    )
+    assert secret not in dumped
+    assert "kR3tZ0" not in dumped
+    servers = [s for s in spans if s.kind == SpanKind.SERVER]
+    assert [(s.attributes or {}).get("url.path") for s in servers] == [
+        "/api/calendar/{secret}.ics",
+        "UNMATCHED",
+    ]
+    assert (servers[0].attributes or {})["http.route"] == "/api/calendar/{secret}.ics"
+    assert (servers[0].attributes or {})["url.query"] == "REDACTED"
 
 
 def test_instrument_engine_traces_the_engine_once(monkeypatch: pytest.MonkeyPatch) -> None:
