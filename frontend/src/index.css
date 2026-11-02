@@ -989,6 +989,17 @@ main.focus-screen {
   flex-basis: 100%;
 }
 
+/* The break cue (AC5) is always in the page so it is announced; empty, it takes no space and adds no
+   flex gap. With text it sits on its own line. */
+.timer-audio > [role='status'] {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.timer-audio > [role='status']:empty {
+  display: contents;
+}
+
 .timer-audio .youtube-controls .timer-volume {
   flex-basis: auto;
 }
