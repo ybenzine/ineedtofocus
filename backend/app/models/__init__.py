@@ -2,6 +2,7 @@
 
 from app.models.auth_session import AuthSession
 from app.models.base import Base
+from app.models.calendar_feed import CalendarFeed
 from app.models.custom_tag import CustomTag
 from app.models.enums import MODES, STATUSES, TAGS, Mode, Status, Tag
 from app.models.focus_session import FocusSession
@@ -14,6 +15,7 @@ __all__ = [
     "TAGS",
     "AuthSession",
     "Base",
+    "CalendarFeed",
     "CustomTag",
     "FocusSession",
     "Mode",

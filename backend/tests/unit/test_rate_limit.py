@@ -2,7 +2,7 @@
 
 import asyncio
 
-from app.rate_limit import FailureLimiter, client_key
+from app.rate_limit import SWEEP_EVERY, FailureLimiter, client_key
 from app.security import hash_password, token_hash, verify_password
 
 
@@ -77,3 +77,15 @@ def test_ipv6_clients_are_grouped_by_64_prefix() -> None:
     for i in range(5):  # rotating addresses in one /64 still hit the client limit
         assert lim.try_acquire(client_key(f"2001:db8::{i:x}"), f"u{i}@x.io") is None
     assert lim.try_acquire(client_key("2001:db8::ff"), "z@x.io") is not None
+
+
+def test_stale_clients_are_forgotten_so_one_off_addresses_cannot_grow_the_table() -> None:
+    clock = Clock()
+    lim = make(clock)
+    for i in range(SWEEP_EVERY - 1):
+        lim.try_acquire(f"client-{i}", "")
+    assert len(lim._failures) > SWEEP_EVERY
+    clock.now += 61  # a whole window later
+    lim.try_acquire("fresh", "")  # the SWEEP_EVERY-th call sweeps
+    assert {k for k in lim._failures if k.startswith("c:")} == {"c:fresh"}
+    assert len(lim._failures) == 2

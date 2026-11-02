@@ -6,7 +6,9 @@ in `app.history`. Privacy: goals are returned to their owner but never logged.
 
 import datetime as dt
 import uuid
+from dataclasses import dataclass
 from typing import Annotated, Any
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Query
 from fastapi.exceptions import RequestValidationError
@@ -17,6 +19,7 @@ from app.deps import CurrentUser, DbSession
 from app.errors import ErrorResponse
 from app.history import (
     BucketUnit,
+    DateRange,
     Totals,
     View,
     resolve_range,
@@ -119,27 +122,91 @@ def _tag_filter(tags: list[str], owned: set[str]) -> ColumnElement[bool]:
     return or_(*parts)
 
 
+TzParam = Annotated[
+    str, Query(max_length=64, description="IANA time zone, e.g. Europe/Paris (AC10.5)")
+]
+DateParam = Annotated[
+    dt.date | None,
+    Query(alias="date", description="Any local date in the day, week or month to show"),
+]
+StartParam = Annotated[dt.date | None, Query(description="Custom range start (inclusive)")]
+EndParam = Annotated[dt.date | None, Query(description="Custom range end (inclusive)")]
+TagParam = Annotated[
+    list[TagValue] | None,
+    Query(
+        description="Repeat to filter by any of several tags, built-in or the user's own "
+        "custom tags, removed ones included (AC10.2); none = all"
+    ),
+]
+
+
+@dataclass
+class ViewSelection:
+    """What the History query parameters pick (shared with the calendar download, #381)."""
+
+    zone: ZoneInfo
+    week_start_day: int
+    date_range: DateRange | None
+    custom_ids: list[str]
+    rows: list[FocusSession]
+
+
+async def select_view_sessions(
+    db: DbSession,
+    user: CurrentUser,
+    view: View,
+    tz: str,
+    anchor: dt.date | None,
+    start: dt.date | None,
+    end: dt.date | None,
+    tag: list[str] | None,
+) -> ViewSelection:
+    """Validate the History parameters and load the user's non-archived sessions in the view's
+    UTC window (with margin: callers apply the exact local-date check), newest first. Raises
+    the same 422s as `GET /api/history`."""
+    try:
+        zone = time_zone(tz)
+    except ValueError:
+        raise _invalid("tz", "Unknown time zone; use an IANA name such as Europe/Paris") from None
+    _check_params(view, anchor, start, end)
+    week_start_day = (
+        await db.scalar(select(UserSettings.week_start_day).where(UserSettings.user_id == user.id))
+        or 0
+    )
+    date_range = resolve_range(view, anchor, start, end, week_start_day)
+    # AC7.8's order of tags: the built-in ones, then custom tags oldest first.
+    custom_ids = [
+        str(i)
+        for i in await db.scalars(
+            select(CustomTag.id)
+            .where(CustomTag.user_id == user.id)
+            .order_by(CustomTag.created_at, CustomTag.id)
+        )
+    ]
+    query = select(FocusSession).where(
+        FocusSession.user_id == user.id, FocusSession.archived_at.is_(None)
+    )
+    if tag:
+        query = query.where(_tag_filter(tag, set(custom_ids)))
+    if date_range is not None:
+        lo, hi = utc_window(date_range)
+        query = query.where(FocusSession.started_at >= lo, FocusSession.started_at < hi)
+    rows = (
+        await db.scalars(query.order_by(FocusSession.started_at.desc(), FocusSession.id.desc()))
+    ).all()
+    return ViewSelection(zone, week_start_day, date_range, custom_ids, list(rows))
+
+
 @router.get("/history", responses=_ERRORS)
 async def get_history(
     user: CurrentUser,
     db: DbSession,
     view: View,
-    tz: Annotated[
-        str, Query(max_length=64, description="IANA time zone, e.g. Europe/Paris (AC10.5)")
-    ],
-    anchor: Annotated[
-        dt.date | None,
-        Query(alias="date", description="Any local date in the day, week or month to show"),
-    ] = None,
-    start: Annotated[dt.date | None, Query(description="Custom range start (inclusive)")] = None,
-    end: Annotated[dt.date | None, Query(description="Custom range end (inclusive)")] = None,
-    tag: Annotated[
-        list[TagValue] | None,
-        Query(
-            description="Repeat to filter by any of several tags, built-in or the user's own "
-            "custom tags, removed ones included (AC10.2); none = all"
-        ),
-    ] = None,
+    tz: TzParam,
+    anchor: DateParam = None,
+    start: StartParam = None,
+    end: EndParam = None,
+    tag: TagParam = None,
 ) -> HistoryOut:
     """One history view (AC10.1-AC10.7).
 
@@ -150,44 +217,11 @@ async def get_history(
     Archived sessions are excluded (AC10.7).
     """
     with observe(HISTORY_LOADS, HISTORY_LOAD_DURATION, client_outcome="invalid"):
-        try:
-            zone = time_zone(tz)
-        except ValueError:
-            raise _invalid(
-                "tz", "Unknown time zone; use an IANA name such as Europe/Paris"
-            ) from None
-        _check_params(view, anchor, start, end)
-        week_start_day = (
-            await db.scalar(
-                select(UserSettings.week_start_day).where(UserSettings.user_id == user.id)
-            )
-            or 0
-        )
-        date_range = resolve_range(view, anchor, start, end, week_start_day)
+        picked = await select_view_sessions(db, user, view, tz, anchor, start, end, tag)
+        week_start_day, date_range, rows = picked.week_start_day, picked.date_range, picked.rows
+        tag_order = {t: i for i, t in enumerate([*TAGS, *picked.custom_ids])}
 
-        # AC7.8's order of tags: the built-in ones, then custom tags oldest first.
-        custom_ids = [
-            str(i)
-            for i in await db.scalars(
-                select(CustomTag.id)
-                .where(CustomTag.user_id == user.id)
-                .order_by(CustomTag.created_at, CustomTag.id)
-            )
-        ]
-        tag_order = {t: i for i, t in enumerate([*TAGS, *custom_ids])}
-        query = select(FocusSession).where(
-            FocusSession.user_id == user.id, FocusSession.archived_at.is_(None)
-        )
-        if tag:
-            query = query.where(_tag_filter(tag, set(custom_ids)))
-        if date_range is not None:
-            lo, hi = utc_window(date_range)
-            query = query.where(FocusSession.started_at >= lo, FocusSession.started_at < hi)
-        rows = (
-            await db.scalars(query.order_by(FocusSession.started_at.desc(), FocusSession.id.desc()))
-        ).all()
-
-        summary = summarize([_out(r) for r in rows], zone, view, date_range, tag_order)
+        summary = summarize([_out(r) for r in rows], picked.zone, view, date_range, tag_order)
         covered = summary.date_range
         HISTORY_LOADS.add(1, {"outcome": "ok"})
         return HistoryOut(

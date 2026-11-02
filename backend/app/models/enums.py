@@ -50,6 +50,16 @@ GOAL_MAX_LENGTH = 120
 REMINDER_MINUTES: tuple[int, ...] = (15, 30, 45, 60, 90, 120)
 
 
+# Calendar export settings (AC12.8, F14).
+CALENDAR_TITLE_MAX_LENGTH = 120
+CALENDAR_TITLE_DEFAULT = "{tag}: {goal}"
+CALENDAR_NAME_MAX_LENGTH = 60
+CALENDAR_NAME_DEFAULT = "I Need To Focus"
+CALENDAR_MIN_MINUTES: tuple[int, ...] = (0, 5, 10, 15)
+# Built-in tags plus the 100 custom tags an account can ever have (removed ones included).
+CALENDAR_EXCLUDED_TAGS_MAX = 106
+
+
 def in_list(column: str, values: tuple[str, ...] | tuple[int, ...]) -> str:
     """SQL `column IN (...)` text for a CHECK constraint (values are our own constants)."""
     return f"{column} IN ({', '.join(repr(v) for v in values)})"

@@ -5,6 +5,7 @@ or used as metric labels, and validation errors never echo them (see errors.py).
 """
 
 import re
+import unicodedata
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
@@ -15,6 +16,7 @@ from fastapi import APIRouter
 from pydantic import (
     AfterValidator,
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     StrictBool,
@@ -26,7 +28,15 @@ from sqlalchemy.dialects.postgresql import insert
 from app.deps import CurrentUser, DbSession
 from app.errors import ErrorResponse
 from app.models import UserSettings, YoutubeRecentLink
-from app.models.enums import TAGS, Theme
+from app.models.enums import (
+    CALENDAR_EXCLUDED_TAGS_MAX,
+    CALENDAR_NAME_DEFAULT,
+    CALENDAR_NAME_MAX_LENGTH,
+    CALENDAR_TITLE_DEFAULT,
+    CALENDAR_TITLE_MAX_LENGTH,
+    TAGS,
+    Theme,
+)
 from app.models.tag_ref import is_stale
 from app.tags_api import TagValue, owned_tag_ids, unknown_tag_error
 
@@ -37,6 +47,39 @@ ReminderMinutes = Literal[15, 30, 45, 60, 90, 120]  # AC4.2; null = Off (AC12.4)
 _ERRORS: dict[int | str, dict[str, Any]] = {
     401: {"model": ErrorResponse, "description": "Not signed in"}
 }
+
+
+def _plain_text(value: str) -> str:
+    """No NUL, control characters or lone surrogates (they would break the .ics file or can't
+    be stored). The message never repeats the value."""
+    if any(unicodedata.category(c) in ("Cc", "Cs") for c in value):
+        raise ValueError("Contains invalid characters")
+    return value
+
+
+def _trim(value: object) -> object:
+    return value.strip() if isinstance(value, str) else value
+
+
+def _no_duplicates(values: list[str]) -> list[str]:
+    if len(set(values)) != len(values):
+        raise ValueError("Each tag can be listed once")
+    return values
+
+
+CalendarTitleTemplate = Annotated[
+    str, Field(max_length=CALENDAR_TITLE_MAX_LENGTH), AfterValidator(_plain_text)
+]
+CalendarName = Annotated[
+    str,
+    BeforeValidator(_trim),
+    Field(min_length=1, max_length=CALENDAR_NAME_MAX_LENGTH),
+    AfterValidator(_plain_text),
+]
+CalendarMinMinutes = Literal[0, 5, 10, 15]
+CalendarExcludedTags = Annotated[
+    list[TagValue], Field(max_length=CALENDAR_EXCLUDED_TAGS_MAX), AfterValidator(_no_duplicates)
+]
 
 
 class PomodoroConfig(BaseModel):
@@ -72,6 +115,19 @@ class SettingsOut(BaseModel):
     countdown_recent_minutes: int | None = Field(
         description="Last custom Countdown length in minutes (#405); null = none"
     )
+    calendar_title_template: str = Field(
+        description="Event title template (AC14.3), at most 120 characters"
+    )
+    calendar_include_goal: bool
+    calendar_include_description: bool
+    calendar_excluded_tags: list[str] = Field(
+        description="The tags left out of the subscription feed (AC12.8): built-in identifiers "
+        "or custom tag ids, removed ones included; a tag created later is in"
+    )
+    calendar_min_minutes: CalendarMinMinutes = Field(
+        description="Sessions with less focus time are left out of the feed and the download"
+    )
+    calendar_name: str = Field(description="1-60 characters")
     updated_at: datetime
 
 
@@ -97,6 +153,12 @@ class SettingsPatch(BaseModel):
     last_tag: TagValue | None = None
     theme: Theme = Theme.SYSTEM
     countdown_recent_minutes: Annotated[StrictInt, Field(ge=1, le=240)] | None = None
+    calendar_title_template: CalendarTitleTemplate = CALENDAR_TITLE_DEFAULT
+    calendar_include_goal: StrictBool = True
+    calendar_include_description: StrictBool = True
+    calendar_excluded_tags: CalendarExcludedTags = []
+    calendar_min_minutes: CalendarMinMinutes = 0
+    calendar_name: CalendarName = CALENDAR_NAME_DEFAULT
 
 
 def _to_out(row: UserSettings) -> SettingsOut:
@@ -112,6 +174,12 @@ def _to_out(row: UserSettings) -> SettingsOut:
         last_tag=row.effective_last_tag,
         theme=Theme(row.theme),
         countdown_recent_minutes=row.countdown_recent_minutes,
+        calendar_title_template=row.calendar_title_template,
+        calendar_include_goal=row.calendar_include_goal,
+        calendar_include_description=row.calendar_include_description,
+        calendar_excluded_tags=list(row.calendar_excluded_tags),
+        calendar_min_minutes=row.calendar_min_minutes,  # type: ignore[arg-type]
+        calendar_name=row.calendar_name,
         updated_at=row.updated_at,
     )
 
@@ -152,6 +220,11 @@ async def update_settings(body: SettingsPatch, user: CurrentUser, db: DbSession)
         and body.last_tag not in await owned_tag_ids(db, user.id)
     ):
         raise unknown_tag_error("body", "last_tag")
+    if "calendar_excluded_tags" in body.model_fields_set:
+        owned = await owned_tag_ids(db, user.id)
+        for index, excluded in enumerate(body.calendar_excluded_tags):
+            if excluded not in TAGS and excluded not in owned:
+                raise unknown_tag_error("body", "calendar_excluded_tags", index)
     if is_stale(row.last_tag, row.custom_tag_id):
         row.custom_tag_id = None  # edited to a built-in tag by the release before (#400)
     for name in body.model_fields_set:

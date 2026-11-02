@@ -30,6 +30,7 @@ TABLES = {
     "youtube_recent_links",
     "auth_sessions",
     "custom_tags",
+    "calendar_feeds",
 }
 
 
@@ -411,6 +412,79 @@ def test_settings_defaults_and_ranges(db: str) -> None:
     ):
         with pytest.raises((IntegrityError, DBAPIError)):
             run(_exec(db, f"UPDATE user_settings SET {bad}"))
+
+
+def test_calendar_export_migration_0007_adds_defaults_and_rolls_back(
+    alembic_config: Config, test_db_url: str
+) -> None:
+    """0007 (#381) is expand-only: existing settings rows get the defaults, the checks hold,
+    `calendar_feeds` cascades with the user, and it rolls back."""
+    command.upgrade(alembic_config, "0006")
+    run(
+        _exec(
+            test_db_url,
+            "INSERT INTO users (id, email, password_hash) VALUES (:u, 'a@b.c', 'x')",
+            u=USER,
+        )
+    )
+    run(_exec(test_db_url, "INSERT INTO user_settings (user_id) VALUES (:u)", u=USER))
+    command.upgrade(alembic_config, "head")
+
+    def read(conn: Connection) -> Any:
+        return tuple(
+            conn.execute(
+                text(
+                    "SELECT calendar_title_template, calendar_include_goal, "
+                    "calendar_include_description, calendar_excluded_tags::text, "
+                    "calendar_min_minutes, calendar_name FROM user_settings"
+                )
+            ).one()
+        )
+
+    assert run(_with_conn(test_db_url, read)) == (
+        "{tag}: {goal}",
+        True,
+        True,
+        "[]",
+        0,
+        "I Need To Focus",
+    )
+    for bad in (
+        "calendar_title_template = repeat('x', 121)",
+        "calendar_name = ''",
+        "calendar_name = repeat('x', 61)",
+        "calendar_min_minutes = 7",
+        "calendar_excluded_tags = '{}'::jsonb",
+        "calendar_title_template = NULL",
+    ):
+        with pytest.raises((IntegrityError, DBAPIError)):
+            run(_exec(test_db_url, f"UPDATE user_settings SET {bad}"))
+    run(_exec(test_db_url, "UPDATE user_settings SET calendar_min_minutes = 15"))
+
+    insert = "INSERT INTO calendar_feeds (user_id, token_hash) VALUES (:u, :h)"
+    run(_exec(test_db_url, insert, u=USER, h="a" * 64))
+    with pytest.raises((IntegrityError, DBAPIError)):  # one feed per user
+        run(_exec(test_db_url, insert, u=USER, h="b" * 64))
+    run(_exec(test_db_url, f"DELETE FROM users WHERE id = '{USER}'"))
+
+    def feeds(conn: Connection) -> Any:
+        return conn.execute(text("SELECT count(*) FROM calendar_feeds")).scalar_one()
+
+    assert run(_with_conn(test_db_url, feeds)) == 0  # ON DELETE CASCADE
+
+    command.downgrade(alembic_config, "0006")
+
+    def shape(conn: Connection) -> Any:
+        inspector = inspect(conn)
+        return (
+            "calendar_feeds" in inspector.get_table_names(),
+            {c["name"] for c in inspector.get_columns("user_settings")},
+        )
+
+    has_table, columns = run(_with_conn(test_db_url, shape))
+    assert not has_table
+    assert not {c for c in columns if c.startswith("calendar_")}
+    command.upgrade(alembic_config, "head")
 
 
 def test_youtube_links_unique_per_user(db: str) -> None:

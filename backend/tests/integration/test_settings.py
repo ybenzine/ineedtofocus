@@ -30,6 +30,12 @@ DEFAULTS = {
     "last_tag": None,
     "theme": "system",
     "countdown_recent_minutes": None,
+    "calendar_title_template": "{tag}: {goal}",
+    "calendar_include_goal": True,
+    "calendar_include_description": True,
+    "calendar_excluded_tags": [],
+    "calendar_min_minutes": 0,
+    "calendar_name": "I Need To Focus",
 }
 POMODORO = {
     "focus_minutes": 50,

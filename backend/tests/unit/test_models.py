@@ -50,6 +50,7 @@ def test_all_tables_registered() -> None:
         "youtube_recent_links",
         "auth_sessions",
         "custom_tags",
+        "calendar_feeds",
     }
 
 
