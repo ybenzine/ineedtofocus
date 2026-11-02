@@ -21,10 +21,8 @@ type Which = keyof SoundLevels
 const KEYS: Record<Which, string> = { alert: ALERT_VOLUME_KEY, background: BACKGROUND_VOLUME_KEY }
 const DEFAULTS: SoundLevels = { alert: DEFAULT_ALERT_LEVEL, background: DEFAULT_BACKGROUND_LEVEL }
 /** The deprecated server settings a device is seeded from. */
-const SETTINGS_FIELDS: Record<Which, string> = {
-  alert: 'alert_volume',
-  ['background']: 'background_volume',
-}
+const settingsField = (which: Which): string =>
+  which === 'alert' ? 'alert_volume' : 'background_volume'
 
 function level(value: unknown): number | null {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 100
@@ -121,7 +119,7 @@ export class SoundLevelsStore {
     const server = (fallback ?? {}) as Record<string, unknown>
     for (const which of ['alert', 'background'] as const) {
       if (this.#stored(which) !== null) continue
-      const field = SETTINGS_FIELDS[which]
+      const field = settingsField(which)
       const value = level(guest[field]) ?? level(server[field])
       if (value === null) continue
       try {

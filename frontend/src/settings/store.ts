@@ -43,6 +43,12 @@ export interface SettingsState {
   pending: SettingsPatch
   /** True after a send failed (offline, server trouble, signed out) until one succeeds. */
   stalled: boolean
+  /**
+   * True once the copy holds a server answer (GET or PATCH). Before that the values are the
+   * defaults plus local edits, so the sound levels must not seed from them (#336). A cache from
+   * a client before #336 has no flag and counts as loaded.
+   */
+  loaded: boolean
 }
 
 export interface SettingsStoreOptions {
@@ -123,8 +129,14 @@ export class SettingsStore {
     this.#lock = options.lock ?? SETTINGS_LOCK
     this.#onLoaded = options.onLoaded
     const stored = this.#readStored()
-    this.#state = stored ?? { values: DEFAULT_SETTINGS, pending: {}, stalled: false }
-    if (stored) this.#onLoaded?.(stored.values)
+    this.#state = stored ?? {
+      values: DEFAULT_SETTINGS,
+      pending: {},
+      stalled: false,
+      loaded: false,
+    }
+    // Deferred: the app builds the store while rendering, and seeding updates other components.
+    if (stored?.loaded) queueMicrotask(() => this.#onLoaded?.(stored.values))
   }
 
   /** False once disposed or once a different user is signed in. */
@@ -142,13 +154,19 @@ export class SettingsStore {
     try {
       const raw = this.#storage?.getItem(this.#key)
       if (raw) {
-        const stored = JSON.parse(raw) as { owner?: unknown; values?: unknown; pending?: unknown }
+        const stored = JSON.parse(raw) as {
+          owner?: unknown
+          values?: unknown
+          pending?: unknown
+          loaded?: unknown
+        }
         // Someone else's cache is never shown to or sent for this user.
         if ((stored.owner ?? null) === this.#owner) {
           return {
             values: parseSettings(stored.values),
             pending: pickKnown(stored.pending),
             stalled: false,
+            loaded: stored.loaded === undefined || stored.loaded === true,
           }
         }
       }
@@ -174,6 +192,7 @@ export class SettingsStore {
           owner: this.#owner,
           values: without(state.values),
           pending: without(state.pending),
+          loaded: state.loaded,
         }),
       )
     } catch {
@@ -372,6 +391,7 @@ export class SettingsStore {
           values: { ...base.values, ...lost },
           pending: { ...base.pending, ...lost },
           stalled: this.#state.stalled,
+          loaded: base.loaded,
         }
         this.#write(merged)
         if (this.#writing === 1) this.#adopt(merged)
@@ -438,6 +458,7 @@ export class SettingsStore {
       if (server) {
         this.#revision++
         this.#attempt = 0
+        this.#onLoaded?.(server)
       }
       // A field another tab (or the user) changed meanwhile stays pending: only what was sent goes.
       this.#commit((state) => {
@@ -451,6 +472,7 @@ export class SettingsStore {
           values: server ? { ...server, ...pending } : state.values,
           pending,
           stalled: false,
+          loaded: state.loaded || server !== null,
         }
       })
     }
@@ -484,8 +506,11 @@ export class SettingsStore {
       const server = await api.get(this.#abort.signal)
       if (this.#live()) this.#onLoaded?.(server)
       // An edit or an accepted send happened meanwhile: this answer is older than the device.
-      if (revision !== this.#revision) return
-      this.#commit((state) => ({ values: { ...server, ...state.pending } }))
+      if (revision !== this.#revision) {
+        this.#commit(() => ({ loaded: true }))
+        return
+      }
+      this.#commit((state) => ({ values: { ...server, ...state.pending }, loaded: true }))
     } catch (error) {
       if (error instanceof SettingsError && error.kind === 'unauthorized' && this.#live()) {
         this.#onUnauthorized?.()

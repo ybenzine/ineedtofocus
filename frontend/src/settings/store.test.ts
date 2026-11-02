@@ -255,14 +255,52 @@ describe('the sound levels are not synced (AC12.2, #336)', () => {
     expect(onLoaded.mock.calls[0]?.[0]).toMatchObject({ alert_volume: 30, background_volume: 70 })
   })
 
-  it('tells onLoaded about the cached copy at once', () => {
+  it('tells onLoaded about a cached copy that holds a server answer, after construction', async () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ owner: null, values: { alert_volume: 25 }, pending: {}, loaded: true }),
+    )
+    const onLoaded = vi.fn()
+    new SettingsStore({ storage: localStorage, onLoaded })
+    expect(onLoaded).not.toHaveBeenCalled() // never during render
+    await Promise.resolve()
+    expect(onLoaded.mock.calls[0]?.[0]).toMatchObject({ alert_volume: 25 })
+  })
+
+  it('treats a cache from before #336 (no flag) as a real copy', async () => {
     localStorage.setItem(
       SETTINGS_KEY,
       JSON.stringify({ owner: null, values: { alert_volume: 25 }, pending: {} }),
     )
     const onLoaded = vi.fn()
     new SettingsStore({ storage: localStorage, onLoaded })
-    expect(onLoaded.mock.calls[0]?.[0]).toMatchObject({ alert_volume: 25 })
+    await Promise.resolve()
+    expect(onLoaded).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not treat the defaults plus an edit made before any load as a real copy', async () => {
+    const offline = {
+      get: () => Promise.reject(new Error('offline')),
+      patch: () => Promise.reject(new Error('offline')),
+    }
+    const first = new SettingsStore({ api: offline, storage: localStorage, onLoaded: vi.fn() })
+    first.update({ theme: 'light' })
+    await first.flush()
+    expect(JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}').loaded).toBe(false)
+    const onLoaded = vi.fn()
+    new SettingsStore({ storage: localStorage, onLoaded })
+    await Promise.resolve()
+    expect(onLoaded).not.toHaveBeenCalled()
+  })
+
+  it('marks the cache loaded, and seeds, from a PATCH answer', async () => {
+    const onLoaded = vi.fn()
+    const { api } = fakeServer({ alert_volume: 30, background_volume: 70 })
+    const store = new SettingsStore({ api, storage: localStorage, onLoaded })
+    store.update({ theme: 'light' })
+    await store.flush()
+    expect(onLoaded.mock.calls[0]?.[0]).toMatchObject({ alert_volume: 30, background_volume: 70 })
+    expect(JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}').loaded).toBe(true)
   })
 })
 

@@ -166,7 +166,7 @@ describe('the levels and the settings store', () => {
     expect(storage.getItem(ALERT_VOLUME_KEY)).toBe('30')
   })
 
-  it('seeds from the cached settings at start-up, offline', () => {
+  it('seeds from the cached settings at start-up, offline', async () => {
     const storage = memoryStorage()
     storage.setItem(
       'ineedtofocus.settings',
@@ -176,7 +176,24 @@ describe('the levels and the settings store', () => {
       get: () => Promise.reject(new Error('offline')),
       patch: () => Promise.reject(new Error('offline')),
     }
-    expect(device(api, storage).levels.getState()).toEqual({ alert: 25, background: 65 })
+    const { levels } = device(api, storage)
+    await Promise.resolve()
+    expect(levels.getState()).toEqual({ alert: 25, background: 65 })
+  })
+
+  it('does not store 80/50 when an edit was cached before the first load, then reloaded', async () => {
+    const storage = memoryStorage()
+    const down: SettingsApi = {
+      get: () => Promise.reject(new Error('offline')),
+      patch: () => Promise.reject(new Error('offline')),
+    }
+    device(down, storage).settings.update({ theme: 'light' }) // cache = defaults + the edit
+    const server = serverApi({ ...DEFAULT_SETTINGS, alert_volume: 30, background_volume: 70 })
+    const reloaded = device(server, storage)
+    await Promise.resolve()
+    expect(storage.getItem(ALERT_VOLUME_KEY)).toBeNull()
+    await reloaded.settings.refresh()
+    expect(reloaded.levels.getState()).toEqual({ alert: 30, background: 70 })
   })
 
   it('does not seed from a cache that is not this user’s', () => {
