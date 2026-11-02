@@ -749,7 +749,7 @@ Deleted:
   user_settings: 3
 ```
 
-The accounts go in one transaction as `DELETE FROM users`; `ON DELETE CASCADE` removes the rest, the same as account deletion (AC1.7). A second run straight away prints `No matching test accounts.` Exit code 0 means success; nonzero means a declined prompt (3) or an error (1, printing only the error's type).
+The accounts go in one transaction as `DELETE FROM users`; `ON DELETE CASCADE` removes the rest, the same as account deletion (AC1.7). A second run straight away prints `No matching test accounts.` Exit codes: 0 success; 1 error (printing only the error's type); 2 bad arguments (an empty `--match`, a bad `--older-than`; argparse prints the usage); 3 declined prompt or Ctrl-C (nothing deleted; one Ctrl-C at the prompt is enough).
 
 Privacy: emails go to your terminal only. The command starts no logging, OpenTelemetry or metrics, and goals and links are counted, never printed.
 
