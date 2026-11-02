@@ -352,3 +352,43 @@ def test_deleted_report_order_matches_the_docs(populated: str) -> None:
     docs = (BACKEND.parent / "_docs" / "deployment.md").read_text()
     block = docs.split("Deleted:\n", 1)[1].split("```", 1)[0]
     assert [ln.split(":")[0].strip() for ln in block.splitlines() if ln] == tables
+
+
+def test_ac3_backslash_is_escaped_unlike_a_real_escape_character() -> None:
+    assert cta.printable("a\\x1b@example.com") == "a\\\\x1b@example.com"
+    assert cta.printable("a\x1b@example.com") == "a\\x1b@example.com"
+    assert cta.printable("plain@example.com") == "plain@example.com"
+
+
+def test_ac2_one_real_sigint_at_the_prompt_exits_3_and_deletes_nothing(populated: str) -> None:
+    import os
+    import signal
+
+    env = {**os.environ, "DATABASE_URL": populated, "PYTHONUNBUFFERED": "1"}
+    p = subprocess.Popen(
+        [sys.executable, "-u", "-m", "app.cleanup_test_accounts", "--delete"],
+        cwd=BACKEND,
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert p.stdout is not None
+        seen = ""
+        while "Type " not in seen:  # input() writes its prompt to stdout when not a tty
+            ch = p.stdout.read(1)
+            if not ch:
+                break
+            seen += ch
+        assert "Total:" in seen
+        p.send_signal(signal.SIGINT)
+        stdout_rest, stderr = p.communicate(timeout=20)
+    finally:
+        if p.poll() is None:
+            p.kill()
+    assert p.returncode == 3, stderr
+    assert "Traceback" not in stderr and "Traceback" not in stdout_rest
+    assert "Not confirmed: nothing deleted." in stdout_rest
+    assert len(emails(populated)) == 3 + len(REAL)

@@ -41,6 +41,7 @@ _DURATION = re.compile(r"(\d+)([smhdw])")
 
 EXIT_OK = 0
 EXIT_ERROR = 1
+# 2 is argparse's own code for bad arguments
 EXIT_DECLINED = 3
 
 
@@ -64,8 +65,10 @@ def parse_glob(value: str) -> str:
 
 
 def printable(text: str) -> str:
-    """Escape control characters so an email can't garble or drive the operator's terminal."""
-    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in text)
+    """Escape control characters and backslashes, so an email can't fake an escape code."""
+    return "".join(
+        c if c.isprintable() and c != "\\" else c.encode("unicode_escape").decode() for c in text
+    )
 
 
 @dataclass(frozen=True)
@@ -213,31 +216,28 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-async def run(
-    args: argparse.Namespace,
-    engine: AsyncEngine,
-    *,
-    ask: Callable[[str], str],
-    out: TextIO,
-) -> int:
-    async with engine.connect() as conn:
-        accounts = await find_accounts(conn, match=args.match, older_than=args.older_than)
+async def list_phase(args: argparse.Namespace, database_url: str, out: TextIO) -> list[Account]:
+    """Phase 1: find and print the matching accounts, then close the engine."""
+    engine = create_engine(database_url)
+    try:
+        async with engine.connect() as conn:
+            accounts = await find_accounts(conn, match=args.match, older_than=args.older_than)
+    finally:
+        await engine.dispose()
     if not accounts:
         print("No matching test accounts.", file=out)
-        return EXIT_OK
+        return []
     print(render_table(accounts), file=out)
-    if not args.delete:
-        print("Dry run: nothing changed. Add --delete to remove them.", file=out)
-        return EXIT_OK
-    if not args.yes:
-        try:
-            answer = ask(f"Type {len(accounts)} to delete these accounts and all their data: ")
-        except (EOFError, KeyboardInterrupt):
-            answer = ""
-        if answer.strip() != str(len(accounts)):
-            print("Not confirmed: nothing deleted.", file=out)
-            return EXIT_DECLINED
-    removed = await delete_accounts(engine, [a.id for a in accounts])
+    return accounts
+
+
+async def delete_phase(accounts: list[Account], database_url: str, out: TextIO) -> None:
+    """Phase 3: delete in one transaction and print what went."""
+    engine = create_engine(database_url)
+    try:
+        removed = await delete_accounts(engine, [a.id for a in accounts])
+    finally:
+        await engine.dispose()
     if removed["users"] != len(accounts):
         print(
             f"Warning: you confirmed {len(accounts)} account(s) but {removed['users']} "
@@ -247,7 +247,6 @@ async def run(
     print("Deleted:", file=out)
     for table, n in removed.items():
         print(f"  {table}: {n}", file=out)
-    return EXIT_OK
 
 
 def main(
@@ -259,16 +258,26 @@ def main(
 ) -> int:
     args = build_parser().parse_args(argv)
     out = out or sys.stdout
-
-    async def go() -> int:
-        engine = create_engine(database_url or Settings().database_url)
-        try:
-            return await run(args, engine, ask=ask, out=out)
-        finally:
-            await engine.dispose()
-
+    url = database_url or Settings().database_url
     try:
-        return asyncio.run(go())
+        # The prompt runs between two asyncio.run calls, with no event loop: asyncio.run
+        # installs its own SIGINT handler, which would swallow the first Ctrl-C at the prompt.
+        accounts = asyncio.run(list_phase(args, url, out))
+        if not accounts:
+            return EXIT_OK
+        if not args.delete:
+            print("Dry run: nothing changed. Add --delete to remove them.", file=out)
+            return EXIT_OK
+        if not args.yes:
+            try:
+                answer = ask(f"Type {len(accounts)} to delete these accounts and all their data: ")
+            except (EOFError, KeyboardInterrupt):
+                answer = ""
+            if answer.strip() != str(len(accounts)):
+                print("Not confirmed: nothing deleted.", file=out)
+                return EXIT_DECLINED
+        asyncio.run(delete_phase(accounts, url, out))
+        return EXIT_OK
     except KeyboardInterrupt:
         print("Interrupted: nothing more was changed.", file=sys.stderr)
         return EXIT_DECLINED
