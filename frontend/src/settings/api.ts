@@ -47,6 +47,19 @@ export interface Settings {
   calendar_name: string
 }
 
+/** The calendar settings: for signed-in users only, never kept in a guest's copy. */
+export const CALENDAR_KEYS = [
+  'calendar_title_template',
+  'calendar_include_goal',
+  'calendar_include_description',
+  'calendar_excluded_tags',
+  'calendar_min_minutes',
+  'calendar_name',
+] as const satisfies readonly (keyof Settings)[]
+
+/** Length in code points, as the server counts. */
+const chars = (value: string): number => Array.from(value).length
+
 export type CalendarMinMinutes = 0 | 5 | 10 | 15
 export const CALENDAR_MIN_MINUTES: readonly CalendarMinMinutes[] = [0, 5, 10, 15]
 export const DEFAULT_CALENDAR_TITLE = '{tag}: {goal}'
@@ -156,7 +169,7 @@ export function parseSettings(value: unknown): Settings {
     countdown_recent_minutes: recentCustomMinutes(value.countdown_recent_minutes),
     calendar_title_template:
       typeof value.calendar_title_template === 'string' &&
-      value.calendar_title_template.length <= 120
+      chars(value.calendar_title_template) <= 120
         ? value.calendar_title_template
         : d.calendar_title_template,
     calendar_include_goal:
@@ -179,8 +192,8 @@ export function parseSettings(value: unknown): Settings {
       : d.calendar_min_minutes,
     calendar_name:
       typeof value.calendar_name === 'string' &&
-      value.calendar_name.length >= 1 &&
-      value.calendar_name.length <= 60
+      chars(value.calendar_name) >= 1 &&
+      chars(value.calendar_name) <= 60
         ? value.calendar_name
         : d.calendar_name,
   }

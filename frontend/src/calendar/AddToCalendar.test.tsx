@@ -60,7 +60,9 @@ afterEach(() => vi.restoreAllMocks())
 describe('the control', () => {
   it('is a button named by the session, which opens two choices', () => {
     render(withProviders(<AddToCalendar session={session} timeZone="UTC" />))
-    const button = screen.getByRole('button', { name: 'Add to calendar: Work, 25 min on Oct 30' })
+    const button = screen.getByRole('button', {
+      name: /^Add to calendar: Work, 25 min on Oct 30 at 9:00\s?AM$/,
+    })
     expect(button).toHaveAttribute('aria-expanded', 'false')
     expect(screen.queryByRole('link', { name: 'Google Calendar' })).not.toBeInTheDocument()
     fireEvent.click(button)

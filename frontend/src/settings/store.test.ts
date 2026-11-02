@@ -290,6 +290,26 @@ describe('countdown_recent_minutes (#409)', () => {
     expect(prefs.load().countdownRecent).toBeNull()
   })
 
+  it('keeps no calendar settings on a guest device, values or pending (AC12.8)', () => {
+    const store = new SettingsStore({ storage: localStorage, key: ANON_SETTINGS_KEY })
+    store.update({
+      theme: 'light',
+      calendar_title_template: 'Secret',
+      calendar_include_goal: false,
+    })
+    const raw = localStorage.getItem(ANON_SETTINGS_KEY) ?? ''
+    expect(raw).toContain('"theme":"light"')
+    expect(raw).not.toContain('calendar')
+    expect(raw).not.toContain('Secret')
+    for (let i = 0; i < localStorage.length; i++) {
+      expect(localStorage.getItem(localStorage.key(i) ?? '')).not.toContain('calendar_')
+    }
+    // An account's copy does keep them.
+    const account = new SettingsStore({ storage: localStorage, owner: 'u1' })
+    account.update({ calendar_title_template: 'Mine' })
+    expect(localStorage.getItem(SETTINGS_KEY)).toContain('"calendar_title_template":"Mine"')
+  })
+
   it('as a guest, lives under the anonymous key and sign-in clears it', () => {
     const store = new SettingsStore({ storage: localStorage, key: ANON_SETTINGS_KEY })
     new SettingsPreferencesStore(store).save({ ...DEFAULT_PREFERENCES, countdownRecent: 50 })

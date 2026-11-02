@@ -19,7 +19,9 @@
 // for reload safety only: tabs run in parallel, so another tab's locked merge can overwrite it.
 // For cross-tab safety a repair queued on the lock puts the edit back if it was overwritten.
 
+import { ANON_SETTINGS_KEY } from '../anonymous/keys.ts'
 import {
+  CALENDAR_KEYS,
   DEFAULT_SETTINGS,
   SETTINGS_KEYS,
   SettingsError,
@@ -152,9 +154,21 @@ export class SettingsStore {
 
   #write(state: SettingsState): void {
     try {
+      // Calendar export is for signed-in users only (AC12.8): a guest's copy keeps none of it.
+      const guest = this.#key === ANON_SETTINGS_KEY
+      const without = <T extends object>(o: T): T =>
+        guest
+          ? (Object.fromEntries(
+              Object.entries(o).filter(([k]) => !(CALENDAR_KEYS as readonly string[]).includes(k)),
+            ) as T)
+          : o
       this.#storage?.setItem(
         this.#key,
-        JSON.stringify({ owner: this.#owner, values: state.values, pending: state.pending }),
+        JSON.stringify({
+          owner: this.#owner,
+          values: without(state.values),
+          pending: without(state.pending),
+        }),
       )
     } catch {
       // A full or blocked storage must not stop the app; the edit still reaches the server.

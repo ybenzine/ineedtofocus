@@ -92,7 +92,12 @@ export default function AddToCalendar({
   const date = new Intl.DateTimeFormat(undefined, { ...SHORT_DATE, timeZone }).format(
     new Date(session.startedAt),
   )
-  const label = `Add to calendar: ${tagName}, ${formatDuration(session.focusSeconds)} on ${date}`
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone,
+  }).format(new Date(session.startedAt))
+  const label = `Add to calendar: ${tagName}, ${formatDuration(session.focusSeconds)} on ${date} at ${time}`
 
   function close(returnFocus: boolean) {
     setOpen(false)

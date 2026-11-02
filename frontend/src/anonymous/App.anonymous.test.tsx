@@ -872,7 +872,13 @@ describe('a stale anonymous tab whose follow does not adopt a user (#396)', () =
     const stored = JSON.parse(localStorage.getItem(ANON_SETTINGS_KEY) ?? '{}') as {
       values: Record<string, unknown>
     }
-    expect(stored.values).toEqual({ ...DEFAULT_SETTINGS, theme: 'light' })
+    // A guest's copy keeps no calendar settings (AC12.8).
+    expect(stored.values).toEqual({
+      ...Object.fromEntries(
+        Object.entries(DEFAULT_SETTINGS).filter(([k]) => !k.startsWith('calendar_')),
+      ),
+      theme: 'light',
+    })
   })
 
   it('remounts from the sign-in event alone, with no settings removal event', async () => {

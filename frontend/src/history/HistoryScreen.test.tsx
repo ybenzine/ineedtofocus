@@ -107,10 +107,14 @@ describe('HistoryScreen', () => {
     ]
     renderScreen(api)
     expect(
-      await screen.findByRole('button', { name: 'Add to calendar: Work, 25 min on Oct 21' }),
+      await screen.findByRole('button', {
+        name: /^Add to calendar: Work, 25 min on Oct 21 at 10:00\s?AM$/,
+      }),
     ).toBeInTheDocument()
     expect(
-      screen.getByRole('button', { name: 'Add to calendar: Study, 10 min on Oct 21' }),
+      screen.getByRole('button', {
+        name: /^Add to calendar: Study, 10 min on Oct 21 at 8:00\s?AM$/,
+      }),
     ).toBeInTheDocument()
   })
 
