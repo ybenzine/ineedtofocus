@@ -94,6 +94,48 @@ test('AC1.4: the same user on two devices sees the same History and settings', a
   }
 })
 
+test('AC12.2: sound levels are per device; the same account keeps a different level on each', async ({
+  browser,
+}) => {
+  const email = newEmail()
+  const contextA = await browser.newContext()
+  const contextB = await browser.newContext()
+  try {
+    const a = await newPage(contextA)
+    await signUp(a, email)
+    await openScreen(a, 'Settings')
+    await expect(a.getByText('Sound levels are saved on this device only.')).toBeVisible()
+    await a.getByLabel('Alert volume').fill('20')
+    await a.getByLabel('Background audio volume').fill('65')
+
+    const b = await newPage(contextB)
+    await signIn(b, email)
+    await openScreen(b, 'Settings')
+    await expect(b.getByLabel('Alert volume')).toHaveValue('80')
+    await expect(b.getByLabel('Background audio volume')).toHaveValue('50')
+    await b.getByLabel('Alert volume').fill('90')
+
+    // The server never saw a level change: its copy is still the default.
+    const settings = (await (await a.request.get('/api/settings')).json()) as {
+      alert_volume: number
+      background_volume: number
+    }
+    expect(settings).toMatchObject({ alert_volume: 80, background_volume: 50 })
+
+    // After a reload (and a settings load) each device keeps its own.
+    await a.reload()
+    await openScreen(a, 'Settings')
+    await expect(a.getByLabel('Alert volume')).toHaveValue('20')
+    await expect(a.getByLabel('Background audio volume')).toHaveValue('65')
+    await b.reload()
+    await openScreen(b, 'Settings')
+    await expect(b.getByLabel('Alert volume')).toHaveValue('90')
+  } finally {
+    await contextA.close()
+    await contextB.close()
+  }
+})
+
 test('History tag filter and the week-start setting', async ({ page }) => {
   await installClockAndSignUp(page)
   await finishCountdown(page, { minutes: 1, tag: 'work' })

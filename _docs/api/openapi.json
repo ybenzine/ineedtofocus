@@ -641,12 +641,14 @@
       "SettingsOut": {
         "properties": {
           "alert_volume": {
-            "description": "0-100",
+            "deprecated": true,
+            "description": "Deprecated (#336): the sound levels are device settings now and the frontend no longer sends or reads them, except to seed a device once. 0-100.",
             "title": "Alert Volume",
             "type": "integer"
           },
           "background_volume": {
-            "description": "0-100",
+            "deprecated": true,
+            "description": "Deprecated (#336), like `alert_volume`. 0-100.",
             "title": "Background Volume",
             "type": "integer"
           },
@@ -793,12 +795,16 @@
         "description": "Partial update: send only the fields to change. An omitted field means unchanged; no\nfield has a default. `null` is a value for `default_reminder_minutes` (Off),\n`pomodoro_config`, `last_tag` and `countdown_recent_minutes` (back to none).",
         "properties": {
           "alert_volume": {
+            "deprecated": true,
+            "description": "Deprecated (#336): still accepted so an older client works.",
             "maximum": 100.0,
             "minimum": 0.0,
             "title": "Alert Volume",
             "type": "integer"
           },
           "background_volume": {
+            "deprecated": true,
+            "description": "Deprecated (#336), like `alert_volume`.",
             "maximum": 100.0,
             "minimum": 0.0,
             "title": "Background Volume",

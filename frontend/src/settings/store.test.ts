@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { SettingsPreferencesStore, SettingsAlertVolumeStore } from './adapters.ts'
+import { SettingsPreferencesStore } from './adapters.ts'
 import {
   DEFAULT_SETTINGS,
   SettingsError,
@@ -54,17 +54,19 @@ describe('SettingsStore', () => {
   it('sends only the changed fields and clears them once accepted', async () => {
     const { api, patches } = fakeServer()
     const store = new SettingsStore({ api, storage: localStorage })
-    store.update({ alert_volume: 30 })
+    store.update({ countdown_recent_minutes: 130 })
     await store.flush()
-    expect(patches).toEqual([{ alert_volume: 30 }])
+    expect(patches).toEqual([{ countdown_recent_minutes: 130 }])
     expect(store.hasPending()).toBe(false)
-    expect(JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}').values.alert_volume).toBe(30)
+    expect(
+      JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}').values.countdown_recent_minutes,
+    ).toBe(130)
   })
 
   it('does not send a value that did not change', async () => {
     const { api, patches } = fakeServer()
     const store = new SettingsStore({ api })
-    store.update({ alert_volume: 80 })
+    store.update({ week_start_day: 0 })
     await store.flush()
     expect(patches).toEqual([])
   })
@@ -94,44 +96,44 @@ describe('SettingsStore', () => {
     server.online = false
     const store = new SettingsStore({ api })
     const stop = store.start()
-    store.update({ alert_volume: 10 })
+    store.update({ countdown_recent_minutes: 110 })
     await store.flush()
     expect(patches).toEqual([])
     server.online = true
     window.dispatchEvent(new Event('online'))
-    await vi.waitFor(() => expect(patches).toEqual([{ alert_volume: 10 }]))
+    await vi.waitFor(() => expect(patches).toEqual([{ countdown_recent_minutes: 110 }]))
     stop()
     window.dispatchEvent(new Event('online'))
   })
 
   it("takes the server's copy for fields with nothing pending (another device's change)", async () => {
-    const { api, server } = fakeServer({ alert_volume: 30, last_tag: 'study' })
+    const { api, server } = fakeServer({ countdown_recent_minutes: 130, last_tag: 'study' })
     const store = new SettingsStore({ api, storage: localStorage })
     await store.refresh()
-    expect(store.values.alert_volume).toBe(30)
+    expect(store.values.countdown_recent_minutes).toBe(130)
     expect(store.values.last_tag).toBe('study')
-    server.value = { ...server.value, alert_volume: 55 }
+    server.value = { ...server.value, countdown_recent_minutes: 155 }
     await store.refresh()
-    expect(store.values.alert_volume).toBe(55)
+    expect(store.values.countdown_recent_minutes).toBe(155)
   })
 
   it('keeps a pending local edit over the server copy while offline (last write wins)', async () => {
-    const { api, server } = fakeServer({ alert_volume: 30 })
+    const { api, server } = fakeServer({ countdown_recent_minutes: 130 })
     const store = new SettingsStore({ api })
     server.online = false
-    store.update({ alert_volume: 90 })
+    store.update({ countdown_recent_minutes: 190 })
     server.online = true
     await store.refresh()
-    expect(server.value.alert_volume).toBe(90)
-    expect(store.values.alert_volume).toBe(90)
+    expect(server.value.countdown_recent_minutes).toBe(190)
+    expect(store.values.countdown_recent_minutes).toBe(190)
   })
 
   it('coalesces rapid edits (a slider drag) into the latest value', async () => {
     const { api, patches } = fakeServer()
     const store = new SettingsStore({ api })
-    for (const v of [10, 20, 30, 40]) store.update({ alert_volume: v })
+    for (const v of [110, 120, 130, 140]) store.update({ countdown_recent_minutes: v })
     await store.flush()
-    expect(patches.at(-1)).toEqual({ alert_volume: 40 })
+    expect(patches.at(-1)).toEqual({ countdown_recent_minutes: 140 })
     expect(patches.length).toBeLessThanOrEqual(2)
     expect(store.hasPending()).toBe(false)
   })
@@ -140,13 +142,13 @@ describe('SettingsStore', () => {
     const { api, server, patches } = fakeServer()
     server.reject = true
     const store = new SettingsStore({ api })
-    store.update({ alert_volume: 20 })
+    store.update({ countdown_recent_minutes: 120 })
     await store.flush()
     expect(store.hasPending()).toBe(false)
     server.reject = false
-    store.update({ background_volume: 10 })
+    store.update({ calendar_min_minutes: 10 })
     await store.flush()
-    expect(patches).toEqual([{ background_volume: 10 }])
+    expect(patches).toEqual([{ calendar_min_minutes: 10 }])
   })
 
   it('ignores a corrupt device cache', () => {
@@ -154,7 +156,10 @@ describe('SettingsStore', () => {
     expect(new SettingsStore({ storage: localStorage }).values).toEqual(DEFAULT_SETTINGS)
     localStorage.setItem(
       SETTINGS_KEY,
-      JSON.stringify({ values: { alert_volume: 900, week_start_day: 3 }, pending: {} }),
+      JSON.stringify({
+        values: { alert_volume: 900, countdown_recent_minutes: 900, week_start_day: 3 },
+        pending: {},
+      }),
     )
     const store = new SettingsStore({ storage: localStorage })
     expect(store.values.alert_volume).toBe(80)
@@ -219,19 +224,83 @@ describe('SettingsPreferencesStore (AC12.5)', () => {
   })
 })
 
-describe('SettingsAlertVolumeStore (AC5.2, AC12.2)', () => {
-  it('reads and writes alert_volume, not the old local key', async () => {
-    localStorage.setItem('ineedtofocus.alertVolume', '5')
-    const { api, patches } = fakeServer({ alert_volume: 30 })
+describe('the sound levels are not synced (AC12.2, #336)', () => {
+  it('never sends a volume, even when one is passed in or left pending in an old cache', async () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        owner: null,
+        values: {},
+        pending: { alert_volume: 5, background_volume: 6, week_start_day: 2 },
+      }),
+    )
+    const { api, patches } = fakeServer()
     const store = new SettingsStore({ api, storage: localStorage })
-    const volume = new SettingsAlertVolumeStore(store)
-    expect(volume.load()).toBe(80) // the old key is not migrated
-    await store.refresh()
-    expect(volume.load()).toBe(30)
-    volume.save(150)
+    store.update({ alert_volume: 10, week_start_day: 3 } as never)
     await store.flush()
-    expect(patches).toEqual([{ alert_volume: 100 }])
-    expect(localStorage.getItem('ineedtofocus.alertVolume')).toBe('5') // untouched
+    for (const patch of patches) {
+      expect(patch).not.toHaveProperty('alert_volume')
+      expect(patch).not.toHaveProperty('background_volume')
+    }
+    expect(patches.at(-1)).toEqual({ week_start_day: 3 })
+  })
+
+  it('tells onLoaded about a real copy only: not the defaults shown before it', async () => {
+    const onLoaded = vi.fn()
+    const { api } = fakeServer({ alert_volume: 30, background_volume: 70 })
+    const store = new SettingsStore({ api, storage: localStorage, onLoaded })
+    expect(onLoaded).not.toHaveBeenCalled()
+    await store.refresh()
+    expect(onLoaded).toHaveBeenCalledTimes(1)
+    expect(onLoaded.mock.calls[0]?.[0]).toMatchObject({ alert_volume: 30, background_volume: 70 })
+  })
+
+  it('tells onLoaded about a cached copy that holds a server answer, after construction', async () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ owner: null, values: { alert_volume: 25 }, pending: {}, loaded: true }),
+    )
+    const onLoaded = vi.fn()
+    new SettingsStore({ storage: localStorage, onLoaded })
+    expect(onLoaded).not.toHaveBeenCalled() // never during render
+    await Promise.resolve()
+    expect(onLoaded.mock.calls[0]?.[0]).toMatchObject({ alert_volume: 25 })
+  })
+
+  it('treats a cache from before #336 (no flag) as a real copy', async () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({ owner: null, values: { alert_volume: 25 }, pending: {} }),
+    )
+    const onLoaded = vi.fn()
+    new SettingsStore({ storage: localStorage, onLoaded })
+    await Promise.resolve()
+    expect(onLoaded).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not treat the defaults plus an edit made before any load as a real copy', async () => {
+    const offline = {
+      get: () => Promise.reject(new Error('offline')),
+      patch: () => Promise.reject(new Error('offline')),
+    }
+    const first = new SettingsStore({ api: offline, storage: localStorage, onLoaded: vi.fn() })
+    first.update({ theme: 'light' })
+    await first.flush()
+    expect(JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}').loaded).toBe(false)
+    const onLoaded = vi.fn()
+    new SettingsStore({ storage: localStorage, onLoaded })
+    await Promise.resolve()
+    expect(onLoaded).not.toHaveBeenCalled()
+  })
+
+  it('marks the cache loaded, and seeds, from a PATCH answer', async () => {
+    const onLoaded = vi.fn()
+    const { api } = fakeServer({ alert_volume: 30, background_volume: 70 })
+    const store = new SettingsStore({ api, storage: localStorage, onLoaded })
+    store.update({ theme: 'light' })
+    await store.flush()
+    expect(onLoaded.mock.calls[0]?.[0]).toMatchObject({ alert_volume: 30, background_volume: 70 })
+    expect(JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}').loaded).toBe(true)
   })
 })
 
