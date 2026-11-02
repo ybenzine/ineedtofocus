@@ -2,9 +2,10 @@
  "about": [
   "Expected calendar events for F14 (AC14.2, AC12.8). Backend (#381) and frontend (#383) tests both read this file.",
   "'origin' is the app origin the History link uses; 'tags' are the account's custom tags (id, current name, removed or not). Built-in tags use their display names (Work, Study, Nap, Read, Meditation, Exercise). A tag the device doesn't know yet reads 'Tag' (AC7.8); the server always knows its own.",
+  "Placeholders ({tag}, {goal}, {mode}, {focus_time}) are replaced in one pass over the template: text a value brings in is never rescanned. Paused shows only when paused_seconds > 0, in History's format (40 s, 5 min, 1 h 05 min).",
   "Each case gives a session as the API returns it (tag = built-in identifier or custom tag id), the calendar settings, and the expected event.",
   "expected.summary / description / categories are the raw text values, before escaping, with lines of the description joined by a single LF. description is null when the description setting is off: the event then has no DESCRIPTION property.",
-  "expected.ics gives each property's exact serialized content line as it appears in the .ics file: TEXT escaped (backslash, semicolon, comma, newline as \\n) and folded. A fold is CRLF followed by one space; the first physical line holds at most 75 octets, each continuation at most 74 after its leading space, filled greedily and never split inside a UTF-8 character. Lines in the file end with CRLF (not included here).",
+  "expected.ics gives each property's exact serialized content line as it appears in the .ics file: TEXT escaped (backslash, semicolon, comma, newline as \\n) and folded. A fold is CRLF followed by one space; the first physical line holds at most 75 octets, each continuation at most 74 after its leading space, filled greedily and never split inside a UTF-8 character. Folding acts on the escaped line, so a fold may fall between a backslash and the character it escapes (unfolding comes first when reading). Generators fold lines themselves: a library serializer may fold differently (icalendar folds its first line at 74 octets), so libraries are for parsing in tests only. Lines in the file end with CRLF (not included here).",
   "DTSTAMP is not in this file: it is the time the file is generated, in UTC, whole seconds."
  ],
  "origin": "https://ineedtofoc.us",
@@ -78,7 +79,7 @@
      "mode": "pomodoro",
      "focus_minutes": 25,
      "break_minutes": 5,
-     "blocks": 4,
+     "blocks": 2,
      "long_break_enabled": false,
      "long_break_minutes": 15
     }
@@ -93,14 +94,14 @@
     "dtstart": "20261030T130000Z",
     "dtend": "20261030T140000Z",
     "summary": "Study: Draft, review; ship \\ notes then rest",
-    "description": "Goal: Draft, review; ship \\ notes then rest\nTag: Study\nMode: Pomodoro\nFocus time: 50 min\nPaused: 5 min\nBlocks completed: 2 of 4\nHistory: https://ineedtofoc.us/history",
+    "description": "Goal: Draft, review; ship \\ notes then rest\nTag: Study\nMode: Pomodoro\nFocus time: 50 min\nPaused: 5 min\nBlocks completed: 2 of 2\nHistory: https://ineedtofoc.us/history",
     "categories": "Study",
     "ics": {
      "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000002@ineedtofoc.us",
      "DTSTART": "DTSTART:20261030T130000Z",
      "DTEND": "DTEND:20261030T140000Z",
      "SUMMARY": "SUMMARY:Study: Draft\\, review\\; ship \\\\ notes then rest",
-     "DESCRIPTION": "DESCRIPTION:Goal: Draft\\, review\\; ship \\\\ notes then rest\\nTag: Study\\nMod\r\n e: Pomodoro\\nFocus time: 50 min\\nPaused: 5 min\\nBlocks completed: 2 of 4\\n\r\n History: https://ineedtofoc.us/history",
+     "DESCRIPTION": "DESCRIPTION:Goal: Draft\\, review\\; ship \\\\ notes then rest\\nTag: Study\\nMod\r\n e: Pomodoro\\nFocus time: 50 min\\nPaused: 5 min\\nBlocks completed: 2 of 2\\n\r\n History: https://ineedtofoc.us/history",
      "CATEGORIES": "CATEGORIES:Study"
     }
    }
@@ -113,7 +114,7 @@
     "tag": "read",
     "goal": "Dune",
     "started_at": "2026-10-29T20:00:00Z",
-    "ended_at": "2026-10-29T20:41:30Z",
+    "ended_at": "2026-10-29T20:40:00Z",
     "focus_seconds": 2100,
     "paused_seconds": 0,
     "status": "ended_early",
@@ -135,14 +136,14 @@
    "expected": {
     "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000003@ineedtofoc.us",
     "dtstart": "20261029T200000Z",
-    "dtend": "20261029T204130Z",
+    "dtend": "20261029T204000Z",
     "summary": "Pomodoro · Read – Dune (35 min)",
     "description": "Goal: Dune\nTag: Read\nMode: Pomodoro\nFocus time: 35 min\nBlocks completed: 1 of 4\nEnded early\nHistory: https://ineedtofoc.us/history",
     "categories": "Read",
     "ics": {
      "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000003@ineedtofoc.us",
      "DTSTART": "DTSTART:20261029T200000Z",
-     "DTEND": "DTEND:20261029T204130Z",
+     "DTEND": "DTEND:20261029T204000Z",
      "SUMMARY": "SUMMARY:Pomodoro · Read – Dune (35 min)",
      "DESCRIPTION": "DESCRIPTION:Goal: Dune\\nTag: Read\\nMode: Pomodoro\\nFocus time: 35 min\\nBloc\r\n ks completed: 1 of 4\\nEnded early\\nHistory: https://ineedtofoc.us/history",
      "CATEGORIES": "CATEGORIES:Read"
@@ -506,6 +507,126 @@
      "SUMMARY": "SUMMARY:Side\\, project: Landing page",
      "DESCRIPTION": "DESCRIPTION:Goal: Landing page\\nTag: Side\\, project\\nMode: Countdown\\nFocus\r\n  time: 30 min\\nHistory: https://ineedtofoc.us/history",
      "CATEGORIES": "CATEGORIES:Side\\, project"
+    }
+   }
+  },
+  {
+   "reason": "placeholder text inside a goal is not replaced: values are inserted in one pass and never rescanned",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000014",
+    "mode": "countdown",
+    "tag": "work",
+    "goal": "Plan the {mode} talk",
+    "started_at": "2026-10-23T09:00:00Z",
+    "ended_at": "2026-10-23T09:25:00Z",
+    "focus_seconds": 1500,
+    "paused_seconds": 0,
+    "status": "completed",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "countdown",
+     "minutes": 25
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{goal} ({tag})",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000014@ineedtofoc.us",
+    "dtstart": "20261023T090000Z",
+    "dtend": "20261023T092500Z",
+    "summary": "Plan the {mode} talk (Work)",
+    "description": "Goal: Plan the {mode} talk\nTag: Work\nMode: Countdown\nFocus time: 25 min\nHistory: https://ineedtofoc.us/history",
+    "categories": "Work",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000014@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261023T090000Z",
+     "DTEND": "DTEND:20261023T092500Z",
+     "SUMMARY": "SUMMARY:Plan the {mode} talk (Work)",
+     "DESCRIPTION": "DESCRIPTION:Goal: Plan the {mode} talk\\nTag: Work\\nMode: Countdown\\nFocus t\r\n ime: 25 min\\nHistory: https://ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Work"
+    }
+   }
+  },
+  {
+   "reason": "a pause under a minute reads in seconds, as History does",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000015",
+    "mode": "countdown",
+    "tag": "read",
+    "goal": null,
+    "started_at": "2026-10-23T12:00:00Z",
+    "ended_at": "2026-10-23T12:25:40Z",
+    "focus_seconds": 1500,
+    "paused_seconds": 40,
+    "status": "completed",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "countdown",
+     "minutes": 25
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{tag}: {goal}",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000015@ineedtofoc.us",
+    "dtstart": "20261023T120000Z",
+    "dtend": "20261023T122540Z",
+    "summary": "Read",
+    "description": "Tag: Read\nMode: Countdown\nFocus time: 25 min\nPaused: 40 s\nHistory: https://ineedtofoc.us/history",
+    "categories": "Read",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000015@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261023T120000Z",
+     "DTEND": "DTEND:20261023T122540Z",
+     "SUMMARY": "SUMMARY:Read",
+     "DESCRIPTION": "DESCRIPTION:Tag: Read\\nMode: Countdown\\nFocus time: 25 min\\nPaused: 40 s\\nH\r\n istory: https://ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Read"
+    }
+   }
+  },
+  {
+   "reason": "a fold lands between a backslash and the comma it escapes: folding acts on the escaped line's octets",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000016",
+    "mode": "countdown",
+    "tag": "work",
+    "goal": "Write the quarterly planning memo for the data platform team, then send it",
+    "started_at": "2026-10-22T09:00:00Z",
+    "ended_at": "2026-10-22T09:25:00Z",
+    "focus_seconds": 1500,
+    "paused_seconds": 0,
+    "status": "completed",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "countdown",
+     "minutes": 25
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{tag}: {goal}",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000016@ineedtofoc.us",
+    "dtstart": "20261022T090000Z",
+    "dtend": "20261022T092500Z",
+    "summary": "Work: Write the quarterly planning memo for the data platform team, then send it",
+    "description": "Goal: Write the quarterly planning memo for the data platform team, then send it\nTag: Work\nMode: Countdown\nFocus time: 25 min\nHistory: https://ineedtofoc.us/history",
+    "categories": "Work",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000016@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261022T090000Z",
+     "DTEND": "DTEND:20261022T092500Z",
+     "SUMMARY": "SUMMARY:Work: Write the quarterly planning memo for the data platform team\\\r\n , then send it",
+     "DESCRIPTION": "DESCRIPTION:Goal: Write the quarterly planning memo for the data platform t\r\n eam\\, then send it\\nTag: Work\\nMode: Countdown\\nFocus time: 25 min\\nHistor\r\n y: https://ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Work"
     }
    }
   },
