@@ -1,0 +1,553 @@
+{
+ "about": [
+  "Expected calendar events for F14 (AC14.2, AC12.8). Backend (#381) and frontend (#383) tests both read this file.",
+  "'origin' is the app origin the History link uses; 'tags' are the account's custom tags (id, current name, removed or not). Built-in tags use their display names (Work, Study, Nap, Read, Meditation, Exercise). A tag the device doesn't know yet reads 'Tag' (AC7.8); the server always knows its own.",
+  "Each case gives a session as the API returns it (tag = built-in identifier or custom tag id), the calendar settings, and the expected event.",
+  "expected.summary / description / categories are the raw text values, before escaping, with lines of the description joined by a single LF. description is null when the description setting is off: the event then has no DESCRIPTION property.",
+  "expected.ics gives each property's exact serialized content line as it appears in the .ics file: TEXT escaped (backslash, semicolon, comma, newline as \\n) and folded. A fold is CRLF followed by one space; the first physical line holds at most 75 octets, each continuation at most 74 after its leading space, filled greedily and never split inside a UTF-8 character. Lines in the file end with CRLF (not included here).",
+  "DTSTAMP is not in this file: it is the time the file is generated, in UTC, whole seconds."
+ ],
+ "origin": "https://ineedtofoc.us",
+ "tags": [
+  {
+   "id": "5b0c3f1e-2a6d-4c8e-9f10-1a2b3c4d5e6f",
+   "name": "Side, project",
+   "removed": false
+  },
+  {
+   "id": "9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b4",
+   "name": "Piano",
+   "removed": true
+  }
+ ],
+ "cases": [
+  {
+   "reason": "no goal; Countdown, Completed; default settings; fractional seconds are dropped",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000001",
+    "mode": "countdown",
+    "tag": "work",
+    "goal": null,
+    "started_at": "2026-10-30T09:00:00.640Z",
+    "ended_at": "2026-10-30T09:25:00.812Z",
+    "focus_seconds": 1500,
+    "paused_seconds": 0,
+    "status": "completed",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "countdown",
+     "minutes": 25
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{tag}: {goal}",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000001@ineedtofoc.us",
+    "dtstart": "20261030T090000Z",
+    "dtend": "20261030T092500Z",
+    "summary": "Work",
+    "description": "Tag: Work\nMode: Countdown\nFocus time: 25 min\nHistory: https://ineedtofoc.us/history",
+    "categories": "Work",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000001@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261030T090000Z",
+     "DTEND": "DTEND:20261030T092500Z",
+     "SUMMARY": "SUMMARY:Work",
+     "DESCRIPTION": "DESCRIPTION:Tag: Work\\nMode: Countdown\\nFocus time: 25 min\\nHistory: https:\r\n //ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Work"
+    }
+   }
+  },
+  {
+   "reason": "a goal with , ; \\ and a stored line break (shown as one space); Pomodoro with a pause",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000002",
+    "mode": "pomodoro",
+    "tag": "study",
+    "goal": "Draft, review; ship \\ notes\nthen rest",
+    "started_at": "2026-10-30T13:00:00Z",
+    "ended_at": "2026-10-30T14:00:00Z",
+    "focus_seconds": 3000,
+    "paused_seconds": 300,
+    "status": "completed",
+    "blocks_completed": 2,
+    "mode_config": {
+     "mode": "pomodoro",
+     "focus_minutes": 25,
+     "break_minutes": 5,
+     "blocks": 4,
+     "long_break_enabled": false,
+     "long_break_minutes": 15
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{tag}: {goal}",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000002@ineedtofoc.us",
+    "dtstart": "20261030T130000Z",
+    "dtend": "20261030T140000Z",
+    "summary": "Study: Draft, review; ship \\ notes then rest",
+    "description": "Goal: Draft, review; ship \\ notes then rest\nTag: Study\nMode: Pomodoro\nFocus time: 50 min\nPaused: 5 min\nBlocks completed: 2 of 4\nHistory: https://ineedtofoc.us/history",
+    "categories": "Study",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000002@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261030T130000Z",
+     "DTEND": "DTEND:20261030T140000Z",
+     "SUMMARY": "SUMMARY:Study: Draft\\, review\\; ship \\\\ notes then rest",
+     "DESCRIPTION": "DESCRIPTION:Goal: Draft\\, review\\; ship \\\\ notes then rest\\nTag: Study\\nMod\r\n e: Pomodoro\\nFocus time: 50 min\\nPaused: 5 min\\nBlocks completed: 2 of 4\\n\r\n History: https://ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Study"
+    }
+   }
+  },
+  {
+   "reason": "Pomodoro that ended early, with {mode} and {focus_time} in the template",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000003",
+    "mode": "pomodoro",
+    "tag": "read",
+    "goal": "Dune",
+    "started_at": "2026-10-29T20:00:00Z",
+    "ended_at": "2026-10-29T20:41:30Z",
+    "focus_seconds": 2100,
+    "paused_seconds": 0,
+    "status": "ended_early",
+    "blocks_completed": 1,
+    "mode_config": {
+     "mode": "pomodoro",
+     "focus_minutes": 25,
+     "break_minutes": 5,
+     "blocks": 4,
+     "long_break_enabled": false,
+     "long_break_minutes": 15
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{mode} · {tag} – {goal} ({focus_time})",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000003@ineedtofoc.us",
+    "dtstart": "20261029T200000Z",
+    "dtend": "20261029T204130Z",
+    "summary": "Pomodoro · Read – Dune (35 min)",
+    "description": "Goal: Dune\nTag: Read\nMode: Pomodoro\nFocus time: 35 min\nBlocks completed: 1 of 4\nEnded early\nHistory: https://ineedtofoc.us/history",
+    "categories": "Read",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000003@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261029T200000Z",
+     "DTEND": "DTEND:20261029T204130Z",
+     "SUMMARY": "SUMMARY:Pomodoro · Read – Dune (35 min)",
+     "DESCRIPTION": "DESCRIPTION:Goal: Dune\\nTag: Read\\nMode: Pomodoro\\nFocus time: 35 min\\nBloc\r\n ks completed: 1 of 4\\nEnded early\\nHistory: https://ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Read"
+    }
+   }
+  },
+  {
+   "reason": "Unlimited over an hour; the session crosses midnight UTC",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000004",
+    "mode": "unlimited",
+    "tag": "meditation",
+    "goal": "Breathe",
+    "started_at": "2026-10-30T23:30:00Z",
+    "ended_at": "2026-10-31T00:35:00Z",
+    "focus_seconds": 3900,
+    "paused_seconds": 0,
+    "status": "completed",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "unlimited",
+     "reminder_minutes": null
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{tag}: {goal}",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000004@ineedtofoc.us",
+    "dtstart": "20261030T233000Z",
+    "dtend": "20261031T003500Z",
+    "summary": "Meditation: Breathe",
+    "description": "Goal: Breathe\nTag: Meditation\nMode: Unlimited\nFocus time: 1 h 05 min\nHistory: https://ineedtofoc.us/history",
+    "categories": "Meditation",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000004@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261030T233000Z",
+     "DTEND": "DTEND:20261031T003500Z",
+     "SUMMARY": "SUMMARY:Meditation: Breathe",
+     "DESCRIPTION": "DESCRIPTION:Goal: Breathe\\nTag: Meditation\\nMode: Unlimited\\nFocus time: 1 \r\n h 05 min\\nHistory: https://ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Meditation"
+    }
+   }
+  },
+  {
+   "reason": "Countdown ended early",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000005",
+    "mode": "countdown",
+    "tag": "exercise",
+    "goal": "Stretching",
+    "started_at": "2026-10-31T07:00:00Z",
+    "ended_at": "2026-10-31T07:12:00Z",
+    "focus_seconds": 720,
+    "paused_seconds": 0,
+    "status": "ended_early",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "countdown",
+     "minutes": 25
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{tag}: {goal}",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000005@ineedtofoc.us",
+    "dtstart": "20261031T070000Z",
+    "dtend": "20261031T071200Z",
+    "summary": "Exercise: Stretching",
+    "description": "Goal: Stretching\nTag: Exercise\nMode: Countdown\nFocus time: 12 min\nEnded early\nHistory: https://ineedtofoc.us/history",
+    "categories": "Exercise",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000005@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261031T070000Z",
+     "DTEND": "DTEND:20261031T071200Z",
+     "SUMMARY": "SUMMARY:Exercise: Stretching",
+     "DESCRIPTION": "DESCRIPTION:Goal: Stretching\\nTag: Exercise\\nMode: Countdown\\nFocus time: 1\r\n 2 min\\nEnded early\\nHistory: https://ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Exercise"
+    }
+   }
+  },
+  {
+   "reason": "a 120-character goal (the maximum) with non-ASCII letters: SUMMARY and DESCRIPTION need folding; the first SUMMARY line holds 74 octets because the next character, é, takes two",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000006",
+    "mode": "countdown",
+    "tag": "study",
+    "goal": "Réviser le chapitre 12 — équations différentielles, séries entières et transformée de Laplace, puis les exercices 1 à 12",
+    "started_at": "2026-10-28T08:00:00Z",
+    "ended_at": "2026-10-28T08:45:00Z",
+    "focus_seconds": 2700,
+    "paused_seconds": 0,
+    "status": "completed",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "countdown",
+     "minutes": 45
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{tag}: {goal}",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000006@ineedtofoc.us",
+    "dtstart": "20261028T080000Z",
+    "dtend": "20261028T084500Z",
+    "summary": "Study: Réviser le chapitre 12 — équations différentielles, séries entières et transformée de Laplace, puis les exercices 1 à 12",
+    "description": "Goal: Réviser le chapitre 12 — équations différentielles, séries entières et transformée de Laplace, puis les exercices 1 à 12\nTag: Study\nMode: Countdown\nFocus time: 45 min\nHistory: https://ineedtofoc.us/history",
+    "categories": "Study",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000006@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261028T080000Z",
+     "DTEND": "DTEND:20261028T084500Z",
+     "SUMMARY": "SUMMARY:Study: Réviser le chapitre 12 — équations différentielles\\, s\r\n éries entières et transformée de Laplace\\, puis les exercices 1 à 12",
+     "DESCRIPTION": "DESCRIPTION:Goal: Réviser le chapitre 12 — équations différentielles\\,\r\n  séries entières et transformée de Laplace\\, puis les exercices 1 à 12\r\n \\nTag: Study\\nMode: Countdown\\nFocus time: 45 min\\nHistory: https://ineedt\r\n ofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Study"
+    }
+   }
+  },
+  {
+   "reason": "goals off: {goal} is empty and the description has no Goal line",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000007",
+    "mode": "countdown",
+    "tag": "work",
+    "goal": "Quarterly report",
+    "started_at": "2026-10-27T10:00:00Z",
+    "ended_at": "2026-10-27T10:25:00Z",
+    "focus_seconds": 1500,
+    "paused_seconds": 0,
+    "status": "completed",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "countdown",
+     "minutes": 25
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{tag}: {goal}",
+    "calendar_include_goal": false,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000007@ineedtofoc.us",
+    "dtstart": "20261027T100000Z",
+    "dtend": "20261027T102500Z",
+    "summary": "Work",
+    "description": "Tag: Work\nMode: Countdown\nFocus time: 25 min\nHistory: https://ineedtofoc.us/history",
+    "categories": "Work",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000007@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261027T100000Z",
+     "DTEND": "DTEND:20261027T102500Z",
+     "SUMMARY": "SUMMARY:Work",
+     "DESCRIPTION": "DESCRIPTION:Tag: Work\\nMode: Countdown\\nFocus time: 25 min\\nHistory: https:\r\n //ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Work"
+    }
+   }
+  },
+  {
+   "reason": "description off: no DESCRIPTION property",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000008",
+    "mode": "countdown",
+    "tag": "nap",
+    "goal": "Power nap",
+    "started_at": "2026-10-27T14:00:00Z",
+    "ended_at": "2026-10-27T14:20:00Z",
+    "focus_seconds": 1200,
+    "paused_seconds": 0,
+    "status": "completed",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "countdown",
+     "minutes": 20
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{tag}: {goal}",
+    "calendar_include_goal": true,
+    "calendar_include_description": false
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000008@ineedtofoc.us",
+    "dtstart": "20261027T140000Z",
+    "dtend": "20261027T142000Z",
+    "summary": "Nap: Power nap",
+    "description": null,
+    "categories": "Nap",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000008@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261027T140000Z",
+     "DTEND": "DTEND:20261027T142000Z",
+     "SUMMARY": "SUMMARY:Nap: Power nap",
+     "DESCRIPTION": null,
+     "CATEGORIES": "CATEGORIES:Nap"
+    }
+   }
+  },
+  {
+   "reason": "unknown and empty placeholders: {date} stays as typed, the empty {goal} and the separator after it are trimmed",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000009",
+    "mode": "countdown",
+    "tag": "work",
+    "goal": null,
+    "started_at": "2026-10-26T09:00:00Z",
+    "ended_at": "2026-10-26T09:25:00Z",
+    "focus_seconds": 1500,
+    "paused_seconds": 0,
+    "status": "completed",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "countdown",
+     "minutes": 25
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{goal} – {tag} {date} · {focus_time}",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000009@ineedtofoc.us",
+    "dtstart": "20261026T090000Z",
+    "dtend": "20261026T092500Z",
+    "summary": "Work {date} · 25 min",
+    "description": "Tag: Work\nMode: Countdown\nFocus time: 25 min\nHistory: https://ineedtofoc.us/history",
+    "categories": "Work",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000009@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261026T090000Z",
+     "DTEND": "DTEND:20261026T092500Z",
+     "SUMMARY": "SUMMARY:Work {date} · 25 min",
+     "DESCRIPTION": "DESCRIPTION:Tag: Work\\nMode: Countdown\\nFocus time: 25 min\\nHistory: https:\r\n //ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Work"
+    }
+   }
+  },
+  {
+   "reason": "a template that renders empty reads Focus session",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000010",
+    "mode": "countdown",
+    "tag": "work",
+    "goal": null,
+    "started_at": "2026-10-26T11:00:00Z",
+    "ended_at": "2026-10-26T11:25:00Z",
+    "focus_seconds": 1500,
+    "paused_seconds": 0,
+    "status": "completed",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "countdown",
+     "minutes": 25
+    }
+   },
+   "settings": {
+    "calendar_title_template": " {goal} : ",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000010@ineedtofoc.us",
+    "dtstart": "20261026T110000Z",
+    "dtend": "20261026T112500Z",
+    "summary": "Focus session",
+    "description": "Tag: Work\nMode: Countdown\nFocus time: 25 min\nHistory: https://ineedtofoc.us/history",
+    "categories": "Work",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000010@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261026T110000Z",
+     "DTEND": "DTEND:20261026T112500Z",
+     "SUMMARY": "SUMMARY:Focus session",
+     "DESCRIPTION": "DESCRIPTION:Tag: Work\\nMode: Countdown\\nFocus time: 25 min\\nHistory: https:\r\n //ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Work"
+    }
+   }
+  },
+  {
+   "reason": "an empty placeholder in the middle leaves its separators; spaces collapse but nothing else is removed",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000011",
+    "mode": "countdown",
+    "tag": "work",
+    "goal": null,
+    "started_at": "2026-10-26T13:00:00Z",
+    "ended_at": "2026-10-26T13:25:00Z",
+    "focus_seconds": 1500,
+    "paused_seconds": 0,
+    "status": "completed",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "countdown",
+     "minutes": 25
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{tag}:  {goal}  - {mode}",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000011@ineedtofoc.us",
+    "dtstart": "20261026T130000Z",
+    "dtend": "20261026T132500Z",
+    "summary": "Work: - Countdown",
+    "description": "Tag: Work\nMode: Countdown\nFocus time: 25 min\nHistory: https://ineedtofoc.us/history",
+    "categories": "Work",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000011@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261026T130000Z",
+     "DTEND": "DTEND:20261026T132500Z",
+     "SUMMARY": "SUMMARY:Work: - Countdown",
+     "DESCRIPTION": "DESCRIPTION:Tag: Work\\nMode: Countdown\\nFocus time: 25 min\\nHistory: https:\r\n //ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Work"
+    }
+   }
+  },
+  {
+   "reason": "a custom tag whose name has a comma: its current display name, escaped in CATEGORIES too",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000012",
+    "mode": "countdown",
+    "tag": "5b0c3f1e-2a6d-4c8e-9f10-1a2b3c4d5e6f",
+    "goal": "Landing page",
+    "started_at": "2026-10-25T18:00:00Z",
+    "ended_at": "2026-10-25T18:30:00Z",
+    "focus_seconds": 1800,
+    "paused_seconds": 0,
+    "status": "completed",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "countdown",
+     "minutes": 30
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{tag}: {goal}",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000012@ineedtofoc.us",
+    "dtstart": "20261025T180000Z",
+    "dtend": "20261025T183000Z",
+    "summary": "Side, project: Landing page",
+    "description": "Goal: Landing page\nTag: Side, project\nMode: Countdown\nFocus time: 30 min\nHistory: https://ineedtofoc.us/history",
+    "categories": "Side, project",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000012@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261025T180000Z",
+     "DTEND": "DTEND:20261025T183000Z",
+     "SUMMARY": "SUMMARY:Side\\, project: Landing page",
+     "DESCRIPTION": "DESCRIPTION:Goal: Landing page\\nTag: Side\\, project\\nMode: Countdown\\nFocus\r\n  time: 30 min\\nHistory: https://ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Side\\, project"
+    }
+   }
+  },
+  {
+   "reason": "a removed custom tag keeps its name, as History shows it",
+   "session": {
+    "id": "0f6e2b9a-3c1d-4e5f-8a7b-000000000013",
+    "mode": "unlimited",
+    "tag": "9e8d7c6b-5a49-4382-a1b0-c9d8e7f6a5b4",
+    "goal": null,
+    "started_at": "2026-10-24T17:00:00Z",
+    "ended_at": "2026-10-24T17:20:30Z",
+    "focus_seconds": 1230,
+    "paused_seconds": 0,
+    "status": "completed",
+    "blocks_completed": 0,
+    "mode_config": {
+     "mode": "unlimited",
+     "reminder_minutes": null
+    }
+   },
+   "settings": {
+    "calendar_title_template": "{tag}: {goal}",
+    "calendar_include_goal": true,
+    "calendar_include_description": true
+   },
+   "expected": {
+    "uid": "0f6e2b9a-3c1d-4e5f-8a7b-000000000013@ineedtofoc.us",
+    "dtstart": "20261024T170000Z",
+    "dtend": "20261024T172030Z",
+    "summary": "Piano",
+    "description": "Tag: Piano\nMode: Unlimited\nFocus time: 20 min\nHistory: https://ineedtofoc.us/history",
+    "categories": "Piano",
+    "ics": {
+     "UID": "UID:0f6e2b9a-3c1d-4e5f-8a7b-000000000013@ineedtofoc.us",
+     "DTSTART": "DTSTART:20261024T170000Z",
+     "DTEND": "DTEND:20261024T172030Z",
+     "SUMMARY": "SUMMARY:Piano",
+     "DESCRIPTION": "DESCRIPTION:Tag: Piano\\nMode: Unlimited\\nFocus time: 20 min\\nHistory: https\r\n ://ineedtofoc.us/history",
+     "CATEGORIES": "CATEGORIES:Piano"
+    }
+   }
+  }
+ ]
+}
