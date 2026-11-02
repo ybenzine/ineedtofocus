@@ -58,6 +58,9 @@ router = APIRouter(prefix="/api/calendar", tags=["calendar"])
 
 # Calendar apps poll on a schedule (hourly at most, AC14.2), often several at once from one
 # address: generous per client address, with a tighter limit on unknown secrets (guessing).
+# Both budgets are shared by everything behind one fetcher address (Google and iCloud fetch for
+# many users from shared servers) or one IPv6 /64, so the unknown-secret budget only gates
+# requests whose lookup fails: a valid secret is always served, within the general limit.
 FEED_MAX_PER_CLIENT = 300
 FEED_WINDOW_SECONDS = 300.0
 BAD_SECRET_MAX_PER_CLIENT = 20
@@ -79,9 +82,8 @@ _ICS_BODY: dict[int | str, dict[str, Any]] = {
 
 
 def new_limiters() -> tuple[FailureLimiter, FailureLimiter]:
-    """(every feed request per client, unknown secrets per client). The pair limit of the
-    second is out of reach on purpose: only the client count matters, and a valid secret refunds
-    its attempt."""
+    """(every feed request per client, requests with an unknown secret per client). The pair
+    limit of the second is out of reach on purpose: only the client count matters."""
     return (
         FailureLimiter(FEED_MAX_PER_CLIENT, FEED_MAX_PER_CLIENT, FEED_WINDOW_SECONDS),
         FailureLimiter(10**9, BAD_SECRET_MAX_PER_CLIENT, BAD_SECRET_WINDOW_SECONDS),
@@ -180,7 +182,12 @@ def _events(
     return events
 
 
-def _ics(body: bytes, **headers: str) -> Response:
+def _ics(request: Request, body: bytes, **headers: str) -> Response:
+    """The calendar response. A HEAD gets the GET's headers, Content-Length too, and no body."""
+    if request.method == "HEAD":
+        return Response(
+            content=b"", media_type=_ICS, headers={**headers, "Content-Length": str(len(body))}
+        )
     return Response(content=body, media_type=_ICS, headers=headers)
 
 
@@ -209,11 +216,8 @@ _FEED_ERRORS: dict[int | str, dict[str, Any]] = {
 
 
 # Declared before `/{secret}.ics`, which would also match `export.ics`.
-@router.get(
-    "/export.ics",
-    response_class=Response,
-    responses={**_UNAUTHORIZED, **_ICS_BODY},
-)
+@router.head("/export.ics", include_in_schema=False)  # same handler; not a second operation
+@router.get("/export.ics", response_class=Response, responses={**_UNAUTHORIZED, **_ICS_BODY})
 async def download_history(
     request: Request,
     user: CurrentUser,
@@ -256,6 +260,7 @@ async def download_history(
         date_range.end.isoformat() if date_range else None,
     )
     return _ics(
+        request,
         rendered.body,
         **{
             "Content-Disposition": f'attachment; filename="{filename}"',
@@ -264,6 +269,7 @@ async def download_history(
     )
 
 
+@router.head("/{secret}.ics", include_in_schema=False)
 @router.get("/{secret}.ics", response_class=Response, responses=_FEED_ERRORS)
 async def subscription_feed(secret: str, request: Request, db: DbSession) -> Response:
     """The private subscription feed (AC14.4, AC14.5), read without signing in. Every
@@ -273,8 +279,6 @@ async def subscription_feed(secret: str, request: Request, db: DbSession) -> Res
     client = client_key(request.client.host if request.client else None)
     state = request.app.state
     wait = state.calendar_limiter.try_acquire(client, "")
-    if wait is None:
-        wait = state.calendar_bad_limiter.try_acquire(client, "")
     if wait is not None:
         raise _limited(wait)
     user_id = (
@@ -285,8 +289,11 @@ async def subscription_feed(secret: str, request: Request, db: DbSession) -> Res
         else None
     )
     if user_id is None:
-        raise _not_found()  # counted against the client's unknown-secret budget
-    state.calendar_bad_limiter.succeeded(client, "")
+        # Only a failed lookup spends the unknown-secret budget; a valid secret never does.
+        wait = state.calendar_bad_limiter.try_acquire(client, "")
+        if wait is not None:
+            raise _limited(wait)
+        raise _not_found()
     tag_user(str(user_id))
 
     settings = await _settings(db, user_id)
@@ -322,21 +329,23 @@ async def subscription_feed(secret: str, request: Request, db: DbSession) -> Res
         feed=True,
         now=dt.datetime.now(dt.UTC),
     )
-    # At most once a minute per feed, so a polling calendar app doesn't write on every fetch.
-    await db.execute(
-        update(CalendarFeed)
-        .where(
-            CalendarFeed.user_id == user_id,
-            (CalendarFeed.last_fetched_at.is_(None))
-            | (CalendarFeed.last_fetched_at < func.now() - FETCHED_AT_RESOLUTION),
+    head = request.method == "HEAD"
+    if not head:  # a HEAD is not a fetch of the calendar
+        # At most once a minute per feed, so a polling calendar app doesn't write on every fetch.
+        await db.execute(
+            update(CalendarFeed)
+            .where(
+                CalendarFeed.user_id == user_id,
+                (CalendarFeed.last_fetched_at.is_(None))
+                | (CalendarFeed.last_fetched_at < func.now() - FETCHED_AT_RESOLUTION),
+            )
+            .values(last_fetched_at=func.now())
         )
-        .values(last_fetched_at=func.now())
-    )
-    await db.commit()
+        await db.commit()
     headers = {"ETag": rendered.etag, "Cache-Control": "private, no-cache"}
     if matches_etag(request.headers.get("if-none-match"), rendered.etag):
         return Response(status_code=304, headers=headers)
-    return _ics(rendered.body, **headers)
+    return _ics(request, rendered.body, **headers)
 
 
 @router.get("/feed", responses=_UNAUTHORIZED)

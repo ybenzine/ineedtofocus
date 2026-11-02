@@ -24,6 +24,7 @@ from app.calendar_api import new_limiters
 from app.config import Settings
 from app.logging_config import JsonFormatter
 from app.main import create_app
+from app.models.enums import TAGS
 from app.rate_limit import FailureLimiter
 from app.security import token_hash
 from app.telemetry import install_privacy_filters
@@ -192,14 +193,28 @@ def test_ac1_another_accounts_tag_cannot_be_excluded(ada: TestClient, bob: TestC
     )
 
 
-def test_ac1_106_excluded_tags_are_accepted(ada: TestClient) -> None:
-    from app.models.enums import TAGS
-
-    assert len(TAGS) == 6
-    # 6 built-ins + 100 custom tags is the most there can be; the built-ins alone fit.
-    assert (
-        ada.patch("/api/settings", json={"calendar_excluded_tags": list(TAGS)}).status_code == 200
+def test_ac1_excluded_tags_limit_is_106(ada: TestClient, app_url: str) -> None:
+    """6 built-ins plus the 100 custom tags an account can ever have (removed ones included)."""
+    run(
+        _exec(
+            app_url,
+            "INSERT INTO custom_tags (user_id, name, color, removed_at) "
+            "SELECT u.id, 'tag ' || n, 'teal', CASE WHEN n > 20 THEN now() END "
+            "FROM generate_series(1, 100) AS n, (SELECT id FROM users LIMIT 1) AS u",
+        )
     )
+    custom = [t["id"] for t in ada.get("/api/tags").json()["tags"]]
+    assert len(custom) == 100
+    everything = [*TAGS, *custom]
+    assert len(everything) == 106 and len(set(everything)) == 106
+    r = ada.patch("/api/settings", json={"calendar_excluded_tags": everything})
+    assert r.status_code == 200, r.text
+    assert len(r.json()["calendar_excluded_tags"]) == 106
+    too_many = ada.patch(
+        "/api/settings", json={"calendar_excluded_tags": [*everything, str(uuid.uuid4())]}
+    )
+    assert too_many.status_code == 422
+    assert len(ada.get("/api/settings").json()["calendar_excluded_tags"]) == 106
 
 
 # --- managing the feed (AC3, AC2) ----------------------------------------------------------
@@ -478,14 +493,63 @@ def test_ac4_rate_limits_per_client_and_for_unknown_secrets(ada: TestClient) -> 
     assert limited.status_code == 429
     assert int(limited.headers["retry-after"]) >= 1
     assert limited.json()["error"]["code"] == "rate_limited"
-    # Unknown secrets: a burst from one client is cut off, a valid link refunds its attempt.
+    # Unknown secrets: a burst from one client is cut off, but only the failed lookups count.
     ada.app.state.calendar_limiter, ada.app.state.calendar_bad_limiter = new_limiters()  # type: ignore[attr-defined]
     ada.app.state.calendar_bad_limiter = FailureLimiter(10**9, 3, 60.0)  # type: ignore[attr-defined]
     for _ in range(10):
-        assert ada.get(path).status_code == 200
+        assert ada.get(path).status_code == 200  # valid links never spend the budget
     guesses = [ada.get(f"/api/calendar/{'a' * 42}{i}.ics").status_code for i in range(5)]
     assert guesses == [404, 404, 404, 429, 429]
-    assert ada.get(path).status_code == 429  # the lockout covers the client, valid link or not
+    # A client over the unknown-secret budget is still served a valid link (shared fetchers).
+    assert ada.get(path).status_code == 200
+    assert ada.get(path, headers={"If-None-Match": "*"}).status_code == 304
+    # The general limit still applies to everything.
+    ada.app.state.calendar_limiter = FailureLimiter(2, 2, 60.0)  # type: ignore[attr-defined]
+    assert [ada.get(path).status_code for _ in range(3)] == [200, 200, 429]
+
+
+def test_ac4_head_has_the_get_headers_and_no_body(ada: TestClient, app_url: str) -> None:
+    save(ada, "2026-10-30T09:00:00")
+    path = make_feed(ada)
+    got = ada.get(path)
+    head = ada.head(path)
+    assert head.status_code == 200
+    assert head.content == b""
+    assert head.headers["content-type"] == got.headers["content-type"]
+    assert head.headers["etag"] == got.headers["etag"]
+    assert head.headers["cache-control"] == "private, no-cache"
+    assert int(head.headers["content-length"]) == len(got.content)
+    assert ada.head(path, headers={"If-None-Match": got.headers["etag"]}).status_code == 304
+    assert ada.head(f"/api/calendar/{'a' * 43}.ics").status_code == 404
+
+
+def test_ac4_head_does_not_update_last_fetched_but_counts_toward_the_limit(
+    ada: TestClient,
+) -> None:
+    path = make_feed(ada)
+    assert ada.head(path).status_code == 200
+    assert ada.get("/api/calendar/feed").json()["last_fetched_at"] is None
+    assert ada.get(path).status_code == 200
+    assert ada.get("/api/calendar/feed").json()["last_fetched_at"] is not None
+    ada.app.state.calendar_limiter = FailureLimiter(2, 2, 60.0)  # type: ignore[attr-defined]
+    assert [ada.head(path).status_code for _ in range(3)] == [200, 200, 429]
+    ada.app.state.calendar_limiter, _ = new_limiters()  # type: ignore[attr-defined]
+    ada.app.state.calendar_bad_limiter = FailureLimiter(10**9, 1, 60.0)  # type: ignore[attr-defined]
+    bad = f"/api/calendar/{'b' * 43}.ics"
+    assert [ada.head(bad).status_code for _ in range(2)] == [404, 429]  # HEAD spends it too
+
+
+def test_ac5_download_head_has_the_get_headers_and_no_body(ada: TestClient) -> None:
+    save(ada, "2026-10-30T09:00:00")
+    url = "/api/calendar/export.ics?view=all&tz=UTC"
+    got = ada.get(url)
+    head = ada.head(url)
+    assert head.status_code == 200
+    assert head.content == b""
+    for name in ("content-type", "content-disposition", "cache-control"):
+        assert head.headers[name] == got.headers[name]
+    assert int(head.headers["content-length"]) == len(got.content)
+    assert ada.head("/api/calendar/export.ics?view=all").status_code == 422
 
 
 def test_ac4_ipv6_clients_in_one_64_share_a_limit(ada: TestClient) -> None:
