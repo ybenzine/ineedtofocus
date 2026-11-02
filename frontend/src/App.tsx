@@ -523,10 +523,11 @@ function AppBody({
           audio={audio}
           onEvents={player.handleEvents}
           onEnded={ended}
-          audioControls={({ paused }) => (
+          audioControls={({ paused, inBreak }) => (
             <AudioControls
               source={audio}
               paused={paused}
+              inBreak={inBreak}
               rain={rainPlayer}
               onSourceChange={changeAudio}
               youtube={youtube}

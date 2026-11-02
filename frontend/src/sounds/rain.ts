@@ -4,6 +4,9 @@
 // there is no gap at the seam (HTMLAudio's `loop` leaves one). The file is in `public/audio/`,
 // which the service worker (#19) precaches, so rain plays offline (AC13.1).
 //
+// It plays while the timer runs and pauses for Pomodoro breaks (AC8.2, AC12.6): `AudioControls`
+// calls `pause()` at the break and `play()` at the next focus block.
+//
 // Rain shares the alert player's audio context, so the same first-gesture unlock covers both.
 // It never touches `navigator.audioSession.type`: like the alerts, it follows the iOS silent
 // switch (ruling on #16).

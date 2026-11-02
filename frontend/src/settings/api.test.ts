@@ -50,3 +50,12 @@ describe('parseSettings, calendar fields (AC12.8)', () => {
     )
   })
 })
+
+describe('parseSettings, pause_audio_on_breaks (AC12.6)', () => {
+  it('defaults to true, also when the field is missing or invalid', () => {
+    expect(DEFAULT_SETTINGS.pause_audio_on_breaks).toBe(true)
+    expect(parseSettings({}).pause_audio_on_breaks).toBe(true)
+    expect(parseSettings({ pause_audio_on_breaks: 'no' }).pause_audio_on_breaks).toBe(true)
+    expect(parseSettings({ pause_audio_on_breaks: false }).pause_audio_on_breaks).toBe(false)
+  })
+})

@@ -1,7 +1,8 @@
 // The timer screen's background audio controls (F8). Rain follows the timer: it plays while the
-// timer runs (through breaks too), pauses with it and stops when the session's screen goes away
-// (AC8.2). YouTube (#18) follows the same rules in its own visible player; offline it only offers
-// to switch to Rain (AC8.7).
+// timer runs, pauses with it and stops when the session's screen goes away (AC8.2). In a Pomodoro
+// break it also pauses, and comes back with the next focus block, unless the user turned off
+// "Pause background audio during Pomodoro breaks" (AC12.6). YouTube (#18) follows the same rules
+// in its own visible player; offline it only offers to switch to Rain (AC8.7).
 
 import { useEffect, useId } from 'react'
 import { useSettingsState } from '../settings/SettingsContext.ts'
@@ -30,6 +31,8 @@ export interface AudioControlsProps {
   source: AudioSource
   /** The timer is paused. */
   paused: boolean
+  /** A Pomodoro break or long break is running (or paused) (AC8.2). */
+  inBreak?: boolean
   rain: RainPlayer
   onSourceChange: (source: AudioSource) => void
   /** Injectable for tests. */
@@ -43,6 +46,7 @@ export interface AudioControlsProps {
 export default function AudioControls({
   source,
   paused,
+  inBreak = false,
   rain,
   onSourceChange,
   youtube,
@@ -52,7 +56,10 @@ export default function AudioControls({
   // The same value the Settings screen edits: moving one moves the other.
   const { values } = useSettingsState()
   const volume = values.background_volume
-  const shouldPlay = source === 'rain' && !paused
+  // AC8.2/AC12.6: the break holds the audio, whatever the timer's own pause state.
+  const heldForBreak = inBreak && values.pause_audio_on_breaks
+  const audioPaused = paused || heldForBreak
+  const shouldPlay = source === 'rain' && !audioPaused
 
   useEffect(() => {
     if (shouldPlay) void rain.play()
@@ -64,6 +71,11 @@ export default function AudioControls({
 
   return (
     <>
+      {heldForBreak && (
+        <p className="field-hint" role="status">
+          Paused for the break
+        </p>
+      )}
       {source === 'rain' && (
         <div className="timer-volume">
           <label htmlFor={volumeId} className="sr-only">
@@ -80,7 +92,7 @@ export default function AudioControls({
           />
         </div>
       )}
-      {source === 'youtube' && online && <YoutubeControls paused={paused} {...youtube} />}
+      {source === 'youtube' && online && <YoutubeControls paused={audioPaused} {...youtube} />}
       {source === 'youtube' && !online && (
         <OfflineRainSuggestion onUseRain={() => onSourceChange('rain')} />
       )}

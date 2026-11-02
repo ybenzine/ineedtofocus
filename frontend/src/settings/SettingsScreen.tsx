@@ -83,6 +83,17 @@ export default function SettingsScreen({
         <label>
           <input
             type="checkbox"
+            checked={values.pause_audio_on_breaks}
+            onChange={(event) => store.update({ pause_audio_on_breaks: event.target.checked })}
+          />{' '}
+          Pause background audio during Pomodoro breaks
+        </label>
+      </div>
+
+      <div className="field">
+        <label>
+          <input
+            type="checkbox"
             checked={canKeepAwake && values.keep_screen_awake}
             disabled={!canKeepAwake}
             onChange={(event) => store.update({ keep_screen_awake: event.target.checked })}
