@@ -105,6 +105,9 @@ class SettingsOut(BaseModel):
     alert_volume: int = Field(description="0-100")
     background_volume: int = Field(description="0-100")
     keep_screen_awake: bool
+    pause_audio_on_breaks: bool = Field(
+        description="Pause background audio during Pomodoro breaks (AC12.6)"
+    )
     default_reminder_minutes: ReminderMinutes | None = Field(description="null = Off")
     pomodoro_config: PomodoroConfig | None = Field(description="null until first use")
     last_tag: str | None = Field(
@@ -148,6 +151,7 @@ class SettingsPatch(BaseModel):
     alert_volume: Annotated[StrictInt, Field(ge=0, le=100)] = 80
     background_volume: Annotated[StrictInt, Field(ge=0, le=100)] = 50
     keep_screen_awake: StrictBool = False
+    pause_audio_on_breaks: StrictBool = True
     default_reminder_minutes: ReminderMinutes | None = None
     pomodoro_config: PomodoroConfig | None = None
     last_tag: TagValue | None = None
@@ -167,6 +171,7 @@ def _to_out(row: UserSettings) -> SettingsOut:
         alert_volume=row.alert_volume,
         background_volume=row.background_volume,
         keep_screen_awake=row.keep_screen_awake,
+        pause_audio_on_breaks=row.pause_audio_on_breaks,
         default_reminder_minutes=row.default_reminder_minutes,  # type: ignore[arg-type]
         pomodoro_config=(
             PomodoroConfig.model_validate(row.pomodoro_config) if row.pomodoro_config else None

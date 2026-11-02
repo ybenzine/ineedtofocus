@@ -25,6 +25,7 @@ DEFAULTS: dict[str, Any] = {
     "alert_volume": 80,
     "background_volume": 50,
     "keep_screen_awake": False,
+    "pause_audio_on_breaks": True,
     "default_reminder_minutes": None,
     "pomodoro_config": None,
     "last_tag": None,
@@ -183,6 +184,9 @@ def test_408_recent_countdown_is_per_user_and_in_the_export(make_client: MakeCli
         {"alert_volume": None},
         {"keep_screen_awake": "yes"},
         {"keep_screen_awake": None},
+        {"pause_audio_on_breaks": "true"},
+        {"pause_audio_on_breaks": 1},
+        {"pause_audio_on_breaks": None},
         {"default_reminder_minutes": 20},
         {"default_reminder_minutes": 0},
         {"theme": "sepia"},
@@ -711,3 +715,38 @@ def test_ac_249_concurrent_pastes_of_one_id_leave_one_row(
     assert codes == [200] * len(variants)
     assert run(_scalar(test_db_url, "SELECT count(*) FROM youtube_recent_links"))[0][0] == 2
     assert len(urls(client)) == 2
+
+
+def test_ac12_6_pause_audio_on_breaks_defaults_on_and_round_trips(client: TestClient) -> None:
+    first = client.get("/api/settings").json()
+    assert first["pause_audio_on_breaks"] is True
+    off = client.patch("/api/settings", json={"pause_audio_on_breaks": False}).json()
+    assert off["pause_audio_on_breaks"] is False
+    assert off["updated_at"] > first["updated_at"]
+    on = client.patch("/api/settings", json={"pause_audio_on_breaks": True}).json()
+    assert on["pause_audio_on_breaks"] is True
+    assert on["updated_at"] > off["updated_at"]
+    assert client.get("/api/settings").json()["pause_audio_on_breaks"] is True
+
+
+def test_ac12_6_patch_without_the_field_leaves_it_alone(client: TestClient) -> None:
+    client.patch("/api/settings", json={"pause_audio_on_breaks": False})
+    assert client.patch("/api/settings", json={"alert_volume": 5}).status_code == 200
+    assert client.patch("/api/settings", json={}).json()["pause_audio_on_breaks"] is False
+
+
+def test_ac12_6_invalid_types_name_the_field(client: TestClient) -> None:
+    for value in ("true", 1, None):
+        r = client.patch("/api/settings", json={"pause_audio_on_breaks": value})
+        assert r.status_code == 422
+        assert "pause_audio_on_breaks" in json.dumps(r.json())
+
+
+def test_ac12_6_is_per_user_and_in_the_export(make_client: MakeClient) -> None:
+    with make_client() as a, make_client() as b:
+        signup(a, "a@example.com")
+        signup(b, "b@example.com")
+        a.patch("/api/settings", json={"pause_audio_on_breaks": False})
+        assert b.get("/api/settings").json()["pause_audio_on_breaks"] is True
+        assert a.get("/api/account/export").json()["settings"]["pause_audio_on_breaks"] is False
+        assert b.get("/api/account/export").json()["settings"]["pause_audio_on_breaks"] is True

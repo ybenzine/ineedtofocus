@@ -735,6 +735,11 @@
             "description": "A built-in tag identifier or a custom tag's id (removed ones too); null means Work (AC7.2)",
             "title": "Last Tag"
           },
+          "pause_audio_on_breaks": {
+            "description": "Pause background audio during Pomodoro breaks (AC12.6)",
+            "title": "Pause Audio On Breaks",
+            "type": "boolean"
+          },
           "pomodoro_config": {
             "anyOf": [
               {
@@ -766,6 +771,7 @@
           "alert_volume",
           "background_volume",
           "keep_screen_awake",
+          "pause_audio_on_breaks",
           "default_reminder_minutes",
           "pomodoro_config",
           "last_tag",
@@ -883,6 +889,10 @@
               }
             ],
             "title": "Last Tag"
+          },
+          "pause_audio_on_breaks": {
+            "title": "Pause Audio On Breaks",
+            "type": "boolean"
           },
           "pomodoro_config": {
             "anyOf": [

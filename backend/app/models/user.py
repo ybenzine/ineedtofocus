@@ -89,6 +89,8 @@ class UserSettings(Base):
     alert_volume: Mapped[int] = mapped_column(SmallInteger, server_default=text("80"))
     background_volume: Mapped[int] = mapped_column(SmallInteger, server_default=text("50"))
     keep_screen_awake: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    # Pause Rain/YouTube audio during Pomodoro breaks (AC12.6); on for everyone by default.
+    pause_audio_on_breaks: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
     # Default unlimited-timer reminder in minutes; NULL = Off (AC12.4).
     default_reminder_minutes: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
     # Last-used Pomodoro configuration (AC12.5); NULL until first use.
