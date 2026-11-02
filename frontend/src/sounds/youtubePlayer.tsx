@@ -3,7 +3,7 @@
 // never hidden. It loops, follows `playing` (AC8.2) and takes the background volume (0-100).
 // The embed is built from the parsed id, never from the pasted string, and is never logged.
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { YoutubeTarget } from './youtubeLink.ts'
 import {
   PLAYER_ERROR_MESSAGE,
@@ -15,6 +15,8 @@ import {
   YT_CUED,
   YT_ENDED,
   YT_PLAYING,
+  PLAY_BLOCKED_MS,
+  RESUME_VIDEO_LABEL,
   loadYoutubeApi,
   type LoadYoutubeApi,
   type YtPlayer,
@@ -50,6 +52,29 @@ export default function YoutubePlayer({
   const titleHandler = useRef(onTitle)
   const [message, setMessage] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
+  // A browser that blocks playVideo() without a tap (iOS Safari): offer a button after a while.
+  const [blocked, setBlocked] = useState(false)
+  // Every pause or play command starts afresh: no button left over from the last one.
+  const [lastPlaying, setLastPlaying] = useState(playing)
+  if (lastPlaying !== playing) {
+    setLastPlaying(playing)
+    setBlocked(false)
+  }
+  const isPlaying = useRef(false)
+  const blockTimer = useRef<number | undefined>(undefined)
+
+  const play = useCallback(() => {
+    window.clearTimeout(blockTimer.current)
+    player.current?.playVideo()
+    blockTimer.current = window.setTimeout(() => {
+      if (!isPlaying.current && wantPlaying.current) setBlocked(true)
+    }, PLAY_BLOCKED_MS)
+  }, [])
+  const pause = useCallback(() => {
+    window.clearTimeout(blockTimer.current)
+    isPlaying.current = false
+    player.current?.pauseVideo()
+  }, [])
 
   useEffect(() => {
     wantPlaying.current = playing
@@ -110,13 +135,16 @@ export default function YoutubePlayer({
               player.current = created
               created.setVolume(wantVolume.current)
               if (kind === 'playlist') created.setLoop(true)
-              if (wantPlaying.current) created.playVideo()
+              if (wantPlaying.current) play()
               reportTitle()
             },
             onStateChange: (event) => {
               // The title is often only known once a video starts (and changes in a playlist).
               if (event.data === YT_PLAYING || event.data === YT_CUED) reportTitle()
+              isPlaying.current = event.data === YT_PLAYING
               if (event.data === YT_PLAYING) {
+                window.clearTimeout(blockTimer.current)
+                setBlocked(false)
                 hasPlayed = true
                 failuresInARow = 0
                 lastSkippedIndex = undefined
@@ -189,6 +217,7 @@ export default function YoutubePlayer({
     return () => {
       cancelled = true
       window.clearTimeout(noteTimer)
+      window.clearTimeout(blockTimer.current)
       setNote(null)
       ready.current = false
       player.current = null
@@ -199,13 +228,13 @@ export default function YoutubePlayer({
       }
       host?.replaceChildren()
     }
-  }, [kind, id, loadApi])
+  }, [kind, id, loadApi, play])
 
   useEffect(() => {
     if (!ready.current || !player.current) return
-    if (playing) player.current.playVideo()
-    else player.current.pauseVideo()
-  }, [playing])
+    if (playing) play()
+    else pause()
+  }, [playing, play, pause])
 
   useEffect(() => {
     if (ready.current && player.current) player.current.setVolume(volume)
@@ -217,6 +246,18 @@ export default function YoutubePlayer({
       <p className="field-hint" role="status">
         {message === null ? note : null}
       </p>
+      {blocked && message === null && (
+        <button
+          type="button"
+          className="secondary"
+          onClick={() => {
+            setBlocked(false)
+            play()
+          }}
+        >
+          {RESUME_VIDEO_LABEL}
+        </button>
+      )}
       {message !== null && (
         <p className="field-error" role="alert">
           {message}

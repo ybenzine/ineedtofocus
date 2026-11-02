@@ -40,7 +40,7 @@ export interface TimerScreenProps {
    * The audio controls (#17, #18), rendered inside the audio region. A function receives the
    * timer's paused state, which the audio follows (AC8.2).
    */
-  audioControls?: ReactNode | ((state: { paused: boolean }) => ReactNode)
+  audioControls?: ReactNode | ((state: { paused: boolean; inBreak: boolean }) => ReactNode)
 }
 
 function clockText(snapshot: TimerSnapshot): string {
@@ -290,7 +290,7 @@ export default function TimerScreen({
           <AudioIcon source={audio} />
           <p className="timer-audio-name">{AUDIO_LABEL[audio]}</p>
           {typeof audioControls === 'function'
-            ? audioControls({ paused: snapshot.paused })
+            ? audioControls({ paused: snapshot.paused, inBreak })
             : audioControls}
         </section>
 

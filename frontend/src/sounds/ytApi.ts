@@ -42,6 +42,9 @@ export const YT_CUED = 5
 export const SKIPPABLE_ERRORS = [100, 101, 150]
 /** Used when the player can't say how many items the playlist has. */
 export const UNKNOWN_PLAYLIST_LENGTH = 3
+/** AC8.2: no "playing" this long after a play command means the browser wants a tap. */
+export const PLAY_BLOCKED_MS = 3000
+export const RESUME_VIDEO_LABEL = 'Resume video'
 export const API_TIMEOUT_MS = 15_000
 export const YOUTUBE_API_SCRIPT = 'https://www.youtube.com/iframe_api'
 

@@ -27,6 +27,8 @@ export interface Settings {
   background_volume: number
   /** AC12.3 */
   keep_screen_awake: boolean
+  /** AC12.6: pause Rain/YouTube during Pomodoro breaks */
+  pause_audio_on_breaks: boolean
   /** AC12.4; null = Off */
   default_reminder_minutes: ReminderSetting
   /** AC12.5; null until first use */
@@ -71,6 +73,7 @@ export type SettingsPatch = Partial<Omit<Settings, 'alert_volume' | 'background_
 export const SETTINGS_KEYS = [
   'week_start_day',
   'keep_screen_awake',
+  'pause_audio_on_breaks',
   'default_reminder_minutes',
   'pomodoro_config',
   'last_tag',
@@ -90,6 +93,7 @@ export const DEFAULT_SETTINGS: Settings = {
   alert_volume: 80,
   background_volume: 50,
   keep_screen_awake: false,
+  pause_audio_on_breaks: true,
   default_reminder_minutes: null,
   pomodoro_config: null,
   last_tag: null,
@@ -157,6 +161,10 @@ export function parseSettings(value: unknown): Settings {
       : d.background_volume,
     keep_screen_awake:
       typeof value.keep_screen_awake === 'boolean' ? value.keep_screen_awake : d.keep_screen_awake,
+    pause_audio_on_breaks:
+      typeof value.pause_audio_on_breaks === 'boolean'
+        ? value.pause_audio_on_breaks
+        : d.pause_audio_on_breaks,
     default_reminder_minutes: [15, 30, 45, 60, 90, 120].includes(reminder as number)
       ? (reminder as ReminderSetting)
       : null,

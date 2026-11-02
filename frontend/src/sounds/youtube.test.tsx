@@ -109,6 +109,10 @@ function setup(
   }
 }
 
+/** The player's own status line; the audio card's break cue is a separate status outside it. */
+const skipNote = () =>
+  within(document.querySelector('.youtube-controls') as HTMLElement).getByRole('status')
+
 async function paste(text: string) {
   fireEvent.change(screen.getByLabelText(LINK_LABEL), { target: { value: text } })
   await act(async () => {
@@ -284,7 +288,7 @@ describe('problems leave the session alone (AC8.5)', () => {
       await act(async () => events.onError({ data: code }))
       expect(p.nextVideo).toHaveBeenCalledTimes(1)
       expect(p.destroy).not.toHaveBeenCalled()
-      expect(screen.getByRole('status')).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
+      expect(skipNote()).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
       expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     })
 
@@ -294,14 +298,14 @@ describe('problems leave the session alone (AC8.5)', () => {
         const { events } = await playlist()
         await act(async () => events.onStateChange({ data: YT_PLAYING }))
         await act(async () => events.onError({ data: 150 }))
-        expect(screen.getByRole('status')).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
+        expect(skipNote()).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
         await act(async () => vi.advanceTimersByTime(SKIP_NOTE_MS - 100))
-        expect(screen.getByRole('status')).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
+        expect(skipNote()).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
         await act(async () => vi.advanceTimersByTime(200))
-        expect(screen.getByRole('status')).toBeEmptyDOMElement()
+        expect(skipNote()).toBeEmptyDOMElement()
         // The same container carries every later note.
         await act(async () => events.onError({ data: 150 }))
-        expect(screen.getByRole('status')).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
+        expect(skipNote()).toHaveTextContent(SKIPPED_ITEM_MESSAGE)
       } finally {
         vi.useRealTimers()
       }

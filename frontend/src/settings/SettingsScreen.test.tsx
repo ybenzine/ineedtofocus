@@ -81,6 +81,19 @@ describe('SettingsScreen', () => {
     expect(screen.getByText(/can.t keep the screen awake/)).toBeInTheDocument()
   })
 
+  it('has "Pause background audio during Pomodoro breaks", checked by default, and a toggle saves (AC12.6)', () => {
+    const { store } = renderScreen()
+    const box = screen.getByRole('checkbox', {
+      name: 'Pause background audio during Pomodoro breaks',
+    })
+    expect(box).toBeChecked()
+    fireEvent.click(box)
+    expect(store.values.pause_audio_on_breaks).toBe(false)
+    expect(box).not.toBeChecked()
+    fireEvent.click(box)
+    expect(store.values.pause_audio_on_breaks).toBe(true)
+  })
+
   it('keeps keep-awake on when supported', () => {
     vi.stubGlobal('navigator', { ...navigator, wakeLock: { request: vi.fn() } })
     const { store } = renderScreen()
