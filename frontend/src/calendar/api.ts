@@ -1,5 +1,6 @@
 // The calendar endpoints (F14, _docs/api/openapi.json): the subscription feed's status, create,
-// reset (delete, then create) and turn off, and the History download. Online only.
+// reset (a second `POST`, which replaces the link atomically) and turn off, and the History
+// download. Online only.
 //
 // Privacy (AC14.4, AC14.8): the secret path comes back once from `createFeed`. It is handed to
 // the caller and never stored, logged or cached here.
@@ -28,7 +29,7 @@ export interface IcsFile {
 
 export interface CalendarApi {
   feedStatus(): Promise<ApiResult<FeedStatus>>
-  /** 201 when made, 200 when one already existed (an old link, which isn't returned again). */
+  /** 201 when made, 200 when it replaced one (Reset: the old secret stops working at once). */
   createFeed(): Promise<ApiResult<FeedCreated>>
   deleteFeed(): Promise<ApiResult<null>>
   exportIcs(query: HistoryQuery): Promise<ApiResult<IcsFile>>

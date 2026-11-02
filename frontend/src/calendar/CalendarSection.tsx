@@ -337,10 +337,19 @@ function Subscribe({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [copied, setCopied] = useState('')
+  const [attempt, setAttempt] = useState(0)
   const field = useRef<HTMLInputElement>(null)
   const cancel = useRef<HTMLButtonElement>(null)
+  const resetButton = useRef<HTMLButtonElement>(null)
+  const offButton = useRef<HTMLButtonElement>(null)
+  // Which button to give focus back to when a confirmation closes without acting.
+  const returnTo = useRef<'reset' | 'off' | null>(null)
 
+  const ready = feed.kind === 'ready'
+  // The status loads when there is a connection and it isn't known yet; it reloads when the
+  // connection returns or on Retry. Offline, nothing is requested.
   useEffect(() => {
+    if (ready || !online) return
     let cancelled = false
     void api.feedStatus().then((result) => {
       if (cancelled) return
@@ -350,11 +359,32 @@ function Subscribe({
     return () => {
       cancelled = true
     }
-  }, [api])
+  }, [api, online, ready, attempt])
 
   useEffect(() => {
     if (confirm) cancel.current?.focus()
+    else if (returnTo.current) {
+      ;(returnTo.current === 'reset' ? resetButton : offButton).current?.focus()
+      returnTo.current = null
+    }
   }, [confirm])
+  // A failed reset hands focus back once the buttons are enabled again.
+  useEffect(() => {
+    if (!busy && returnTo.current && confirm === null) {
+      ;(returnTo.current === 'reset' ? resetButton : offButton).current?.focus()
+      returnTo.current = null
+    }
+  }, [busy, confirm])
+
+  // The new link is announced by moving focus to its field (AC4).
+  useEffect(() => {
+    if (shown) field.current?.focus()
+  }, [shown])
+
+  function closeConfirm() {
+    returnTo.current = confirm
+    setConfirm(null)
+  }
 
   const status = feed.kind === 'ready' ? feed.status : null
 
@@ -391,9 +421,24 @@ function Subscribe({
     return true
   }
 
+  /** One `POST` replaces the link atomically: on failure the old one still works. */
   async function reset() {
     setConfirm(null)
-    if (await remove()) await create()
+    setBusy(true)
+    setError('')
+    setCopied('')
+    const result = await api.createFeed()
+    setBusy(false)
+    if (result.kind !== 'ok') {
+      setError('Couldn’t reset the link. The old one still works. Try again.')
+      returnTo.current = 'reset'
+      return
+    }
+    setShown(result.value.path)
+    setFeed({
+      kind: 'ready',
+      status: { enabled: true, createdAt: result.value.createdAt, lastFetchedAt: null },
+    })
   }
 
   async function turnOff() {
@@ -432,8 +477,31 @@ function Subscribe({
         </p>
       )}
 
-      {feed.kind === 'loading' && <p role="status">Loading…</p>}
-      {feed.kind === 'error' && <p role="status">{feed.message}</p>}
+      {feed.kind === 'loading' && online && <p role="status">Loading…</p>}
+      {feed.kind === 'error' && online && (
+        <>
+          <p role="status">{feed.message}</p>
+          <button
+            type="button"
+            onClick={() => {
+              setFeed({ kind: 'loading' })
+              setAttempt((n) => n + 1)
+            }}
+            disabled={needsConnection}
+          >
+            Retry
+          </button>
+        </>
+      )}
+
+      {!ready && needsConnection && (
+        <>
+          <button type="button" className="primary" {...offlineProps}>
+            Create link
+          </button>
+          {hint}
+        </>
+      )}
 
       {status && !status.enabled && (
         <>
@@ -488,10 +556,20 @@ function Subscribe({
         <>
           {confirm === null ? (
             <div className="calendar-link-actions">
-              <button type="button" onClick={() => setConfirm('reset')} {...offlineProps}>
+              <button
+                type="button"
+                ref={resetButton}
+                onClick={() => setConfirm('reset')}
+                {...offlineProps}
+              >
                 Reset link
               </button>
-              <button type="button" onClick={() => setConfirm('off')} {...offlineProps}>
+              <button
+                type="button"
+                ref={offButton}
+                onClick={() => setConfirm('off')}
+                {...offlineProps}
+              >
                 Turn off
               </button>
               {hint}
@@ -502,7 +580,7 @@ function Subscribe({
               aria-label={confirm === 'reset' ? 'Reset the link' : 'Turn off the link'}
               className="archive-confirm"
               onKeyDown={(event) => {
-                if (event.key === 'Escape') setConfirm(null)
+                if (event.key === 'Escape') closeConfirm()
               }}
             >
               <p>
@@ -510,13 +588,13 @@ function Subscribe({
                   ? 'Reset the link? The old one stops working at once, and you add the new one in your calendar app.'
                   : 'Turn off the link? Calendar apps using it stop receiving your sessions.'}
               </p>
-              <button type="button" ref={cancel} onClick={() => setConfirm(null)}>
+              <button type="button" ref={cancel} onClick={closeConfirm}>
                 Cancel
               </button>
               <button
                 type="button"
                 className="danger"
-                disabled={busy}
+                disabled={busy || needsConnection}
                 onClick={() => void (confirm === 'reset' ? reset() : turnOff())}
               >
                 {confirm === 'reset' ? 'Reset link' : 'Turn off'}
