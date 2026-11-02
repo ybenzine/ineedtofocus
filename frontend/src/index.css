@@ -2234,3 +2234,70 @@ main.setup-screen:has(~ .tab-bar) {
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* Settings → Calendar and the History download (F14, AC12.8, AC14.4, AC14.6) */
+.calendar-section,
+.calendar-subscribe,
+.calendar-link {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.calendar-section h3 {
+  margin: 0;
+}
+
+.calendar-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  min-width: 0;
+}
+
+.calendar-preview p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.calendar-preview-title {
+  font-weight: 600;
+}
+
+.calendar-preview-description {
+  white-space: pre-line;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.calendar-tags {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.calendar-link input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  text-overflow: ellipsis;
+}
+
+.calendar-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.calendar-download {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}

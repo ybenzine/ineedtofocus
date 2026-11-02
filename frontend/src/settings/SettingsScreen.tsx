@@ -9,6 +9,8 @@ import { wakeLockSupported } from '../timerscreen/wakeLock.ts'
 import type { ReminderSetting, ThemeSetting } from './api.ts'
 import { useSettingsState, useSettingsStore } from './SettingsContext.ts'
 import TagsSection from '../tags/TagsSection.tsx'
+import CalendarSection from '../calendar/CalendarSection.tsx'
+import type { SessionStore } from '../sync/sessionStore.ts'
 import AccountSection from '../auth/AccountSection.tsx'
 import RangeInput from '../RangeInput.tsx'
 import { useAnonymous } from '../anonymous/AnonymousContext.ts'
@@ -25,9 +27,12 @@ const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 
 export default function SettingsScreen({
   player,
   controller,
+  sessions = null,
 }: {
   player: AlertPlayer
   controller?: TimerController
+  /** The device's sessions, for the calendar preview's latest session. */
+  sessions?: SessionStore | null
 }) {
   const store = useSettingsStore()
   const { values, pending, stalled } = useSettingsState()
@@ -143,6 +148,8 @@ export default function SettingsScreen({
       </p>
 
       <TagsSection />
+
+      <CalendarSection sessions={sessions} />
 
       {!anonymous && <AccountSection controller={controller} />}
     </div>
