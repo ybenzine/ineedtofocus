@@ -58,7 +58,7 @@ export default function AudioControls({
   const volume = useSoundLevels().background
   const { values } = useSettingsState()
   // AC8.2/AC12.6: the break holds the audio, whatever the timer's own pause state.
-  const heldForBreak = inBreak && values.pause_audio_on_breaks
+  const heldForBreak = inBreak && values.pause_audio_on_breaks && source !== 'none'
   const audioPaused = paused || heldForBreak
   const shouldPlay = source === 'rain' && !audioPaused
 
@@ -72,11 +72,10 @@ export default function AudioControls({
 
   return (
     <>
-      {heldForBreak && (
-        <p className="field-hint" role="status">
-          Paused for the break
-        </p>
-      )}
+      {/* Always in the page, so a screen reader announces the text when it appears. */}
+      <p className="field-hint" role="status">
+        {heldForBreak ? 'Paused for the break' : ''}
+      </p>
       {source === 'rain' && (
         <div className="timer-volume">
           <label htmlFor={volumeId} className="sr-only">

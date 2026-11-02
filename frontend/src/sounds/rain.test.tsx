@@ -392,7 +392,7 @@ describe('AudioControls', () => {
   it('ac8_7 suggests Rain when YouTube is chosen offline, and switches on request', () => {
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
     const { onSourceChange } = controls('youtube', false)
-    expect(screen.getByRole('status')).toHaveTextContent(/offline/i)
+    expect(screen.getByText(/offline/i).closest('[role="status"]')).not.toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Use Rain instead' }))
     expect(onSourceChange).toHaveBeenCalledWith('rain')
   })

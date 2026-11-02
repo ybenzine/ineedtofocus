@@ -81,7 +81,7 @@ function fakeRain() {
     volume: new MemoryBackgroundVolumeStore(),
     fetchSound: async () => new ArrayBuffer(1),
   })
-  return { sources, rain }
+  return { sources, rain, alerts }
 }
 
 const heading = () => screen.getByRole('heading', { level: 1 })
@@ -90,23 +90,28 @@ const CUE = 'Paused for the break'
 const live = (sources: ReturnType<typeof fakeRain>['sources']) =>
   sources.filter((s) => s.start.mock.calls.length > 0 && s.stop.mock.calls.length === 0)
 
-async function setup(options: { pause?: boolean; source?: 'rain' | 'youtube' } = {}) {
-  const { sources, rain } = fakeRain()
+async function setup(
+  options: { pause?: boolean; source?: 'none' | 'rain'; config?: TimerConfig } = {},
+) {
+  const { sources, rain, alerts } = fakeRain()
+  const bell = vi.spyOn(alerts, 'play').mockResolvedValue(undefined)
+  const source = options.source ?? 'rain'
   const settings = new SettingsStore()
   if (options.pause === false) settings.update({ pause_audio_on_breaks: false })
   const store = new MemoryActiveSessionStore()
   const controller = new TimerController({ store, saveRecord: () => undefined })
-  await controller.start({ config: CONFIG, tag: 'work', goal: null })
+  await controller.start({ config: options.config ?? CONFIG, tag: 'work', goal: null })
   const mount = (c: TimerController) =>
     render(
       <SettingsContext.Provider value={settings}>
         <TimerScreen
           controller={c}
-          audio="rain"
+          audio={source}
+          onEvents={alerts.handleEvents}
           onEnded={() => undefined}
           audioControls={({ paused, inBreak }) => (
             <AudioControls
-              source="rain"
+              source={source}
               paused={paused}
               inBreak={inBreak}
               rain={rain}
@@ -118,7 +123,7 @@ async function setup(options: { pause?: boolean; source?: 'rain' | 'youtube' } =
     )
   const view = mount(controller)
   await advance(100)
-  return { sources, rain, settings, store, controller, view, mount }
+  return { sources, rain, settings, store, controller, view, mount, bell }
 }
 
 describe('rain through a Pomodoro session, pause_audio_on_breaks on (AC8.2)', () => {
@@ -129,8 +134,11 @@ describe('rain through a Pomodoro session, pause_audio_on_breaks on (AC8.2)', ()
     expect(heading()).toHaveTextContent('Break')
     expect(t.sources[0].stop).toHaveBeenCalled()
     expect(live(t.sources)).toHaveLength(0)
+    expect(t.bell).toHaveBeenCalledTimes(1) // the bell rings as the break begins
+    expect(t.bell).toHaveBeenLastCalledWith('bell')
     await advance(MINUTE_MS)
     expect(heading()).toHaveTextContent('Focus')
+    expect(t.bell).toHaveBeenCalledTimes(2) // and as the next focus block begins
     expect(t.sources).toHaveLength(2)
     expect(live(t.sources)).toHaveLength(1)
   })
@@ -240,6 +248,50 @@ describe('rain through a Pomodoro session, pause_audio_on_breaks on (AC8.2)', ()
     await advance(5 * MINUTE_MS)
     t.view.unmount()
     expect(live(t.sources)).toHaveLength(0)
+  })
+})
+
+describe('breaks and other modes (AC8.2, AC4)', () => {
+  it('pauses and resumes for a long break too', async () => {
+    const t = await setup({
+      config: { ...CONFIG, blocks: 5, longBreakEnabled: true, longBreakMinutes: 5 },
+    })
+    await advance(5 * MINUTE_MS + MINUTE_MS + 5 * MINUTE_MS + MINUTE_MS + 5 * MINUTE_MS + MINUTE_MS)
+    expect(heading()).toHaveTextContent('Focus') // the 4th focus block
+    expect(live(t.sources)).toHaveLength(1)
+    await advance(5 * MINUTE_MS)
+    expect(heading()).toHaveTextContent('Long break')
+    expect(live(t.sources)).toHaveLength(0)
+    expect(screen.getByText(CUE)).toBeInTheDocument()
+    await advance(5 * MINUTE_MS)
+    expect(heading()).toHaveTextContent('Focus')
+    expect(live(t.sources)).toHaveLength(1)
+    expect(screen.queryByText(CUE)).toBeNull()
+  })
+
+  it('shows no cue in a break when no background audio is chosen', async () => {
+    await setup({ source: 'none' })
+    await advance(5 * MINUTE_MS)
+    expect(heading()).toHaveTextContent('Break')
+    expect(screen.queryByText(CUE)).toBeNull()
+  })
+
+  it('does not touch a Countdown session: rain plays throughout, no cue', async () => {
+    const t = await setup({ config: { mode: 'countdown', minutes: 25 } })
+    await advance(10 * MINUTE_MS)
+    expect(t.sources).toHaveLength(1)
+    expect(t.sources[0].stop).not.toHaveBeenCalled()
+    expect(live(t.sources)).toHaveLength(1)
+    expect(screen.queryByText(CUE)).toBeNull()
+  })
+
+  it('does not touch an Unlimited session: rain plays throughout, no cue', async () => {
+    const t = await setup({ config: { mode: 'unlimited', reminderMinutes: null } })
+    await advance(10 * MINUTE_MS)
+    expect(t.sources).toHaveLength(1)
+    expect(t.sources[0].stop).not.toHaveBeenCalled()
+    expect(live(t.sources)).toHaveLength(1)
+    expect(screen.queryByText(CUE)).toBeNull()
   })
 })
 
