@@ -106,6 +106,41 @@ test('offline, Google Calendar is disabled and the .ics still downloads', async 
   await context.setOffline(false)
 })
 
+test('with the menu open on the summary, one click on View history opens History and nothing shifts (#429)', async ({
+  page,
+}) => {
+  await installClock(page)
+  await signUp(page, newEmail())
+  await finishCountdown(page, { minutes: 1, tag: 'work' })
+  const link = page.getByRole('link', { name: 'View history' })
+  const before = await link.boundingBox()
+  await page.getByRole('button', { name: /^Add to calendar: / }).click()
+  await expect(page.getByRole('link', { name: 'Google Calendar' })).toBeVisible()
+  expect(await link.boundingBox()).toEqual(before)
+  await link.click()
+  await expect(page.getByRole('heading', { name: 'History' })).toBeVisible()
+})
+
+test.describe('at 360 px, menu on a History row', () => {
+  test.use({ viewport: { width: 360, height: 640 } })
+
+  test('opens without overflow and a click on another control goes through', async ({ page }) => {
+    await installClock(page)
+    await signUp(page, newEmail())
+    await finishCountdown(page, { minutes: 1, tag: 'work' })
+    await openHistoryFromSummary(page)
+    const edit = page.getByRole('button', { name: /^Edit session/ }).first()
+    const top = () => edit.evaluate((el) => el.getBoundingClientRect().top + window.scrollY)
+    const before = await top()
+    await page.getByRole('button', { name: /^Add to calendar: / }).click()
+    await expect(page.getByRole('link', { name: 'Google Calendar' })).toBeVisible()
+    await expectNoSidewaysScroll(page)
+    expect(await top()).toBe(before)
+    await page.getByRole('heading', { name: 'History' }).click()
+    await expect(page.getByRole('link', { name: 'Google Calendar' })).toHaveCount(0)
+  })
+})
+
 test.describe('at 360 px', () => {
   test.use({ viewport: { width: 360, height: 640 } })
 
