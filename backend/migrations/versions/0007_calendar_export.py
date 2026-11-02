@@ -64,9 +64,7 @@ def upgrade() -> None:
     )
     op.add_column(
         "user_settings",
-        sa.Column(
-            "calendar_name", sa.String(60), server_default="I Need To Focus", nullable=False
-        ),
+        sa.Column("calendar_name", sa.String(60), server_default="I Need To Focus", nullable=False),
     )
     op.create_check_constraint(
         op.f("ck_user_settings_calendar_title_template"),

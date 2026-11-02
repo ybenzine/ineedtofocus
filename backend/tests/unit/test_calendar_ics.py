@@ -108,6 +108,7 @@ def test_ac14_2_every_serialized_line_matches_the_fixture(case: dict[str, Any]) 
 @pytest.mark.parametrize("case", CASES, ids=IDS)
 def test_ac14_2_a_real_parser_reads_the_fixture_values(case: dict[str, Any]) -> None:
     calendar = Calendar.from_ical(_render(case))
+    event: Any
     (event,) = calendar.walk("VEVENT")
     want = case["expected"]
     assert str(event["UID"]) == want["uid"]

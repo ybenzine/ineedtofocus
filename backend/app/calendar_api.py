@@ -197,7 +197,7 @@ def _limited(wait: int) -> HTTPException:
 
 
 def _not_found() -> HTTPException:
-    return HTTPException(404, "Not found")
+    return HTTPException(404, "Not Found")
 
 
 _FEED_ERRORS: dict[int | str, dict[str, Any]] = {

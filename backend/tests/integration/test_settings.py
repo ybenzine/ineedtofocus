@@ -20,7 +20,7 @@ from tests.integration.conftest import MakeClient, run, signup
 
 pytestmark = pytest.mark.integration
 
-DEFAULTS = {
+DEFAULTS: dict[str, Any] = {
     "week_start_day": 0,
     "alert_volume": 80,
     "background_volume": 50,

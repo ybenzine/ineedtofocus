@@ -10,7 +10,6 @@ import time
 from collections import deque
 from collections.abc import Callable
 
-
 SWEEP_EVERY = 512  # calls to `try_acquire` between sweeps of stale clients
 
 
