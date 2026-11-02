@@ -708,6 +708,53 @@ How it removes, and what it never does:
 
 Neither a rollback nor a revert runs a migration, and nothing ever undoes one. That's safe because migrations are **expand-only** ([AGENTS.md](../AGENTS.md#conventions), `backend/tests/unit/test_migration_safety.py`). A known-good release migrated this database or ran on it. While every later migration only added to the schema (new tables, new nullable or defaulted columns), the older code runs on today's schema. AGENTS.md also allows contract migrations later ("expand first, contract later"; the safety test lets one through with a `# contract-migration:` comment). After one, a release that still needs the removed shape would fail. So a deploy that runs one sets that environment's [rollback floor](#rollback-floor-165): the releases from before it are no longer rollback targets there, and neither a rollback nor a revert starts one. Ship a contract step in a later release than the code that stopped using what it removes: the floor then retires only releases that may still use it. And ship it in its own small release, the contract migration with no other change, so a start that fails after it (and can't revert below the floor) is rare ([Decision log](product_decisions.md#8-decision-log), 2026-10-25, #165). The app container doesn't migrate on start (`MIGRATE_ON_START=0`), so an older image doesn't fail with `Can't locate revision …`. A migration that breaks this rule breaks rollback, which is why the migration safety test exists. A bad migration isn't something a rollback fixes: fix forward.
 
+## Clean up test accounts on dev (#423)
+
+Testing leaves throwaway accounts behind (Playwright's `e2e-…`, `scripts/traffic.py`'s `traffic-…`, the QA and PM probes), each with sessions, settings, custom tags, recent YouTube links, sign-ins and a calendar feed. `app.cleanup_test_accounts` removes them. It runs inside the app container, which already has the database settings: no `.env`, no credentials on the command line.
+
+It only ever touches accounts whose email ends in `@example.com`, compared case-insensitively. That domain is reserved (RFC 2606), so no real person can sign up with it, and no option widens the match (`user@example.com.evil.test` and `user@notexample.com` are never listed). `--match '<glob>'` narrows it by the part before the `@` (`--match 'qa*'`). `--older-than <duration>` (`30m`, `2h`, `1d`, `1w`; default `2h`, so a running test is left alone; `0` means every account) skips newer ones.
+
+Dry run first (the default; changes nothing):
+
+```
+docker exec -it focus-dev-app-1 python -m app.cleanup_test_accounts
+```
+
+```
+Email                     Created (UTC)     Sessions  Tags  Links
+------------------------  ----------------  --------  ----  -----
+e2e-3f9a@example.com      2026-11-02 09:14         4     1      2
+traffic-81c2@example.com  2026-11-02 10:02        37     0      5
+qa381-ada@example.com     2026-11-01 16:40         2     3      1
+Total: 3 account(s), 43 session(s), 4 custom tag(s), 8 link(s)
+Dry run: nothing changed. Add --delete to remove them.
+```
+
+Then delete. It prints the same table and asks for the number of accounts to be typed back; anything else declines (exit code 3). `--yes` skips the question, for scripts:
+
+```
+docker exec -it focus-dev-app-1 python -m app.cleanup_test_accounts --delete
+docker exec focus-dev-app-1 python -m app.cleanup_test_accounts --delete --yes --older-than 1d
+```
+
+```
+Type 3 to delete these accounts and all their data: 3
+Deleted:
+  users: 3
+  user_settings: 3
+  auth_sessions: 5
+  focus_sessions: 43
+  custom_tags: 4
+  youtube_recent_links: 8
+  calendar_feeds: 1
+```
+
+The accounts go in one transaction as `DELETE FROM users`; `ON DELETE CASCADE` removes the rest, the same as account deletion (AC1.7). A second run straight away prints `No matching test accounts.` Exit code 0 means success; nonzero means a declined prompt (3) or an error (1, printing only the error's type).
+
+Privacy: emails go to your terminal only. The command starts no logging, OpenTelemetry or metrics, and goals and links are counted, never printed.
+
+It can also run against prod (`focus-prod-app-1`), since `example.com` accounts there are tests too, but dev is what it's meant for.
+
 ## Rollback (`rollback.yml`)
 
 `.github/workflows/rollback.yml` (workflow `rollback`) restores a known-good release on dev or prod. It needs **no approval**, so the on-call agent can run it at any hour ([process.md → Human gates](process.md#human-gates)). It can't deploy anything new: the key it uses can only start a release that already passed the checks on that environment. The step-by-step procedure, for people and the on-call agent, is the [rollback runbook](runbooks/rollback.md).
