@@ -2,6 +2,7 @@
 
 import io
 import logging
+import os
 import subprocess
 import sys
 from datetime import timedelta
@@ -392,3 +393,21 @@ def test_ac2_one_real_sigint_at_the_prompt_exits_3_and_deletes_nothing(populated
     assert "Traceback" not in stderr and "Traceback" not in stdout_rest
     assert "Not confirmed: nothing deleted." in stdout_rest
     assert len(emails(populated)) == 3 + len(REAL)
+
+
+def test_bad_setting_prints_only_the_error_type() -> None:
+    """AC: a settings error is reported like any other, with no traceback and no value."""
+    env = {**os.environ, "READINESS_TIMEOUT_SECONDS": "not-a-number-xyz"}
+    env.pop("DATABASE_URL", None)
+    r = subprocess.run(
+        [sys.executable, "-m", "app.cleanup_test_accounts"],
+        cwd=BACKEND,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert r.returncode == 1, r.stderr
+    assert r.stderr.strip() == "Error: ValidationError"
+    assert "Traceback" not in r.stdout + r.stderr
+    assert "not-a-number-xyz" not in r.stdout + r.stderr
