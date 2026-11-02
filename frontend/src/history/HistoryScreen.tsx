@@ -6,6 +6,7 @@ import { HttpArchiveApi, type ArchiveApi } from '../archive/api.ts'
 import { useSettingsState } from '../settings/SettingsContext.ts'
 import { GOAL_MAX_LENGTH } from '../setup/options.ts'
 import { useTagsView } from '../tags/context.ts'
+import AddToCalendar from '../calendar/AddToCalendar.tsx'
 import TagName, { TagDot } from '../tags/TagName.tsx'
 import { sortByFocus } from '../tags/view.ts'
 import { HttpSessionsApi, type SessionEdit, type SessionsApi } from '../sync/api.ts'
@@ -202,8 +203,12 @@ export default function HistoryScreen({
           tag: d.record.tag,
           goal: d.record.goal,
           startedAt: d.record.startedAt,
+          endedAt: d.record.endedAt,
           focusSeconds: d.record.focusSeconds,
+          pausedSeconds: d.record.pausedSeconds,
           status: d.record.status,
+          blocks: d.record.modeConfig.mode === 'pomodoro' ? d.record.modeConfig.blocks : null,
+          blocksCompleted: d.record.blocksCompleted,
           indicator: d.indicator,
           unsaved: d.syncState !== 'synced',
           rejected: d.syncState === 'rejected',
@@ -890,6 +895,7 @@ function SessionRow({
           >
             Edit
           </button>
+          <AddToCalendar session={session} timeZone={timeZone} />
           {session.editRejected && !discarding && (
             <button
               type="button"

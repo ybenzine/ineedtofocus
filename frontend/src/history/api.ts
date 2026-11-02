@@ -28,8 +28,13 @@ export interface HistorySession {
   tag: Tag
   goal: string | null
   startedAt: string
+  endedAt: string
   focusSeconds: number
+  pausedSeconds: number
   status: SessionStatus
+  /** The Pomodoro configuration's blocks; null for the other modes. */
+  blocks: number | null
+  blocksCompleted: number
   indicator: SyncIndicator
   /** True for a session on the device that the server doesn't have yet (not for an edit). */
   unsaved?: boolean
@@ -116,8 +121,17 @@ export function parseHistory(value: unknown): HistoryData | null {
       tag: item.tag,
       goal: typeof item.goal === 'string' ? item.goal : null,
       startedAt: item.started_at,
+      endedAt: typeof item.ended_at === 'string' ? item.ended_at : item.started_at,
       focusSeconds: num(item.focus_seconds),
+      pausedSeconds: num(item.paused_seconds),
       status: item.status as SessionStatus,
+      blocks:
+        item.mode === 'pomodoro' &&
+        isObject(item.mode_config) &&
+        typeof item.mode_config.blocks === 'number'
+          ? item.mode_config.blocks
+          : null,
+      blocksCompleted: num(item.blocks_completed),
       indicator: 'synced',
     })
   }

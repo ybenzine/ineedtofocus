@@ -15,6 +15,10 @@ const synced = (overrides: Partial<HistorySession> = {}): HistorySession => ({
   tag: 'study',
   goal: 'Chapter 4',
   startedAt: '2026-10-21T08:30:00Z',
+  endedAt: '2026-10-21T10:10:00Z',
+  pausedSeconds: 0,
+  blocks: null,
+  blocksCompleted: 0,
   focusSeconds: 3600,
   status: 'ended_early',
   indicator: 'synced',
@@ -93,6 +97,25 @@ describe('HistoryScreen', () => {
     expect(within(rows[1]).getByText('Chapter 4')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'By tag' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: /Focus time by/ })).not.toBeInTheDocument()
+  })
+
+  it('ac14_7 puts Add to calendar on each row, named by its session', async () => {
+    const api = new FakeApi()
+    api.sessions = [
+      synced({ id: 'a', startedAt: '2026-10-21T10:00:00Z', tag: 'work', focusSeconds: 1500 }),
+      synced({ id: 'b', startedAt: '2026-10-21T08:00:00Z', tag: 'study', focusSeconds: 600 }),
+    ]
+    renderScreen(api)
+    expect(
+      await screen.findByRole('button', {
+        name: /^Add to calendar: Work, 25 min on Oct 21 at 10:00\s?AM$/,
+      }),
+    ).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', {
+        name: /^Add to calendar: Study, 10 min on Oct 21 at 8:00\s?AM$/,
+      }),
+    ).toBeInTheDocument()
   })
 
   it('ac10_3 draws one bar per day for a week and one per month for All time', async () => {

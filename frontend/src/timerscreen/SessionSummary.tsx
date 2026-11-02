@@ -7,6 +7,8 @@ import { formatDuration } from './format.ts'
 
 import { HISTORY_PATH } from '../nav/screens.ts'
 import { AuthLink } from '../anonymous/AuthLink.tsx'
+import AddToCalendar from '../calendar/AddToCalendar.tsx'
+import { recordToCalendarSession } from '../calendar/session.ts'
 
 export { HISTORY_PATH }
 
@@ -91,6 +93,8 @@ export default function SessionSummary({
                 : ''}
             </p>
           )}
+          {/* Signed-in only (AC14.7): a session without an account has no calendar control. */}
+          {!savePrompt && <AddToCalendar session={recordToCalendarSession(outcome.record)} />}
           {savePrompt && (
             <p className="summary-prompt">
               <AuthLink form="signup" origin="prompt">

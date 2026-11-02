@@ -37,7 +37,32 @@ export interface Settings {
   theme: ThemeSetting
   /** The last custom Countdown length (AC2.7, #409); null = none. */
   countdown_recent_minutes: number | null
+  /** Calendar export (F14, AC12.8). The Settings section is #382; #383 reads the first three. */
+  calendar_title_template: string
+  calendar_include_goal: boolean
+  calendar_include_description: boolean
+  /** Tag identifiers left out of the subscription feed. */
+  calendar_excluded_tags: string[]
+  calendar_min_minutes: CalendarMinMinutes
+  calendar_name: string
 }
+
+/** The calendar settings: for signed-in users only, never kept in a guest's copy. */
+export const CALENDAR_KEYS = [
+  'calendar_title_template',
+  'calendar_include_goal',
+  'calendar_include_description',
+  'calendar_excluded_tags',
+  'calendar_min_minutes',
+  'calendar_name',
+] as const satisfies readonly (keyof Settings)[]
+
+/** Length in code points, as the server counts. */
+const chars = (value: string): number => Array.from(value).length
+
+export type CalendarMinMinutes = 0 | 5 | 10 | 15
+export const CALENDAR_MIN_MINUTES: readonly CalendarMinMinutes[] = [0, 5, 10, 15]
+export const DEFAULT_CALENDAR_TITLE = '{tag}: {goal}'
 
 export type SettingsPatch = Partial<Settings>
 
@@ -51,6 +76,12 @@ export const SETTINGS_KEYS = [
   'last_tag',
   'theme',
   'countdown_recent_minutes',
+  'calendar_title_template',
+  'calendar_include_goal',
+  'calendar_include_description',
+  'calendar_excluded_tags',
+  'calendar_min_minutes',
+  'calendar_name',
 ] as const satisfies readonly (keyof Settings)[]
 
 /** Defaults for a new user (decision log 2026-10-21, AC12.x). */
@@ -64,6 +95,12 @@ export const DEFAULT_SETTINGS: Settings = {
   last_tag: null,
   theme: 'system',
   countdown_recent_minutes: null,
+  calendar_title_template: DEFAULT_CALENDAR_TITLE,
+  calendar_include_goal: true,
+  calendar_include_description: true,
+  calendar_excluded_tags: [],
+  calendar_min_minutes: 0,
+  calendar_name: 'I Need To Focus',
 }
 
 export type SettingsErrorKind = 'network' | 'unauthorized' | 'invalid' | 'server'
@@ -130,6 +167,35 @@ export function parseSettings(value: unknown): Settings {
       ? (value.theme as ThemeSetting)
       : d.theme,
     countdown_recent_minutes: recentCustomMinutes(value.countdown_recent_minutes),
+    calendar_title_template:
+      typeof value.calendar_title_template === 'string' &&
+      chars(value.calendar_title_template) <= 120
+        ? value.calendar_title_template
+        : d.calendar_title_template,
+    calendar_include_goal:
+      typeof value.calendar_include_goal === 'boolean'
+        ? value.calendar_include_goal
+        : d.calendar_include_goal,
+    calendar_include_description:
+      typeof value.calendar_include_description === 'boolean'
+        ? value.calendar_include_description
+        : d.calendar_include_description,
+    calendar_excluded_tags:
+      Array.isArray(value.calendar_excluded_tags) &&
+      value.calendar_excluded_tags.every((t) => typeof t === 'string')
+        ? (value.calendar_excluded_tags as string[])
+        : d.calendar_excluded_tags,
+    calendar_min_minutes: (CALENDAR_MIN_MINUTES as readonly unknown[]).includes(
+      value.calendar_min_minutes,
+    )
+      ? (value.calendar_min_minutes as CalendarMinMinutes)
+      : d.calendar_min_minutes,
+    calendar_name:
+      typeof value.calendar_name === 'string' &&
+      chars(value.calendar_name) >= 1 &&
+      chars(value.calendar_name) <= 60
+        ? value.calendar_name
+        : d.calendar_name,
   }
 }
 
