@@ -37,8 +37,8 @@ import AppShell from './nav/AppShell.tsx'
 import { pathForScreen, screenFromPath, type ScreenId } from './nav/screens.ts'
 import { httpSettingsApi } from './settings/api.ts'
 import {
-  SettingsAlertVolumeStore,
-  SettingsBackgroundVolumeStore,
+  DeviceAlertVolumeStore,
+  DeviceBackgroundVolumeStore,
   SettingsPreferencesStore,
 } from './settings/adapters.ts'
 import { SettingsContext, useSettingsState } from './settings/SettingsContext.ts'
@@ -46,6 +46,8 @@ import SettingsScreen from './settings/SettingsScreen.tsx'
 import { settingsDataHook } from './settings/hook.ts'
 import { heldRecordHook } from './timer/hook.ts'
 import { SettingsStore } from './settings/store.ts'
+import { SoundLevelsStore } from './settings/soundLevels.ts'
+import { SoundLevelsContext } from './settings/SoundLevelsContext.ts'
 import { httpTagsApi } from './tags/api.ts'
 import { TagsContext } from './tags/context.ts'
 import { TagsStore } from './tags/store.ts'
@@ -70,6 +72,8 @@ export interface AppProps {
   controller?: TimerController
   /** Settings with their device cache and sync; the app uses the Settings API by default. */
   settings?: SettingsStore
+  /** The device's sound levels (#336); the app uses localStorage by default. */
+  levels?: SoundLevelsStore
   /** The account's custom tags; the app uses the Tags API by default (not with a given `settings`). */
   tags?: TagsStore
   /** Overrides the settings-backed last-used Pomodoro config and tag. */
@@ -111,13 +115,18 @@ export const SETTINGS_WAIT_MS = 1500
  * in), bound to that user, so nothing of theirs outlives them or reaches the next account.
  */
 export default function App(props: AppProps) {
-  const { settings: given, tags: givenTags } = props
+  const { settings: given, tags: givenTags, levels: givenLevels } = props
   // Expired at mount (start-up with a timer running): the store is bound to the expired user
   // so it shows their cached settings, but `currentOwner()` is null, so it never fetches,
   // sends or rewrites the cache.
   const account = useAccount()
   // Without an account (#331) settings are the device's own, under their own key, and never sent.
   const anonymous = useAnonymous()
+  // The sound levels belong to the device, not to an account or to use without one (#336).
+  const levels = useMemo(
+    () => givenLevels ?? new SoundLevelsStore(window.localStorage),
+    [givenLevels],
+  )
   const [mountOwner] = useState(() => (account?.expired ? account.user.id : signedInUserId()))
   const settings = useMemo(
     () =>
@@ -127,6 +136,7 @@ export default function App(props: AppProps) {
             storage: window.localStorage,
             key: ANON_SETTINGS_KEY,
             lock: ANON_SETTINGS_LOCK,
+            onLoaded: (values) => levels.seed(values),
           })
         : new SettingsStore({
             api: httpSettingsApi,
@@ -134,8 +144,9 @@ export default function App(props: AppProps) {
             owner: mountOwner,
             currentOwner: signedInUserId,
             onUnauthorized: notifySessionExpired,
+            onLoaded: (values) => levels.seed(values),
           })),
-    [given, mountOwner, anonymous],
+    [given, mountOwner, anonymous, levels],
   )
   // The account's custom tags (#401): none without an account, and no request. A test that gives
   // its own settings gets a store with no API unless it gives `tags` too.
@@ -166,6 +177,7 @@ export default function App(props: AppProps) {
   // A layout effect, so it is in place before any child's effect calls `settings.refresh()`.
   useLayoutEffect(() => settings.onRefresh(() => tags.refresh()), [settings, tags])
   useEffect(() => tags.start(), [tags])
+  useEffect(() => levels.start(), [levels])
   // Sign-out sends and counts the settings edits not yet accepted (#129).
   useEffect(() => {
     if (anonymous) return
@@ -173,9 +185,11 @@ export default function App(props: AppProps) {
   }, [settings, anonymous])
   return (
     <SettingsContext.Provider value={settings}>
-      <TagsContext.Provider value={tags}>
-        <AppBody {...props} settings={settings} />
-      </TagsContext.Provider>
+      <SoundLevelsContext.Provider value={levels}>
+        <TagsContext.Provider value={tags}>
+          <AppBody {...props} settings={settings} levels={levels} />
+        </TagsContext.Provider>
+      </SoundLevelsContext.Provider>
     </SettingsContext.Provider>
   )
 }
@@ -184,6 +198,7 @@ function AppBody({
   services: given,
   controller,
   settings,
+  levels,
   preferences,
   alerts,
   rain,
@@ -191,7 +206,7 @@ function AppBody({
   youtube: youtubeProp,
   pendingRetryMs = PENDING_RETRY_MS,
   parkedDrainMs = PARKED_DRAIN_MS,
-}: AppProps & { settings: SettingsStore }) {
+}: AppProps & { settings: SettingsStore; levels: SoundLevelsStore }) {
   const anonymous = useAnonymous()
   // Without an account the timer keeps its own slot and holds a finished session in memory; the
   // account's services (session store, sync) are never used (#331).
@@ -209,14 +224,13 @@ function AppBody({
     [preferences, settings],
   )
   const player = useMemo(
-    () => alerts ?? new AlertPlayer({ volume: new SettingsAlertVolumeStore(settings) }),
-    [alerts, settings],
+    () => alerts ?? new AlertPlayer({ volume: new DeviceAlertVolumeStore(levels) }),
+    [alerts, levels],
   )
   const rainPlayer = useMemo(
     () =>
-      rain ??
-      new RainPlayer({ alerts: player, volume: new SettingsBackgroundVolumeStore(settings) }),
-    [rain, player, settings],
+      rain ?? new RainPlayer({ alerts: player, volume: new DeviceBackgroundVolumeStore(levels) }),
+    [rain, player, levels],
   )
   const sourceStore = useMemo(
     () =>

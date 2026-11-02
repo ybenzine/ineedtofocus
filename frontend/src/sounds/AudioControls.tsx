@@ -4,7 +4,7 @@
 // to switch to Rain (AC8.7).
 
 import { useEffect, useId } from 'react'
-import { useSettingsState } from '../settings/SettingsContext.ts'
+import { useSoundLevels } from '../settings/SoundLevelsContext.ts'
 import type { AudioSource } from '../setup/options.ts'
 import type { RainPlayer } from './rain.ts'
 import { useOnline } from './useOnline.ts'
@@ -50,8 +50,7 @@ export default function AudioControls({
   const online = useOnline()
   const volumeId = useId()
   // The same value the Settings screen edits: moving one moves the other.
-  const { values } = useSettingsState()
-  const volume = values.background_volume
+  const volume = useSoundLevels().background
   const shouldPlay = source === 'rain' && !paused
 
   useEffect(() => {

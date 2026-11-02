@@ -68,7 +68,7 @@ function openTab(api: SettingsApi) {
 }
 
 describe("two tabs never drop each other's pending edits (#129)", () => {
-  it("keeps tab A's offline week start when tab B changes the background volume, and sends both", async () => {
+  it("keeps tab A's offline week start when tab B changes the calendar minimum, and sends both", async () => {
     const { server, api } = fakeServer()
     const a = openTab(api)
     const b = openTab(api) // opened before A's edit: its own copy knows nothing of it
@@ -79,11 +79,11 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
     a.dispose() // tab A is closed before the connection returns
 
     server.online = true
-    b.update({ background_volume: 70 })
+    b.update({ calendar_min_minutes: 10 })
     await b.flush()
 
     expect(server.value.week_start_day).toBe(3)
-    expect(server.value.background_volume).toBe(70)
+    expect(server.value.calendar_min_minutes).toBe(10)
     expect(b.values.week_start_day).toBe(3)
     expect(b.hasPending()).toBe(false)
     expect(stored().pending).toEqual({})
@@ -95,13 +95,13 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
     const b = openTab(api)
     server.online = false
     a.update({ week_start_day: 3 })
-    b.update({ background_volume: 70 })
+    b.update({ calendar_min_minutes: 10 })
     a.dispose()
-    expect(stored().pending).toEqual({ week_start_day: 3, background_volume: 70 })
+    expect(stored().pending).toEqual({ week_start_day: 3, calendar_min_minutes: 10 })
 
     server.online = true
     await b.refresh()
-    expect(server.value).toMatchObject({ week_start_day: 3, background_volume: 70 })
+    expect(server.value).toMatchObject({ week_start_day: 3, calendar_min_minutes: 10 })
   })
 
   it('includes the theme in the merge', async () => {
@@ -110,12 +110,12 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
     const b = openTab(api)
     server.online = false
     a.update({ theme: 'light' })
-    b.update({ alert_volume: 10 })
+    b.update({ countdown_recent_minutes: 110 })
     await b.flush() // the send fails: offline
-    expect(stored().pending).toEqual({ theme: 'light', alert_volume: 10 })
+    expect(stored().pending).toEqual({ theme: 'light', countdown_recent_minutes: 110 })
     server.online = true
     await b.flush()
-    expect(server.value).toMatchObject({ theme: 'light', alert_volume: 10 })
+    expect(server.value).toMatchObject({ theme: 'light', countdown_recent_minutes: 110 })
   })
 
   it('lets the later edit win when both tabs edit the same field', async () => {
@@ -146,15 +146,15 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
       server.value = { ...server.value, ...patch }
       return server.value
     })
-    a.update({ alert_volume: 20 }) // in flight
+    a.update({ countdown_recent_minutes: 120 }) // in flight
     server.online = false
-    b.update({ alert_volume: 30 }) // later edit, other tab, kept pending
+    b.update({ countdown_recent_minutes: 130 }) // later edit, other tab, kept pending
     await b.flush()
     server.online = true
     release()
     await a.flush()
     // The reply to 20 did not clear the later 30: it was sent next.
-    expect(server.value.alert_volume).toBe(30)
+    expect(server.value.countdown_recent_minutes).toBe(130)
     expect(stored().pending).toEqual({})
   })
 
@@ -167,12 +167,12 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
     a.update({ week_start_day: 3 })
     await a.flush()
     expect(stored().pending).toEqual({ week_start_day: 3 })
-    b.update({ background_volume: 70 })
+    b.update({ calendar_min_minutes: 10 })
     await b.flush() // the send fails: offline
-    expect(stored().pending).toEqual({ week_start_day: 3, background_volume: 70 })
+    expect(stored().pending).toEqual({ week_start_day: 3, calendar_min_minutes: 10 })
     server.online = true
     await b.flush()
-    expect(server.value).toMatchObject({ week_start_day: 3, background_volume: 70 })
+    expect(server.value).toMatchObject({ week_start_day: 3, calendar_min_minutes: 10 })
     expect(held).toContain(SETTINGS_LOCK) // the accepted send is applied under the lock
   })
 
@@ -191,11 +191,11 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
     await a.flush()
     expect(server.value.week_start_day).toBe(5)
 
-    b.update({ background_volume: 70 })
+    b.update({ calendar_min_minutes: 10 })
     await b.flush()
 
-    expect(patches.at(-1)).toEqual({ background_volume: 70 })
-    expect(server.value).toMatchObject({ week_start_day: 5, background_volume: 70 })
+    expect(patches.at(-1)).toEqual({ calendar_min_minutes: 10 })
+    expect(server.value).toMatchObject({ week_start_day: 5, calendar_min_minutes: 10 })
     expect(b.values.week_start_day).toBe(5)
   })
 
@@ -217,14 +217,14 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
     const a = openTab(api)
     const b = openTab(api)
     a.update({ week_start_day: 3 })
-    b.update({ background_volume: 70 }) // b never saw a's edit
-    expect(stored().pending).toEqual({ week_start_day: 3, background_volume: 70 })
+    b.update({ calendar_min_minutes: 10 }) // b never saw a's edit
+    expect(stored().pending).toEqual({ week_start_day: 3, calendar_min_minutes: 10 })
     b.update({ week_start_day: 5 })
-    expect(stored().pending).toEqual({ week_start_day: 5, background_volume: 70 })
+    expect(stored().pending).toEqual({ week_start_day: 5, calendar_min_minutes: 10 })
     await Promise.all([a.flush(), b.flush()]) // the sends fail: offline
     server.online = true
     await a.flush()
-    expect(server.value).toMatchObject({ week_start_day: 5, background_volume: 70 })
+    expect(server.value).toMatchObject({ week_start_day: 5, calendar_min_minutes: 10 })
   })
 
   it('still merges, and keeps counting, when the lock request is refused', async () => {
@@ -237,11 +237,11 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
     const a = openTab(api)
     const b = openTab(api)
     server.online = false
-    b.update({ alert_volume: 10 })
+    b.update({ countdown_recent_minutes: 110 })
     await b.flush()
     a.update({ week_start_day: 3 })
     await a.flush()
-    expect(stored().pending).toEqual({ alert_volume: 10, week_start_day: 3 })
+    expect(stored().pending).toEqual({ countdown_recent_minutes: 110, week_start_day: 3 })
     // Not stuck "writing": this tab still sees the other tab's edit.
     expect(b.countUnsynced()).toBe(2)
   })
@@ -252,7 +252,7 @@ describe("two tabs never drop each other's pending edits (#129)", () => {
       JSON.stringify({
         owner: 'someone-else',
         values: DEFAULT_SETTINGS,
-        pending: { alert_volume: 1 },
+        pending: { countdown_recent_minutes: 101 },
       }),
     )
     const { api } = fakeServer()
@@ -347,12 +347,12 @@ describe("an edit survives a parallel tab's locked merge (#279)", () => {
       owner: 'u1',
       retryBaseMs: 3_600_000,
     })
-    b.update({ background_volume: 70 })
+    b.update({ calendar_min_minutes: 10 })
     await b.flush()
     await settle()
     expect(stored().pending).toHaveProperty('week_start_day', 5)
     expect(stored().values.week_start_day).toBe(5)
-    expect(server.value.background_volume).toBe(70)
+    expect(server.value.calendar_min_minutes).toBe(10)
   })
 
   it("sends A's edit when A has a send in flight and B overwrites the edit", async () => {
@@ -370,7 +370,7 @@ describe("an edit survives a parallel tab's locked merge (#279)", () => {
       owner: 'u1',
       retryBaseMs: 3_600_000,
     })
-    a.update({ alert_volume: 20 }) // A's send is in flight
+    a.update({ countdown_recent_minutes: 120 }) // A's send is in flight
     await settle()
     const race = racingStorage(() => a.update({ week_start_day: 5 }))
     const b = new SettingsStore({
@@ -386,7 +386,7 @@ describe("an edit survives a parallel tab's locked merge (#279)", () => {
       owner: 'u1',
       retryBaseMs: 3_600_000,
     })
-    b.update({ background_volume: 70 })
+    b.update({ calendar_min_minutes: 10 })
     await b.flush()
     await settle()
     release()
@@ -435,13 +435,13 @@ describe("an edit survives a parallel tab's locked merge (#279)", () => {
       owner: 'u1',
       retryBaseMs: 3_600_000,
     })
-    b.update({ background_volume: 70 })
+    b.update({ calendar_min_minutes: 10 })
     await b.flush()
     await settle()
     expect(stored().values.week_start_day).toBe(6)
     expect(stored().pending).toHaveProperty('week_start_day', 6)
     expect(a.values.week_start_day).toBe(6)
-    expect(server.value.background_volume).toBe(70)
+    expect(server.value.calendar_min_minutes).toBe(10)
   })
 
   it("sends the newest value when A re-edits a field with a send in flight inside B's merge (#288)", async () => {
@@ -459,9 +459,9 @@ describe("an edit survives a parallel tab's locked merge (#279)", () => {
       owner: 'u1',
       retryBaseMs: 3_600_000,
     })
-    a.update({ alert_volume: 20 }) // in flight; pending alert_volume 20
+    a.update({ countdown_recent_minutes: 120 }) // in flight; pending countdown_recent_minutes 20
     await settle()
-    const race = racingStorage(() => a.update({ alert_volume: 60 }))
+    const race = racingStorage(() => a.update({ countdown_recent_minutes: 160 }))
     const b = new SettingsStore({
       api: {
         ...api,
@@ -475,14 +475,14 @@ describe("an edit survives a parallel tab's locked merge (#279)", () => {
       owner: 'u1',
       retryBaseMs: 3_600_000,
     })
-    b.update({ background_volume: 70 })
+    b.update({ calendar_min_minutes: 10 })
     await b.flush()
     await settle()
     release()
     await a.flush()
     await settle()
-    expect(server.value.alert_volume).toBe(60)
-    expect(a.values.alert_volume).toBe(60)
-    expect(stored().values.alert_volume).toBe(60)
+    expect(server.value.countdown_recent_minutes).toBe(160)
+    expect(a.values.countdown_recent_minutes).toBe(160)
+    expect(stored().values.countdown_recent_minutes).toBe(160)
   })
 })

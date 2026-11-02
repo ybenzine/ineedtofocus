@@ -1,5 +1,5 @@
 // Backs the setup screen's `PreferencesStore` (#14) and the alert player's `AlertVolumeStore`
-// (#16) and the rain player's `BackgroundVolumeStore` (#17) with the settings store, so both follow the Settings API and its offline cache.
+// (#16) and the rain player's `BackgroundVolumeStore` (#17), both device settings (#336).
 
 import { clampVolume, type AlertVolumeStore } from '../sounds/alerts.ts'
 import { clampBackgroundVolume, type BackgroundVolumeStore } from '../sounds/rain.ts'
@@ -12,6 +12,7 @@ import { recentCustomMinutes } from '../setup/options.ts'
 import { validateConfig, type PomodoroConfig } from '../timer/index.ts'
 import type { ApiPomodoroConfig } from './api.ts'
 import type { SettingsStore } from './store.ts'
+import type { SoundLevelsStore } from './soundLevels.ts'
 
 export function toApiPomodoro(config: PomodoroConfig): ApiPomodoroConfig {
   return {
@@ -68,38 +69,39 @@ export class SettingsPreferencesStore implements PreferencesStore {
   }
 }
 
-export class SettingsAlertVolumeStore implements AlertVolumeStore {
-  readonly #settings: SettingsStore
+/** The alert volume is a device setting (#336): it never goes through the settings sync. */
+export class DeviceAlertVolumeStore implements AlertVolumeStore {
+  readonly #levels: SoundLevelsStore
 
-  constructor(settings: SettingsStore) {
-    this.#settings = settings
+  constructor(levels: SoundLevelsStore) {
+    this.#levels = levels
   }
 
   load(): number {
-    return this.#settings.values.alert_volume
+    return this.#levels.alert
   }
 
   save(volume: number): void {
-    this.#settings.update({ alert_volume: clampVolume(volume) })
+    this.#levels.set('alert', clampVolume(volume))
   }
 }
 
-export class SettingsBackgroundVolumeStore implements BackgroundVolumeStore {
-  readonly #settings: SettingsStore
+export class DeviceBackgroundVolumeStore implements BackgroundVolumeStore {
+  readonly #levels: SoundLevelsStore
 
-  constructor(settings: SettingsStore) {
-    this.#settings = settings
+  constructor(levels: SoundLevelsStore) {
+    this.#levels = levels
   }
 
   load(): number {
-    return this.#settings.values.background_volume
+    return this.#levels.background
   }
 
   save(volume: number): void {
-    this.#settings.update({ background_volume: clampBackgroundVolume(volume) })
+    this.#levels.set('background', clampBackgroundVolume(volume))
   }
 
   subscribe(listener: () => void): () => void {
-    return this.#settings.subscribe(listener)
+    return this.#levels.subscribe(listener)
   }
 }

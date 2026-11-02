@@ -102,8 +102,15 @@ class PomodoroConfig(BaseModel):
 
 class SettingsOut(BaseModel):
     week_start_day: int = Field(description="0 = Sunday ... 6 = Saturday")
-    alert_volume: int = Field(description="0-100")
-    background_volume: int = Field(description="0-100")
+    alert_volume: int = Field(
+        description="Deprecated (#336): the sound levels are device settings now and the "
+        "frontend no longer sends or reads them, except to seed a device once. 0-100.",
+        json_schema_extra={"deprecated": True},
+    )
+    background_volume: int = Field(
+        description="Deprecated (#336), like `alert_volume`. 0-100.",
+        json_schema_extra={"deprecated": True},
+    )
     keep_screen_awake: bool
     pause_audio_on_breaks: bool = Field(
         description="Pause background audio during Pomodoro breaks (AC12.6)"
@@ -148,8 +155,24 @@ class SettingsPatch(BaseModel):
     model_config = ConfigDict(extra="forbid", json_schema_extra=_drop_defaults)
 
     week_start_day: Annotated[StrictInt, Field(ge=0, le=6)] = 0
-    alert_volume: Annotated[StrictInt, Field(ge=0, le=100)] = 80
-    background_volume: Annotated[StrictInt, Field(ge=0, le=100)] = 50
+    alert_volume: Annotated[
+        StrictInt,
+        Field(
+            ge=0,
+            le=100,
+            description="Deprecated (#336): still accepted so an older client works.",
+            json_schema_extra={"deprecated": True},
+        ),
+    ] = 80
+    background_volume: Annotated[
+        StrictInt,
+        Field(
+            ge=0,
+            le=100,
+            description="Deprecated (#336), like `alert_volume`.",
+            json_schema_extra={"deprecated": True},
+        ),
+    ] = 50
     keep_screen_awake: StrictBool = False
     pause_audio_on_breaks: StrictBool = True
     default_reminder_minutes: ReminderMinutes | None = None

@@ -47,7 +47,7 @@ describe('App and the tag list', () => {
         patch: vi.fn().mockRejectedValue(new Error('down')),
       },
     })
-    settings.update({ alert_volume: 10 })
+    settings.update({ week_start_day: 2 })
     render(
       <App
         controller={controller()}

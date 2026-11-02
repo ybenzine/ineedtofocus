@@ -3,7 +3,7 @@
 // video that doesn't work only shows a message; the session is unaffected (AC8.5).
 
 import { useId, useState, type FormEvent } from 'react'
-import { useSettingsStore, useSettingsState } from '../settings/SettingsContext.ts'
+import { useSoundLevels, useSoundLevelsStore } from '../settings/SoundLevelsContext.ts'
 import { getDefaultLinkStore, type YoutubeLinkStore } from './audioSource.ts'
 import YoutubePlayer from './youtubePlayer.tsx'
 import { loadYoutubeApi, type LoadYoutubeApi } from './ytApi.ts'
@@ -32,8 +32,8 @@ export default function YoutubeControls({
   const inputId = useId()
   const errorId = useId()
   const volumeId = useId()
-  const settings = useSettingsStore()
-  const volume = useSettingsState().values.background_volume
+  const levels = useSoundLevelsStore()
+  const volume = useSoundLevels().background
   const [link, setLink] = useState<YoutubeLink | null>(() => {
     const stored = linkStore.load()
     return stored === null ? null : parseYoutubeLink(stored)
@@ -92,9 +92,7 @@ export default function YoutubeControls({
               min={0}
               max={100}
               value={volume}
-              onChange={(event) =>
-                settings.update({ background_volume: Number(event.target.value) })
-              }
+              onChange={(event) => levels.set('background', Number(event.target.value))}
             />
           </div>
         </>

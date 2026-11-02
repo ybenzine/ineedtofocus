@@ -62,6 +62,12 @@ export interface SettingsStoreOptions {
   key?: string
   /** The Web Lock that guards the device copy. */
   lock?: string
+  /**
+   * Told the settings as soon as a real copy of them is known: the cached copy at construction
+   * or a `GET /api/settings` answer, never the defaults shown before. The sound levels (device
+   * settings, #336) seed from it once.
+   */
+  onLoaded?: (values: Settings) => void
 }
 
 const MAX_RETRY_MS = 60_000
@@ -90,6 +96,7 @@ export class SettingsStore {
   readonly #retryBaseMs: number
   readonly #key: string
   readonly #lock: string
+  readonly #onLoaded: ((values: Settings) => void) | undefined
   #abort = new AbortController()
   #state: SettingsState
   #disposed = false
@@ -114,7 +121,10 @@ export class SettingsStore {
     this.#retryBaseMs = options.retryBaseMs ?? 2000
     this.#key = options.key ?? SETTINGS_KEY
     this.#lock = options.lock ?? SETTINGS_LOCK
-    this.#state = this.#read()
+    this.#onLoaded = options.onLoaded
+    const stored = this.#readStored()
+    this.#state = stored ?? { values: DEFAULT_SETTINGS, pending: {}, stalled: false }
+    if (stored) this.#onLoaded?.(stored.values)
   }
 
   /** False once disposed or once a different user is signed in. */
@@ -125,10 +135,6 @@ export class SettingsStore {
       return false
     }
     return true
-  }
-
-  #read(): SettingsState {
-    return this.#readStored() ?? { values: DEFAULT_SETTINGS, pending: {}, stalled: false }
   }
 
   /** The cache as stored now, or null if it is missing, unreadable or another user's. */
@@ -349,7 +355,7 @@ export class SettingsStore {
         const base = this.#readStored() ?? this.#state
         const lost: Record<string, unknown> = {}
         for (const [key, value] of Object.entries(changed)) {
-          const k = key as keyof Settings
+          const k = key as keyof SettingsPatch
           const hadPending = key in prior.pending
           const unchanged =
             sameValue(base.values[k], prior.values[k]) &&
@@ -476,6 +482,7 @@ export class SettingsStore {
     const revision = this.#revision
     try {
       const server = await api.get(this.#abort.signal)
+      if (this.#live()) this.#onLoaded?.(server)
       // An edit or an accepted send happened meanwhile: this answer is older than the device.
       if (revision !== this.#revision) return
       this.#commit((state) => ({ values: { ...server, ...state.pending } }))

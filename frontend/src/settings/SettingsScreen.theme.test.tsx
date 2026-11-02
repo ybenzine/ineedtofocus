@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { SettingsAlertVolumeStore } from './adapters.ts'
+import { DeviceAlertVolumeStore } from './adapters.ts'
+import { SoundLevelsStore } from './soundLevels.ts'
 import { AlertPlayer } from '../sounds/alerts.ts'
 import { SettingsContext } from './SettingsContext.ts'
 import SettingsScreen from './SettingsScreen.tsx'
@@ -9,7 +10,7 @@ import { SettingsStore } from './store.ts'
 
 function renderScreen(store = new SettingsStore()) {
   const player = new AlertPlayer({
-    volume: new SettingsAlertVolumeStore(store),
+    volume: new DeviceAlertVolumeStore(new SoundLevelsStore()),
     createContext: () => ({}) as unknown as AudioContext,
   })
   render(
