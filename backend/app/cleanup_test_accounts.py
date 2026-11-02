@@ -36,6 +36,7 @@ TEST_DOMAIN = "@example.com"
 DEFAULT_OLDER_THAN = "2h"
 
 _UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+MAX_OLDER_THAN_SECONDS = 100 * 365 * 86400
 _DURATION = re.compile(r"(\d+)([smhdw])")
 
 EXIT_OK = 0
@@ -50,7 +51,21 @@ def parse_duration(value: str) -> timedelta:
     m = _DURATION.fullmatch(value.strip().lower())
     if m is None:
         raise argparse.ArgumentTypeError(f"not a duration: {value!r} (use e.g. 30m, 2h, 1d, or 0)")
-    return timedelta(seconds=int(m.group(1)) * _UNITS[m.group(2)])
+    seconds = int(m.group(1)) * _UNITS[m.group(2)]
+    if seconds > MAX_OLDER_THAN_SECONDS:
+        raise argparse.ArgumentTypeError(f"too long: {value!r} (at most 100 years)")
+    return timedelta(seconds=seconds)
+
+
+def parse_glob(value: str) -> str:
+    if not value.strip():
+        raise argparse.ArgumentTypeError("--match must not be empty (omit it to match everything)")
+    return value
+
+
+def printable(text: str) -> str:
+    """Escape control characters so an email can't garble or drive the operator's terminal."""
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in text)
 
 
 @dataclass(frozen=True)
@@ -131,7 +146,7 @@ def render_table(accounts: Sequence[Account]) -> str:
     headers = ("Email", "Created (UTC)", "Sessions", "Tags", "Links")
     rows = [
         (
-            a.email,
+            printable(a.email),
             a.created_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M"),
             str(a.sessions),
             str(a.tags),
@@ -183,7 +198,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="python -m app.cleanup_test_accounts",
         description="List (default) or delete test accounts: emails ending in @example.com.",
     )
-    p.add_argument("--match", metavar="GLOB", help="only emails whose part before @ matches")
+    p.add_argument(
+        "--match", metavar="GLOB", type=parse_glob, help="only emails whose part before @ matches"
+    )
     p.add_argument(
         "--older-than",
         metavar="DURATION",
@@ -215,12 +232,18 @@ async def run(
     if not args.yes:
         try:
             answer = ask(f"Type {len(accounts)} to delete these accounts and all their data: ")
-        except EOFError:
+        except (EOFError, KeyboardInterrupt):
             answer = ""
         if answer.strip() != str(len(accounts)):
             print("Not confirmed: nothing deleted.", file=out)
             return EXIT_DECLINED
     removed = await delete_accounts(engine, [a.id for a in accounts])
+    if removed["users"] != len(accounts):
+        print(
+            f"Warning: you confirmed {len(accounts)} account(s) but {removed['users']} "
+            "were deleted (the rest changed or went in the meantime).",
+            file=out,
+        )
     print("Deleted:", file=out)
     for table, n in removed.items():
         print(f"  {table}: {n}", file=out)
@@ -246,6 +269,9 @@ def main(
 
     try:
         return asyncio.run(go())
+    except KeyboardInterrupt:
+        print("Interrupted: nothing more was changed.", file=sys.stderr)
+        return EXIT_DECLINED
     except Exception as exc:  # type only: a message could carry a URL or an email
         print(f"Error: {type(exc).__name__}", file=sys.stderr)
         return EXIT_ERROR

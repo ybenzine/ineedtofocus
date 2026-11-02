@@ -16,7 +16,13 @@ from tests.integration.test_sessions import _query, make_session
 
 pytestmark = pytest.mark.integration
 
-REAL = ["user@example.com.evil.test", "user@notexample.com", "real@gmail.com", "x@sub.example.com"]
+REAL = [
+    "user@example.com.evil.test",
+    "user@notexample.com",
+    "real@gmail.com",
+    "x@sub.example.com",
+    "u@ex\u0430mple.com",
+]  # Cyrillic a
 
 
 def seed(make_client: MakeClient, email: str, age: str = "3 hours") -> None:
@@ -180,7 +186,7 @@ def test_ac4_eof_at_the_prompt_declines(populated: str) -> None:
 
 
 def test_ac4_typing_the_count_deletes_and_cascades_to_every_table(populated: str) -> None:
-    assert all(n == 7 for n in total_children(populated).values())
+    assert all(n == 3 + len(REAL) for n in total_children(populated).values())
     code, out = cleanup(populated, "--delete", answer="3")
     assert code == 0
     assert emails(populated) == sorted(REAL)
@@ -262,7 +268,87 @@ def test_ac6_nothing_is_logged_and_goals_and_links_are_not_printed(
     assert not [r for r in caplog.records if r.name.startswith("app")]
 
 
-def test_ac6_does_not_start_telemetry() -> None:
-    src = (BACKEND / "app" / "cleanup_test_accounts.py").read_text()
-    assert "app.telemetry" not in src
-    assert "import logging" not in src
+def test_ac6_running_the_module_loads_no_opentelemetry(populated: str) -> None:
+    import os
+
+    code = (
+        "import io, sys\n"
+        "import app.cleanup_test_accounts as m\n"
+        "rc = m.main(['--older-than', '0'], out=io.StringIO())\n"
+        "bad = [k for k in sys.modules if k.startswith('opentelemetry')]\n"
+        "sys.exit(rc or (9 if bad else 0))\n"
+    )
+    r = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=BACKEND,
+        env={**os.environ, "DATABASE_URL": populated},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert r.returncode == 0, (r.returncode, r.stderr)
+
+
+def test_empty_match_is_rejected_with_exit_2(populated: str) -> None:
+    for glob in ["", "  "]:
+        with pytest.raises(SystemExit) as e:
+            cleanup(populated, "--delete", "--yes", "--match", glob)
+        assert e.value.code == 2
+    assert len(emails(populated)) == 3 + len(REAL)
+
+
+def test_huge_older_than_is_rejected_with_exit_2(populated: str) -> None:
+    for value in ["99999999999w", "999999999999999999999d"]:
+        with pytest.raises(SystemExit) as e:
+            cleanup(populated, "--older-than", value)
+        assert e.value.code == 2
+
+
+def test_ctrl_c_at_the_prompt_declines_without_a_traceback(populated: str) -> None:
+    def ask(_: str) -> str:
+        raise KeyboardInterrupt
+
+    out = io.StringIO()
+    code = cta.main(["--delete"], database_url=populated, ask=ask, out=out)
+    assert code == 3 and "nothing deleted" in out.getvalue()
+    assert len(emails(populated)) == 3 + len(REAL)
+
+
+def test_control_characters_in_an_email_are_escaped(populated: str) -> None:
+    run(
+        _exec(
+            populated,
+            "UPDATE users SET email = E'x\\x1b[2J\\ny@example.com' WHERE email LIKE 'e2e-1@%'",
+        )
+    )
+    _, out = cleanup(populated)
+    assert "\x1b" not in out and "\r" not in out
+    assert "x\\x1b[2J\\ny@example.com" in out
+
+
+def test_fewer_deleted_than_confirmed_prints_a_warning(populated: str) -> None:
+    import threading
+
+    def ask(_: str) -> str:
+        # Another process deletes one account while the operator is typing.
+        t = threading.Thread(
+            target=lambda: run(_exec(populated, "DELETE FROM users WHERE email LIKE 'e2e-1@%'"))
+        )
+        t.start()
+        t.join()
+        return "3"
+
+    out = io.StringIO()
+    code = cta.main(["--delete"], database_url=populated, ask=ask, out=out)
+    assert code == 0
+    assert "confirmed 3 account(s) but 2 were deleted" in out.getvalue()
+    assert emails(populated) == sorted(REAL)
+
+
+def test_deleted_report_order_matches_the_docs(populated: str) -> None:
+    _, out = cleanup(populated, "--delete", "--yes")
+    tables = [ln.split(":")[0].strip() for ln in out.splitlines() if ln.startswith("  ")]
+    docs = (BACKEND.parent / "_docs" / "deployment.md").read_text()
+    block = docs.split("Deleted:\n", 1)[1].split("```", 1)[0]
+    assert [ln.split(":")[0].strip() for ln in block.splitlines() if ln] == tables

@@ -741,12 +741,12 @@ docker exec focus-dev-app-1 python -m app.cleanup_test_accounts --delete --yes -
 Type 3 to delete these accounts and all their data: 3
 Deleted:
   users: 3
-  user_settings: 3
   auth_sessions: 5
-  focus_sessions: 43
+  calendar_feeds: 1
   custom_tags: 4
   youtube_recent_links: 8
-  calendar_feeds: 1
+  focus_sessions: 43
+  user_settings: 3
 ```
 
 The accounts go in one transaction as `DELETE FROM users`; `ON DELETE CASCADE` removes the rest, the same as account deletion (AC1.7). A second run straight away prints `No matching test accounts.` Exit code 0 means success; nonzero means a declined prompt (3) or an error (1, printing only the error's type).
