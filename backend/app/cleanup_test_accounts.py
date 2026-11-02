@@ -258,8 +258,8 @@ def main(
 ) -> int:
     args = build_parser().parse_args(argv)
     out = out or sys.stdout
-    url = database_url or Settings().database_url
     try:
+        url = database_url or Settings().database_url
         # The prompt runs between two asyncio.run calls, with no event loop: asyncio.run
         # installs its own SIGINT handler, which would swallow the first Ctrl-C at the prompt.
         accounts = asyncio.run(list_phase(args, url, out))
