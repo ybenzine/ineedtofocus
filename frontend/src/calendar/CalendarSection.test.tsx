@@ -481,19 +481,20 @@ describe('subscribing (AC14.4)', () => {
     fireEvent.click(
       within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Turn off' }),
     )
-    expect(await screen.findByRole('button', { name: 'Create link' })).toBeVisible()
+    const create = await screen.findByRole('button', { name: 'Create link' })
+    expect(create).toBeVisible()
+    await waitFor(() => expect(create).toHaveFocus())
     expect(api.calls).toEqual(['status', 'delete'])
   })
 
-  it('opened offline: shows the hint with the button disabled, then loads when back online', async () => {
+  it('opened offline: says it needs a connection and shows no Create link, then loads when back online', async () => {
     setOnline(false)
     const { api } = renderSection()
-    const create = await screen.findByRole('button', { name: 'Create link' })
-    expect(create).toBeDisabled()
-    expect(create).toHaveAccessibleDescription('Needs a connection.')
+    expect(
+      await screen.findByText('Needs a connection to load your calendar subscription.'),
+    ).toBeVisible()
+    expect(screen.queryByRole('button', { name: 'Create link' })).not.toBeInTheDocument()
     expect(screen.queryByText('Couldn’t load your calendar link.')).not.toBeInTheDocument()
-    expect(api.calls).toEqual([])
-    fireEvent.click(create)
     expect(api.calls).toEqual([])
 
     // The connection returns: the status loads and the button works.
@@ -559,6 +560,7 @@ describe('subscribing (AC14.4)', () => {
     )
     expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t turn off the link')
     expect(screen.getByText(/Subscribed/)).toBeVisible()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Turn off' })).toHaveFocus())
   })
 
   it('keeps the subscribed state and the old link when a reset fails', async () => {
