@@ -183,6 +183,37 @@ def test_countdown_recent_minutes_is_nullable_and_the_previous_release_ignores_i
     command.upgrade(alembic_config, "head")
 
 
+def test_pause_audio_on_breaks_existing_rows_read_true_and_it_rolls_back(
+    alembic_config: Config, test_db_url: str
+) -> None:
+    """0008 (#370, AC12.6) is expand-only: rows made before it read true; it rolls back."""
+    command.upgrade(alembic_config, "0007")
+    run(
+        _exec(
+            test_db_url,
+            "INSERT INTO users (id, email, password_hash) VALUES (:u, 'a@b.c', 'x')",
+            u=USER,
+        )
+    )
+    run(_exec(test_db_url, "INSERT INTO user_settings (user_id) VALUES (:u)", u=USER))
+    command.upgrade(alembic_config, "head")
+
+    def read(conn: Connection) -> Any:
+        return conn.execute(text("SELECT pause_audio_on_breaks FROM user_settings")).scalar_one()
+
+    assert run(_with_conn(test_db_url, read)) is True
+    # The previous release's statements leave the column alone and still work.
+    run(_exec(test_db_url, "UPDATE user_settings SET alert_volume = 5"))
+    command.downgrade(alembic_config, "0007")
+
+    def columns(conn: Connection) -> Any:
+        return {c["name"] for c in inspect(conn).get_columns("user_settings")}
+
+    assert "pause_audio_on_breaks" not in run(_with_conn(test_db_url, columns))
+    command.upgrade(alembic_config, "head")
+    assert run(_with_conn(test_db_url, read)) is True
+
+
 def test_single_migration_head(alembic_config: Config) -> None:
     assert len(ScriptDirectory.from_config(alembic_config).get_heads()) == 1
 

@@ -37,7 +37,7 @@ The full specification, with every acceptance criterion (`ACx.y`) and the decisi
 | **F9 Timer screen** | A dark, distraction-free full-screen view with an optional "Keep screen awake" toggle; works from 360 px wide phones to desktop |
 | **F10 History** | Day, Week, Month, All time and Custom range views, filtered by tag: total focus time, session count, time per tag, a bar chart and the session list. Days follow the user's time zone; weeks start on Sunday unless changed |
 | **F11 Edit and archive** | Change a session's tag and goal. Archive instead of delete (with Undo); archived sessions can be restored or, after a confirmation that says how many, deleted for good |
-| **F12 Settings** | Week start, volumes, keep-awake default and reminder interval, synced across devices |
+| **F12 Settings** | Week start, keep-awake default, reminder interval and calendar settings synced across devices; sound levels saved per device |
 | **F13 Offline** | Once signed in, the timers, Rain and alerts work without a connection. A finished session is saved on the device first and synced when the connection returns, never duplicated and never lost |
 
 **The rule that matters most:** *a finished session must never be lost.* The key journey is sign in → pick a mode, tag, goal and sound → focus → the session ends → it shows up in History and the totals. That journey is what the tests, the telemetry and the alerts focus on.
