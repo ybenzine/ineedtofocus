@@ -23,7 +23,7 @@ test('a session finished offline syncs when the connection returns, as exactly o
   await page.getByRole('link', { name: 'View history' }).click()
   // Built from the device's own copy until it has synced.
   await expect(page.locator('.history-row')).toHaveCount(1)
-  await expect(page.getByText('Not synced yet')).toBeVisible()
+  await expect(page.getByText('Not synced yet', { exact: true })).toBeVisible()
   await expectTotals(page, { focus: '1 min', sessions: '1' })
 
   await context.setOffline(false)
@@ -36,7 +36,7 @@ test('a session finished offline syncs when the connection returns, as exactly o
   // flight would be aborted as if two minutes had passed while it waited.
   await expectTotals(page, { focus: '1 min', sessions: '1' })
   await page.clock.fastForward(120_000)
-  await expect(page.getByText('Not synced yet')).toHaveCount(0)
+  await expect(page.getByText('Not synced yet', { exact: true })).toHaveCount(0)
   expect(await serverSessionCount(page.request)).toBe(1)
   await expectTotals(page, { focus: '1 min', sessions: '1' })
 })

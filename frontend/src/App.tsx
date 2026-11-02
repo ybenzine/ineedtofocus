@@ -592,7 +592,7 @@ function AppBody({
   if (view.name === 'settings') {
     return (
       <AppShell current="settings" controller={timer} onNavigate={goTo} holdsUpdate={setup.changed}>
-        <SettingsScreen player={player} controller={timer} />
+        <SettingsScreen player={player} controller={timer} sessions={services.sessions} />
       </AppShell>
     )
   }

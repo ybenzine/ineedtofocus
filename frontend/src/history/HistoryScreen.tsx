@@ -6,6 +6,8 @@ import { HttpArchiveApi, type ArchiveApi } from '../archive/api.ts'
 import { useSettingsState } from '../settings/SettingsContext.ts'
 import { GOAL_MAX_LENGTH } from '../setup/options.ts'
 import { useTagsView } from '../tags/context.ts'
+import CalendarDownload from '../calendar/CalendarDownload.tsx'
+import type { CalendarApi } from '../calendar/api.ts'
 import AddToCalendar from '../calendar/AddToCalendar.tsx'
 import TagName, { TagDot } from '../tags/TagName.tsx'
 import { sortByFocus } from '../tags/view.ts'
@@ -57,6 +59,8 @@ export interface HistoryScreenProps {
   sessionsApi?: Pick<SessionsApi, 'edit'>
   /** Archive and restore (AC11.2). */
   archiveApi?: ArchiveApi
+  /** The History download (AC14.6). */
+  calendarApi?: Pick<CalendarApi, 'exportIcs'>
   timeZone?: string
   now?: () => number
   onNewSession?: () => void
@@ -87,6 +91,7 @@ export default function HistoryScreen({
   sync = null,
   sessionsApi = defaultSessionsApi,
   archiveApi = defaultArchiveApi,
+  calendarApi,
   timeZone,
   now = Date.now,
   onNewSession,
@@ -624,18 +629,25 @@ export default function HistoryScreen({
       ) : load.kind === 'error' ? (
         <p role="alert">Couldn’t load history. Check the dates and try again.</p>
       ) : (
-        <Results
-          data={load.data}
-          offline={load.offline}
-          filtered={tags.length > 0}
-          onNewSession={onNewSession}
-          editingId={editingId}
-          onEdit={setEditingId}
-          onSave={saveEdit}
-          onArchive={archive}
-          onArchiveOnDevice={archiveOnDevice}
-          onDiscard={discardChange}
-        />
+        <>
+          <CalendarDownload
+            query={query}
+            unsynced={load.data.sessions.some((s) => s.unsaved)}
+            api={calendarApi}
+          />
+          <Results
+            data={load.data}
+            offline={load.offline}
+            filtered={tags.length > 0}
+            onNewSession={onNewSession}
+            editingId={editingId}
+            onEdit={setEditingId}
+            onSave={saveEdit}
+            onArchive={archive}
+            onArchiveOnDevice={archiveOnDevice}
+            onDiscard={discardChange}
+          />
+        </>
       )}
     </section>
   )
