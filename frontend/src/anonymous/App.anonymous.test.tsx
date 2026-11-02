@@ -566,6 +566,23 @@ describe('signing up or in from the prompt', () => {
     expect(rig.saveRecord).toHaveBeenCalledTimes(1)
   })
 
+  it('ac14_7 has no Add to calendar on the guest summary, and shows it once signed up or in', async () => {
+    renderApp()
+    await finishAnonymousSession()
+    // The one call to action is the save prompt (AC1.8).
+    expect(screen.getByText(isPrompt)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Add to calendar: / })).not.toBeInTheDocument()
+    expect(screen.queryByText('Add to calendar')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('link', { name: 'log in' }))
+    await screen.findByRole('heading', { name: 'Sign in' })
+    fill('a@b.co', 'longenough1')
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    await screen.findByText('This session is now in your account.')
+    // The same summary, now the account's: the control names the session by its tag.
+    expect(screen.getByRole('button', { name: /^Add to calendar: Work, 2 min on / })).toBeVisible()
+  })
+
   it('keeps a failed device write as a pending record, with the usual note, and says it is in the account once saved', async () => {
     let fail = true
     const { rig } = renderApp({

@@ -2196,3 +2196,41 @@ main.setup-screen:has(~ .tab-bar) {
   align-self: flex-end;
   font-variant-numeric: tabular-nums;
 }
+
+/* Add to calendar (F14, AC14.7) */
+.add-to-calendar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.5rem;
+  max-width: 100%;
+}
+
+.summary .add-to-calendar {
+  align-items: center;
+}
+
+.summary .add-to-calendar-choices {
+  justify-content: center;
+}
+
+.add-to-calendar-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.add-to-calendar-choices li {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.add-to-calendar-choices button[aria-disabled='true'] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
