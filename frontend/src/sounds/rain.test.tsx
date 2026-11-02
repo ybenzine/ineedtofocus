@@ -11,10 +11,12 @@ import { MemoryPreferencesStore } from '../setup/preferences.ts'
 import SessionSetup from '../setup/SessionSetup.tsx'
 import { MemoryActiveSessionStore, TimerController } from '../timer/index.ts'
 import { AlertPlayer, MemoryAlertVolumeStore } from './alerts.ts'
-import { SettingsBackgroundVolumeStore } from '../settings/adapters.ts'
+import { DeviceBackgroundVolumeStore } from '../settings/adapters.ts'
 import { SettingsContext } from '../settings/SettingsContext.ts'
+import { SoundLevelsContext } from '../settings/SoundLevelsContext.ts'
 import SettingsScreen from '../settings/SettingsScreen.tsx'
 import { SettingsStore } from '../settings/store.ts'
+import { SoundLevelsStore } from '../settings/soundLevels.ts'
 import AudioControls from './AudioControls.tsx'
 import { AUDIO_SOURCE_KEY, LocalAudioSourceStore, MemoryAudioSourceStore } from './audioSource.ts'
 import { MemoryBackgroundVolumeStore, RAIN_LOOP_END, RAIN_LOOP_START, RainPlayer } from './rain.ts'
@@ -132,20 +134,20 @@ describe('RainPlayer', () => {
     expect(sources[0].disconnect).toHaveBeenCalled()
   })
 
-  it('applies a volume change from the settings store to the loop that is playing', async () => {
-    const settings = new SettingsStore()
+  it('applies a volume change from the device levels to the loop that is playing', async () => {
+    const levels = new SoundLevelsStore()
     const audio = fakeAudio()
     const rain = new RainPlayer({
       alerts: audio.alerts,
-      volume: new SettingsBackgroundVolumeStore(settings),
+      volume: new DeviceBackgroundVolumeStore(levels),
       fetchSound: audio.fetchSound,
     })
     await rain.play()
     expect(audio.gains[0].gain.value).toBe(0.5)
-    settings.update({ background_volume: 10 })
+    levels.set('background', 10)
     expect(audio.gains[0].gain.value).toBe(0.1)
     rain.pause()
-    settings.update({ background_volume: 90 })
+    levels.set('background', 90)
     expect(audio.gains[0].gain.value).not.toBe(0.9)
   })
 
@@ -208,13 +210,13 @@ describe('RainPlayer', () => {
 })
 
 describe('device stores', () => {
-  it('backs the background volume with the settings store: default 50, clamped', () => {
-    const settings = new SettingsStore()
-    const store = new SettingsBackgroundVolumeStore(settings)
+  it('backs the background volume with the device levels: default 50, clamped', () => {
+    const levels = new SoundLevelsStore()
+    const store = new DeviceBackgroundVolumeStore(levels)
     expect(store.load()).toBe(50)
     store.save(140)
-    expect(settings.values.background_volume).toBe(100)
-    settings.update({ background_volume: 20 })
+    expect(levels.background).toBe(100)
+    levels.set('background', 20)
     expect(store.load()).toBe(20)
   })
 
@@ -361,23 +363,26 @@ describe('AudioControls', () => {
 
   it('the rain volume slider and the Settings screen share one stored volume', () => {
     const settings = new SettingsStore()
+    const levels = new SoundLevelsStore()
     const audio = fakeAudio()
     const rain = new RainPlayer({
       alerts: audio.alerts,
-      volume: new SettingsBackgroundVolumeStore(settings),
+      volume: new DeviceBackgroundVolumeStore(levels),
       fetchSound: audio.fetchSound,
     })
     render(
       <SettingsContext.Provider value={settings}>
-        <AudioControls source="rain" paused rain={rain} onSourceChange={vi.fn()} />
-        <SettingsScreen player={audio.alerts} />
+        <SoundLevelsContext.Provider value={levels}>
+          <AudioControls source="rain" paused rain={rain} onSourceChange={vi.fn()} />
+          <SettingsScreen player={audio.alerts} />
+        </SoundLevelsContext.Provider>
       </SettingsContext.Provider>,
     )
     const rainSlider = screen.getByLabelText('Rain volume')
     const settingsSlider = screen.getByLabelText('Background audio volume')
     expect(rainSlider).toHaveValue('50')
     fireEvent.change(rainSlider, { target: { value: '30' } })
-    expect(settings.values.background_volume).toBe(30)
+    expect(levels.background).toBe(30)
     expect(settingsSlider).toHaveValue('30')
     fireEvent.change(settingsSlider, { target: { value: '70' } })
     expect(rainSlider).toHaveValue('70')

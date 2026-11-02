@@ -1,7 +1,9 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { AlertPlayer } from '../sounds/alerts.ts'
-import { SettingsAlertVolumeStore } from './adapters.ts'
+import { DeviceAlertVolumeStore } from './adapters.ts'
+import { SoundLevelsContext } from './SoundLevelsContext.ts'
+import { SoundLevelsStore } from './soundLevels.ts'
 import { SettingsContext } from './SettingsContext.ts'
 import SettingsScreen from './SettingsScreen.tsx'
 import { SettingsStore } from './store.ts'
@@ -24,19 +26,21 @@ function fakeContext() {
   return { context, gain, sources }
 }
 
-function renderScreen(store = new SettingsStore()) {
+function renderScreen(store = new SettingsStore(), levels = new SoundLevelsStore()) {
   const audio = fakeContext()
   const player = new AlertPlayer({
-    volume: new SettingsAlertVolumeStore(store),
+    volume: new DeviceAlertVolumeStore(levels),
     createContext: () => audio.context as unknown as AudioContext,
     fetchSound: async () => new ArrayBuffer(1),
   })
   render(
     <SettingsContext.Provider value={store}>
-      <SettingsScreen player={player} />
+      <SoundLevelsContext.Provider value={levels}>
+        <SettingsScreen player={player} />
+      </SoundLevelsContext.Provider>
     </SettingsContext.Provider>,
   )
-  return { store, ...audio }
+  return { store, levels, ...audio }
 }
 
 /** The sync note: the first status region (the Tags section has its own, after it). */
@@ -52,7 +56,7 @@ describe('SettingsScreen', () => {
   })
 
   it('saves each setting to the store (AC12.1-12.4)', () => {
-    const { store } = renderScreen()
+    const { store, levels } = renderScreen()
     fireEvent.change(screen.getByLabelText('Week starts on'), { target: { value: '1' } })
     fireEvent.change(screen.getByLabelText('Background audio volume'), { target: { value: '20' } })
     fireEvent.change(screen.getByLabelText('Default reminder interval (unlimited timer)'), {
@@ -60,9 +64,10 @@ describe('SettingsScreen', () => {
     })
     expect(store.values).toMatchObject({
       week_start_day: 1,
-      background_volume: 20,
       default_reminder_minutes: 45,
     })
+    expect(levels.background).toBe(20)
+    expect(store.getState().pending).not.toHaveProperty('background_volume')
     fireEvent.change(screen.getByLabelText('Default reminder interval (unlimited timer)'), {
       target: { value: 'off' },
     })
@@ -84,11 +89,12 @@ describe('SettingsScreen', () => {
     vi.unstubAllGlobals()
   })
 
-  it('has one alert-volume control, which sets alert_volume and drives the previews (AC5.3)', async () => {
-    const { store, gain, sources } = renderScreen()
+  it('has one alert-volume control, which sets the device level and drives the previews (AC5.3)', async () => {
+    const { store, levels, gain, sources } = renderScreen()
     expect(screen.getAllByLabelText(/alert volume/i)).toHaveLength(1)
     fireEvent.change(screen.getByLabelText('Alert volume'), { target: { value: '30' } })
-    expect(store.values.alert_volume).toBe(30)
+    expect(levels.alert).toBe(30)
+    expect(store.hasPending()).toBe(false) // never synced (AC12.2)
     fireEvent.click(screen.getByRole('button', { name: 'Preview chime' }))
     await vi.waitFor(() => expect(sources).toHaveLength(1))
     fireEvent.click(screen.getByRole('button', { name: 'Preview bell' }))
@@ -96,11 +102,18 @@ describe('SettingsScreen', () => {
     expect(gain.gain.value).toBe(0.3)
   })
 
-  it("shows another device's alert volume from the cache", () => {
-    const store = new SettingsStore()
-    store.update({ alert_volume: 30 })
-    renderScreen(store)
+  it("shows this device's own levels, not a synced value", () => {
+    const levels = new SoundLevelsStore()
+    levels.set('alert', 30)
+    levels.set('background', 70)
+    renderScreen(new SettingsStore(), levels)
     expect(screen.getByLabelText('Alert volume')).toHaveValue('30')
+    expect(screen.getByLabelText('Background audio volume')).toHaveValue('70')
+  })
+
+  it('says the levels are saved on this device only (AC12.2)', () => {
+    renderScreen()
+    expect(screen.getByText('Sound levels are saved on this device only.')).toBeInTheDocument()
   })
 
   it('notes the time zone for days and weeks (AC10.5)', () => {
@@ -130,9 +143,9 @@ describe('SettingsScreen', () => {
     expect(settingsNote()).toHaveTextContent('')
   })
 
-  it('follows a synced alert volume arriving while Settings is open', () => {
-    const { store } = renderScreen()
-    act(() => store.update({ alert_volume: 12 }))
+  it('follows a level changed in another tab while Settings is open', () => {
+    const { levels } = renderScreen()
+    act(() => levels.set('alert', 12))
     expect(screen.getByLabelText('Alert volume')).toHaveValue('12')
   })
 })

@@ -8,6 +8,7 @@ import { REMINDER_OPTIONS, type TimerController } from '../timer/index.ts'
 import { wakeLockSupported } from '../timerscreen/wakeLock.ts'
 import type { ReminderSetting, ThemeSetting } from './api.ts'
 import { useSettingsState, useSettingsStore } from './SettingsContext.ts'
+import { useSoundLevels, useSoundLevelsStore } from './SoundLevelsContext.ts'
 import TagsSection from '../tags/TagsSection.tsx'
 import CalendarSection from '../calendar/CalendarSection.tsx'
 import type { SessionStore } from '../sync/sessionStore.ts'
@@ -36,6 +37,8 @@ export default function SettingsScreen({
 }) {
   const store = useSettingsStore()
   const { values, pending, stalled } = useSettingsState()
+  const levelsStore = useSoundLevelsStore()
+  const levels = useSoundLevels()
   const id = useId()
   // Without an account: device-only settings, no Week start, no Account section (#331).
   const anonymous = useAnonymous() !== null
@@ -69,7 +72,7 @@ export default function SettingsScreen({
         </div>
       )}
 
-      <SoundPreview player={player} volume={values.alert_volume} />
+      <SoundPreview player={player} volume={levels.alert} />
 
       <div className="field">
         <label htmlFor={`${id}-bg`}>Background audio volume</label>
@@ -78,10 +81,11 @@ export default function SettingsScreen({
           min={0}
           max={100}
           step={1}
-          value={values.background_volume}
-          aria-valuetext={`${values.background_volume}%`}
-          onChange={(event) => store.update({ background_volume: Number(event.target.value) })}
+          value={levels.background}
+          aria-valuetext={`${levels.background}%`}
+          onChange={(event) => levelsStore.set('background', Number(event.target.value))}
         />
+        <p className="field-hint">Sound levels are saved on this device only.</p>
       </div>
 
       <div className="field">

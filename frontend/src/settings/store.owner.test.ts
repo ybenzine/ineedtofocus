@@ -38,7 +38,7 @@ describe('one account never reaches the next', () => {
       owner: 'a',
       currentOwner: () => user,
     })
-    storeA.update({ alert_volume: 10 }) // PATCH 1 in flight
+    storeA.update({ countdown_recent_minutes: 110 }) // PATCH 1 in flight
     storeA.update({ week_start_day: 3 }) // queued behind it
 
     // Sign-out: the app unmounts (dispose) and the app's keys are removed.
@@ -46,7 +46,7 @@ describe('one account never reaches the next', () => {
     user = null
     localStorage.removeItem(SETTINGS_KEY)
 
-    first.resolve({ ...DEFAULT_SETTINGS, alert_volume: 10 })
+    first.resolve({ ...DEFAULT_SETTINGS, countdown_recent_minutes: 110 })
     await storeA.flush()
     expect(localStorage.getItem(SETTINGS_KEY)).toBeNull() // nothing written back
 
@@ -75,7 +75,7 @@ describe('one account never reaches the next', () => {
       currentOwner: () => user,
     })
     user = null
-    store.update({ alert_volume: 5 })
+    store.update({ countdown_recent_minutes: 105 })
     await store.flush()
     expect(api.patch).not.toHaveBeenCalled()
     expect(localStorage.getItem(SETTINGS_KEY)).toBeNull()
@@ -84,12 +84,18 @@ describe('one account never reaches the next', () => {
   it("never loads another user's cache", () => {
     localStorage.setItem(
       SETTINGS_KEY,
-      JSON.stringify({ owner: 'a', values: { alert_volume: 5 }, pending: { week_start_day: 2 } }),
+      JSON.stringify({
+        owner: 'a',
+        values: { countdown_recent_minutes: 105 },
+        pending: { week_start_day: 2 },
+      }),
     )
     const store = new SettingsStore({ storage: localStorage, owner: 'b' })
-    expect(store.values.alert_volume).toBe(80)
+    expect(store.values.countdown_recent_minutes).toBeNull()
     expect(store.hasPending()).toBe(false)
-    expect(new SettingsStore({ storage: localStorage, owner: 'a' }).values.alert_volume).toBe(5)
+    expect(
+      new SettingsStore({ storage: localStorage, owner: 'a' }).values.countdown_recent_minutes,
+    ).toBe(105)
   })
 
   it('aborts the request in flight on dispose', () => {
@@ -102,7 +108,7 @@ describe('one account never reaches the next', () => {
       }),
     }
     const store = new SettingsStore({ api })
-    store.update({ alert_volume: 1 })
+    store.update({ countdown_recent_minutes: 101 })
     store.dispose()
     expect(signal?.aborted).toBe(true)
   })
@@ -118,11 +124,11 @@ describe('sync details', () => {
     const store = new SettingsStore({ api })
     const refreshing = store.refresh()
     await vi.waitFor(() => expect(api.get).toHaveBeenCalled())
-    store.update({ alert_volume: 20 })
+    store.update({ countdown_recent_minutes: 120 })
     await store.flush()
-    get.resolve(DEFAULT_SETTINGS) // answers with the old volume, 80
+    get.resolve(DEFAULT_SETTINGS) // answers with the old value, null
     await refreshing
-    expect(store.values.alert_volume).toBe(20)
+    expect(store.values.countdown_recent_minutes).toBe(120)
   })
 
   it('retries a server error with backoff while online', async () => {
@@ -136,7 +142,7 @@ describe('sync details', () => {
       }),
     }
     const store = new SettingsStore({ api, retryBaseMs: 1000 })
-    store.update({ alert_volume: 20 })
+    store.update({ countdown_recent_minutes: 120 })
     await vi.advanceTimersByTimeAsync(0)
     expect(store.getState().stalled).toBe(true)
     await vi.advanceTimersByTimeAsync(1000)
@@ -156,7 +162,7 @@ describe('sync details', () => {
       }),
     }
     const store = new SettingsStore({ api, onUnauthorized })
-    store.update({ alert_volume: 20 })
+    store.update({ countdown_recent_minutes: 120 })
     await store.flush()
     expect(onUnauthorized).toHaveBeenCalledOnce()
     expect(store.hasPending()).toBe(true)
@@ -168,17 +174,20 @@ describe('sync details', () => {
       get: vi.fn(),
       patch: vi.fn(async (patch: SettingsPatch) => {
         patches.push(patch)
-        if ('alert_volume' in patch) {
-          throw new SettingsError('invalid', 'bad', ['alert_volume'])
+        if ('countdown_recent_minutes' in patch) {
+          throw new SettingsError('invalid', 'bad', ['countdown_recent_minutes'])
         }
         return { ...DEFAULT_SETTINGS, ...patch }
       }),
     }
     const store = new SettingsStore({ api })
     // Offline batch with one bad value.
-    store.update({ alert_volume: 20, week_start_day: 2 })
+    store.update({ countdown_recent_minutes: 120, week_start_day: 2 })
     await store.flush()
-    expect(patches).toEqual([{ alert_volume: 20, week_start_day: 2 }, { week_start_day: 2 }])
+    expect(patches).toEqual([
+      { countdown_recent_minutes: 120, week_start_day: 2 },
+      { week_start_day: 2 },
+    ])
     expect(store.hasPending()).toBe(false)
     expect(store.values.week_start_day).toBe(2)
   })
@@ -219,7 +228,7 @@ describe('sync details', () => {
     const store = new SettingsStore({ api })
     store.dispose()
     store.arm()
-    store.update({ alert_volume: 1 })
+    store.update({ countdown_recent_minutes: 101 })
     await store.flush()
     expect(api.patch).toHaveBeenCalledOnce()
 
@@ -228,7 +237,7 @@ describe('sync details', () => {
     bound.dispose()
     user = null
     bound.arm()
-    bound.update({ alert_volume: 2 })
+    bound.update({ countdown_recent_minutes: 102 })
     await bound.flush()
     expect(api.patch).toHaveBeenCalledOnce()
   })

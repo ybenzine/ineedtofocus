@@ -2,6 +2,8 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SettingsContext } from '../settings/SettingsContext.ts'
 import { SettingsStore } from '../settings/store.ts'
+import { SoundLevelsContext } from '../settings/SoundLevelsContext.ts'
+import { SoundLevelsStore } from '../settings/soundLevels.ts'
 import AudioControls from './AudioControls.tsx'
 import { LocalAudioSourceStore, MemoryYoutubeLinkStore, YOUTUBE_LINK_KEY } from './audioSource.ts'
 import { MemoryBackgroundVolumeStore, RainPlayer } from './rain.ts'
@@ -63,7 +65,7 @@ function setup(
     list?: () => Promise<RecentLink[]>
     linkStore?: MemoryYoutubeLinkStore
     loadApi?: () => Promise<YtNamespace>
-    settings?: SettingsStore
+    levels?: SoundLevelsStore
   } = {},
 ) {
   const fake = fakeYoutube()
@@ -74,7 +76,8 @@ function setup(
     list: vi.fn(options.list ?? (async () => saved)),
     use: vi.fn(async (url: string, title?: string) => [{ url, title: title ?? null }, ...saved]),
   }
-  const settings = options.settings ?? new SettingsStore()
+  const settings = new SettingsStore()
+  const levels = options.levels ?? new SoundLevelsStore()
   const rain = new RainPlayer({
     alerts: { audioContext: () => null },
     volume: new MemoryBackgroundVolumeStore(),
@@ -83,13 +86,15 @@ function setup(
   const youtube = { api, linkStore, loadApi: options.loadApi ?? fake.loadApi }
   const view = (paused: boolean) => (
     <SettingsContext.Provider value={settings}>
-      <AudioControls
-        source="youtube"
-        paused={paused}
-        rain={rain}
-        onSourceChange={vi.fn()}
-        youtube={youtube}
-      />
+      <SoundLevelsContext.Provider value={levels}>
+        <AudioControls
+          source="youtube"
+          paused={paused}
+          rain={rain}
+          onSourceChange={vi.fn()}
+          youtube={youtube}
+        />
+      </SoundLevelsContext.Provider>
     </SettingsContext.Provider>
   )
   const result = render(view(options.paused ?? false))
@@ -98,6 +103,7 @@ function setup(
     api,
     linkStore,
     settings,
+    levels,
     setPaused: (paused: boolean) => result.rerender(view(paused)),
     unmount: result.unmount,
   }
@@ -165,16 +171,16 @@ describe('YouTube background audio (AC8.4)', () => {
     expect(t.players[0].playVideo).toHaveBeenCalledTimes(2)
   })
 
-  it('applies the background volume from settings and follows changes', async () => {
-    const settings = new SettingsStore()
-    settings.update({ background_volume: 30 })
-    const t = setup({ settings })
+  it('applies the background volume from the device levels and follows changes', async () => {
+    const levels = new SoundLevelsStore()
+    levels.set('background', 30)
+    const t = setup({ levels })
     await paste(`https://youtu.be/${ID}`)
     await waitFor(() => expect(t.players).toHaveLength(1))
     await t.ready()
     expect(t.players[0].setVolume).toHaveBeenLastCalledWith(30)
     fireEvent.change(screen.getByLabelText('YouTube volume'), { target: { value: '70' } })
-    expect(settings.values.background_volume).toBe(70)
+    expect(levels.background).toBe(70)
     expect(t.players[0].setVolume).toHaveBeenLastCalledWith(70)
   })
 

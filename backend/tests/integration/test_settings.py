@@ -116,6 +116,22 @@ def test_ac12_1_to_12_4_round_trip(client: TestClient) -> None:
     assert r.json()["default_reminder_minutes"] is None
 
 
+def test_336_deprecated_volumes_are_still_accepted_and_returned(client: TestClient) -> None:
+    """Expand only (#336): the frontend stops sending the volumes, an older client still can."""
+    r = client.patch("/api/settings", json={"alert_volume": 12, "background_volume": 34})
+    assert r.status_code == 200
+    assert (r.json()["alert_volume"], r.json()["background_volume"]) == (12, 34)
+    assert body(client)["alert_volume"] == 12
+    # A PATCH without them (the current frontend) leaves the stored values alone.
+    client.patch("/api/settings", json={"week_start_day": 2})
+    assert (body(client)["alert_volume"], body(client)["background_volume"]) == (12, 34)
+    assert client.patch("/api/settings", json={"alert_volume": 101}).status_code == 422
+    spec = client.get("/openapi.json").json()["components"]["schemas"]
+    for schema in ("SettingsOut", "SettingsPatch"):
+        for name in ("alert_volume", "background_volume"):
+            assert spec[schema]["properties"][name]["deprecated"] is True
+
+
 def test_partial_update_leaves_other_fields_alone(client: TestClient) -> None:
     client.patch("/api/settings", json={"alert_volume": 10, "last_tag": "study"})
     client.patch("/api/settings", json={"background_volume": 20})

@@ -21,9 +21,9 @@ export const THEME_SETTINGS: readonly ThemeSetting[] = ['system', 'dark', 'light
 export interface Settings {
   /** 0 = Sunday ... 6 = Saturday (AC12.1) */
   week_start_day: number
-  /** 0–100 (AC12.2) */
+  /** Deprecated (#336): the sound levels are device settings now. Only read to seed a device. */
   alert_volume: number
-  /** 0–100 (AC12.2) */
+  /** Deprecated (#336), as `alert_volume`. */
   background_volume: number
   /** AC12.3 */
   keep_screen_awake: boolean
@@ -64,12 +64,12 @@ export type CalendarMinMinutes = 0 | 5 | 10 | 15
 export const CALENDAR_MIN_MINUTES: readonly CalendarMinMinutes[] = [0, 5, 10, 15]
 export const DEFAULT_CALENDAR_TITLE = '{tag}: {goal}'
 
-export type SettingsPatch = Partial<Settings>
+/** What an edit may change: the sound levels are not synced (#336). */
+export type SettingsPatch = Partial<Omit<Settings, 'alert_volume' | 'background_volume'>>
 
+/** The settings that sync. */
 export const SETTINGS_KEYS = [
   'week_start_day',
-  'alert_volume',
-  'background_volume',
   'keep_screen_awake',
   'default_reminder_minutes',
   'pomodoro_config',
@@ -82,7 +82,7 @@ export const SETTINGS_KEYS = [
   'calendar_excluded_tags',
   'calendar_min_minutes',
   'calendar_name',
-] as const satisfies readonly (keyof Settings)[]
+] as const satisfies readonly (keyof SettingsPatch)[]
 
 /** Defaults for a new user (decision log 2026-10-21, AC12.x). */
 export const DEFAULT_SETTINGS: Settings = {
