@@ -342,6 +342,9 @@ function Subscribe({
   const cancel = useRef<HTMLButtonElement>(null)
   const resetButton = useRef<HTMLButtonElement>(null)
   const offButton = useRef<HTMLButtonElement>(null)
+  const createButton = useRef<HTMLButtonElement>(null)
+  // Set after a successful Turn off: focus moves to Create link once it is shown.
+  const focusCreate = useRef(false)
   // Which button to give focus back to when a confirmation closes without acting.
   const returnTo = useRef<'reset' | 'off' | null>(null)
 
@@ -375,6 +378,14 @@ function Subscribe({
       returnTo.current = null
     }
   }, [busy, confirm])
+
+  const enabled = feed.kind === 'ready' && feed.status.enabled
+  useEffect(() => {
+    if (!enabled && focusCreate.current) {
+      focusCreate.current = false
+      createButton.current?.focus()
+    }
+  }, [enabled, feed])
 
   // The new link is announced by moving focus to its field (AC4).
   useEffect(() => {
@@ -411,11 +422,14 @@ function Subscribe({
     setError('')
     setCopied('')
     const result = await api.deleteFeed()
-    setBusy(false)
     if (result.kind !== 'ok') {
+      returnTo.current = 'off'
+      setBusy(false)
       setError('Couldn’t turn off the link. Try again.')
       return false
     }
+    setBusy(false)
+    focusCreate.current = true
     setShown(null)
     setFeed({ kind: 'ready', status: { enabled: false, createdAt: null, lastFetchedAt: null } })
     return true
@@ -495,12 +509,9 @@ function Subscribe({
       )}
 
       {!ready && needsConnection && (
-        <>
-          <button type="button" className="primary" {...offlineProps}>
-            Create link
-          </button>
-          {hint}
-        </>
+        <p role="status" className="field-hint">
+          Needs a connection to load your calendar subscription.
+        </p>
       )}
 
       {status && !status.enabled && (
@@ -508,7 +519,13 @@ function Subscribe({
           <p className="field-hint">
             A private link your calendar app reads, so your sessions show up as their own calendar.
           </p>
-          <button type="button" className="primary" onClick={() => void create()} {...offlineProps}>
+          <button
+            type="button"
+            className="primary"
+            ref={createButton}
+            onClick={() => void create()}
+            {...offlineProps}
+          >
             Create link
           </button>
           {hint}
