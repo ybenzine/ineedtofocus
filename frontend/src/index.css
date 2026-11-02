@@ -989,15 +989,25 @@ main.focus-screen {
   flex-basis: 100%;
 }
 
-/* The break cue (AC5) is always in the page so it is announced; empty, it takes no space and adds no
-   flex gap. With text it sits on its own line. */
-.timer-audio > [role='status'] {
+/* The break cue (AC5) is a live region that stays in the page with its display unchanged, so
+   screen readers (VoiceOver included) already know it and announce the text when it fills in.
+   Empty, it is taken out of the flow (no flex gap, no extra line), zero-sized and click-through;
+   with text it takes its own line. */
+.timer-audio {
+  position: relative;
+}
+
+.timer-audio > p[role='status'] {
   flex-basis: 100%;
   margin: 0;
 }
 
-.timer-audio > [role='status']:empty {
-  display: contents;
+.timer-audio > p[role='status']:empty {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  pointer-events: none;
 }
 
 .timer-audio .youtube-controls .timer-volume {
