@@ -85,7 +85,7 @@ async function openDiscardDialog(page: Page): Promise<void> {
   await openHistoryFromSummary(page)
   await expect(page.locator('.history-row')).toHaveCount(1)
   // The session must have reached the server, or the edit would ride along with its upload.
-  await expect(page.getByText('Not synced yet')).toHaveCount(0)
+  await expect(page.getByText('Not synced yet', { exact: true })).toHaveCount(0)
   await page.route('**/api/sessions/*', (route) =>
     route.request().method() === 'PATCH'
       ? route.fulfill({ status: 422, json: { detail: 'Refused for the test' } })
