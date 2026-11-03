@@ -33,7 +33,7 @@ def seed(make_client: MakeClient, email: str, age: str = "3 hours") -> None:
         assert c.post("/api/sessions", json=make_session()).status_code in (200, 201)
         assert c.post("/api/tags", json={"name": "deep", "color": "red"}).status_code == 201
         assert c.post("/api/youtube-links", json={"url": "https://youtu.be/abc"}).status_code == 200
-        assert c.patch("/api/settings", json={"alert_volume": 10}).status_code == 200
+        assert c.patch("/api/settings", json={"week_start_day": 1}).status_code == 200
         assert c.post("/api/calendar/feed").status_code in (200, 201)
 
 

@@ -136,7 +136,6 @@ export default function App(props: AppProps) {
             storage: window.localStorage,
             key: ANON_SETTINGS_KEY,
             lock: ANON_SETTINGS_LOCK,
-            onLoaded: (values) => levels.seed(values),
           })
         : new SettingsStore({
             api: httpSettingsApi,
@@ -144,9 +143,8 @@ export default function App(props: AppProps) {
             owner: mountOwner,
             currentOwner: signedInUserId,
             onUnauthorized: notifySessionExpired,
-            onLoaded: (values) => levels.seed(values),
           })),
-    [given, mountOwner, anonymous, levels],
+    [given, mountOwner, anonymous],
   )
   // The account's custom tags (#401): none without an account, and no request. A test that gives
   // its own settings gets a store with no API unless it gives `tags` too.
@@ -178,6 +176,10 @@ export default function App(props: AppProps) {
   useLayoutEffect(() => settings.onRefresh(() => tags.refresh()), [settings, tags])
   useEffect(() => tags.start(), [tags])
   useEffect(() => levels.start(), [levels])
+  // A level the device lacks starts from the guest settings, else the default (80/50). Runs again
+  // when the settings store changes (a guest signing in), after render, so it never updates
+  // other components while rendering.
+  useEffect(() => levels.seed(), [levels, settings])
   // Sign-out sends and counts the settings edits not yet accepted (#129).
   useEffect(() => {
     if (anonymous) return

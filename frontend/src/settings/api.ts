@@ -21,10 +21,6 @@ export const THEME_SETTINGS: readonly ThemeSetting[] = ['system', 'dark', 'light
 export interface Settings {
   /** 0 = Sunday ... 6 = Saturday (AC12.1) */
   week_start_day: number
-  /** Deprecated (#336): the sound levels are device settings now. Only read to seed a device. */
-  alert_volume: number
-  /** Deprecated (#336), as `alert_volume`. */
-  background_volume: number
   /** AC12.3 */
   keep_screen_awake: boolean
   /** AC12.6: pause Rain/YouTube during Pomodoro breaks */
@@ -66,8 +62,8 @@ export type CalendarMinMinutes = 0 | 5 | 10 | 15
 export const CALENDAR_MIN_MINUTES: readonly CalendarMinMinutes[] = [0, 5, 10, 15]
 export const DEFAULT_CALENDAR_TITLE = '{tag}: {goal}'
 
-/** What an edit may change: the sound levels are not synced (#336). */
-export type SettingsPatch = Partial<Omit<Settings, 'alert_volume' | 'background_volume'>>
+/** What an edit may change. */
+export type SettingsPatch = Partial<Settings>
 
 /** The settings that sync. */
 export const SETTINGS_KEYS = [
@@ -90,8 +86,6 @@ export const SETTINGS_KEYS = [
 /** Defaults for a new user (decision log 2026-10-21, AC12.x). */
 export const DEFAULT_SETTINGS: Settings = {
   week_start_day: 0,
-  alert_volume: 80,
-  background_volume: 50,
   keep_screen_awake: false,
   pause_audio_on_breaks: true,
   default_reminder_minutes: null,
@@ -155,10 +149,6 @@ export function parseSettings(value: unknown): Settings {
   const reminder = value.default_reminder_minutes
   return {
     week_start_day: intIn(value.week_start_day, 0, 6) ? value.week_start_day : d.week_start_day,
-    alert_volume: intIn(value.alert_volume, 0, 100) ? value.alert_volume : d.alert_volume,
-    background_volume: intIn(value.background_volume, 0, 100)
-      ? value.background_volume
-      : d.background_volume,
     keep_screen_awake:
       typeof value.keep_screen_awake === 'boolean' ? value.keep_screen_awake : d.keep_screen_awake,
     pause_audio_on_breaks:

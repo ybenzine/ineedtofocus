@@ -22,8 +22,6 @@ pytestmark = pytest.mark.integration
 
 DEFAULTS: dict[str, Any] = {
     "week_start_day": 0,
-    "alert_volume": 80,
-    "background_volume": 50,
     "keep_screen_awake": False,
     "pause_audio_on_breaks": True,
     "default_reminder_minutes": None,
@@ -96,15 +94,13 @@ def test_signed_out_requests_get_401(make_client: MakeClient) -> None:
 
 
 def test_new_user_gets_the_defaults(client: TestClient) -> None:
-    """Decision log (#6): alert 80, background 50, keep-awake off, Sunday, no tag = Work."""
+    """Decision log (#6): keep-awake off, Sunday, no tag = Work; no volume fields (#430)."""
     assert body(client) == DEFAULTS
 
 
 def test_ac12_1_to_12_4_round_trip(client: TestClient) -> None:
     patch = {
         "week_start_day": 1,
-        "alert_volume": 0,
-        "background_volume": 100,
         "keep_screen_awake": True,
         "default_reminder_minutes": 45,
         "theme": "light",
@@ -116,29 +112,28 @@ def test_ac12_1_to_12_4_round_trip(client: TestClient) -> None:
     assert r.json()["default_reminder_minutes"] is None
 
 
-def test_336_deprecated_volumes_are_still_accepted_and_returned(client: TestClient) -> None:
-    """Expand only (#336): the frontend stops sending the volumes, an older client still can."""
-    r = client.patch("/api/settings", json={"alert_volume": 12, "background_volume": 34})
-    assert r.status_code == 200
-    assert (r.json()["alert_volume"], r.json()["background_volume"]) == (12, 34)
-    assert body(client)["alert_volume"] == 12
-    # A PATCH without them (the current frontend) leaves the stored values alone.
-    client.patch("/api/settings", json={"week_start_day": 2})
-    assert (body(client)["alert_volume"], body(client)["background_volume"]) == (12, 34)
-    assert client.patch("/api/settings", json={"alert_volume": 101}).status_code == 422
+def test_430_volume_fields_are_gone_from_get_patch_and_the_schema(client: TestClient) -> None:
+    """The sound levels are device settings (#336); the API has no volume fields (#430)."""
+    for name in ("alert_volume", "background_volume"):
+        assert name not in body(client)
+        r = client.patch("/api/settings", json={name: 12})
+        assert r.status_code == 422
+        assert r.json()["error"]["details"][0]["type"] == "extra_forbidden"
+    r = client.patch("/api/settings", json={"alert_volume": 12, "week_start_day": 2})
+    assert r.status_code == 422  # rejected as a whole: nothing is changed
+    assert body(client)["week_start_day"] == 0
     spec = client.get("/openapi.json").json()["components"]["schemas"]
     for schema in ("SettingsOut", "SettingsPatch"):
-        for name in ("alert_volume", "background_volume"):
-            assert spec[schema]["properties"][name]["deprecated"] is True
+        assert not {"alert_volume", "background_volume"} & set(spec[schema]["properties"])
 
 
 def test_partial_update_leaves_other_fields_alone(client: TestClient) -> None:
-    client.patch("/api/settings", json={"alert_volume": 10, "last_tag": "study"})
-    client.patch("/api/settings", json={"background_volume": 20})
+    client.patch("/api/settings", json={"week_start_day": 3, "last_tag": "study"})
+    client.patch("/api/settings", json={"keep_screen_awake": True})
     assert body(client) == {
         **DEFAULTS,
-        "alert_volume": 10,
-        "background_volume": 20,
+        "week_start_day": 3,
+        "keep_screen_awake": True,
         "last_tag": "study",
     }
     assert client.patch("/api/settings", json={}).status_code == 200
@@ -146,7 +141,7 @@ def test_partial_update_leaves_other_fields_alone(client: TestClient) -> None:
 
 def test_updated_at_moves_on_update(client: TestClient) -> None:
     before = client.get("/api/settings").json()["updated_at"]
-    after = client.patch("/api/settings", json={"alert_volume": 1}).json()["updated_at"]
+    after = client.patch("/api/settings", json={"week_start_day": 1}).json()["updated_at"]
     assert after > before
 
 
@@ -165,7 +160,7 @@ def test_408_recent_countdown_is_null_set_changed_and_cleared(client: TestClient
 
 def test_408_omitted_recent_countdown_is_left_unchanged(client: TestClient) -> None:
     client.patch("/api/settings", json={"countdown_recent_minutes": 25})
-    client.patch("/api/settings", json={"alert_volume": 10})
+    client.patch("/api/settings", json={"week_start_day": 4})
     assert client.patch("/api/settings", json={}).json()["countdown_recent_minutes"] == 25
     # Not checked against the presets: 30 is accepted.
     assert client.patch("/api/settings", json={"countdown_recent_minutes": 30}).status_code == 200
@@ -192,12 +187,6 @@ def test_408_recent_countdown_is_per_user_and_in_the_export(make_client: MakeCli
     [
         {"week_start_day": 7},
         {"week_start_day": -1},
-        {"alert_volume": 101},
-        {"alert_volume": -1},
-        {"background_volume": 101},
-        {"alert_volume": 50.5},
-        {"alert_volume": "50"},
-        {"alert_volume": None},
         {"keep_screen_awake": "yes"},
         {"keep_screen_awake": None},
         {"pause_audio_on_breaks": "true"},
@@ -294,11 +283,11 @@ def test_settings_are_per_user(make_client: MakeClient) -> None:
         signup(b, "b@example.com")
         a.patch(
             "/api/settings",
-            json={"alert_volume": 5, "last_tag": "read", "pomodoro_config": POMODORO},
+            json={"week_start_day": 5, "last_tag": "read", "pomodoro_config": POMODORO},
         )
         assert body(b) == DEFAULTS
-        b.patch("/api/settings", json={"alert_volume": 99})
-        assert body(a)["alert_volume"] == 5
+        b.patch("/api/settings", json={"week_start_day": 2})
+        assert body(a)["week_start_day"] == 5
         assert body(a)["pomodoro_config"] == POMODORO
         assert body(a)["last_tag"] == "read"
 
@@ -309,7 +298,7 @@ def test_missing_settings_row_is_created_with_defaults(
     run(_exec(test_db_url, "DELETE FROM user_settings"))
     assert body(client) == DEFAULTS
     run(_exec(test_db_url, "DELETE FROM user_settings"))
-    assert client.patch("/api/settings", json={"alert_volume": 3}).json()["alert_volume"] == 3
+    assert client.patch("/api/settings", json={"week_start_day": 3}).json()["week_start_day"] == 3
 
 
 # --- recent YouTube links (AC8.6) ---
@@ -747,7 +736,7 @@ def test_ac12_6_pause_audio_on_breaks_defaults_on_and_round_trips(client: TestCl
 
 def test_ac12_6_patch_without_the_field_leaves_it_alone(client: TestClient) -> None:
     client.patch("/api/settings", json={"pause_audio_on_breaks": False})
-    assert client.patch("/api/settings", json={"alert_volume": 5}).status_code == 200
+    assert client.patch("/api/settings", json={"week_start_day": 5}).status_code == 200
     assert client.patch("/api/settings", json={}).json()["pause_audio_on_breaks"] is False
 
 

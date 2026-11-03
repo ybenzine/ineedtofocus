@@ -49,7 +49,7 @@ def test_ac2_export_is_complete_and_scoped(ada: TestClient, bob: TestClient) -> 
     assert ada.post("/api/sessions", json=old).status_code == 201
     assert ada.post(f"/api/sessions/{old['id']}/archive").status_code == 200
     bob_id = _populate(bob, "Bob goal", "https://youtu.be/BOBBOBBOB11", "2026-10-22T09:00:00Z")
-    assert bob.patch("/api/settings", json={"alert_volume": 11}).status_code == 200
+    assert bob.patch("/api/settings", json={"week_start_day": 4}).status_code == 200
 
     r = ada.get("/api/account/export")
     assert r.status_code == 200
@@ -100,13 +100,16 @@ def test_ac2_export_is_complete_and_scoped(ada: TestClient, bob: TestClient) -> 
     text = r.text
     for secret in ("bob", "Bob goal", "BOBBOBBOB11", bob_id, "argon2", "password", "token"):
         assert secret not in text
-    assert body["settings"]["alert_volume"] != 11
+    assert body["settings"]["week_start_day"] != 4
 
 
 def test_ac2_export_of_a_new_account_is_empty(ada: TestClient) -> None:
     body = ada.get("/api/account/export").json()
     assert body["sessions"] == [] and body["youtube_links"] == [] and body["tags"] == []
-    assert body["settings"]["alert_volume"] == 80
+    assert body["settings"]["week_start_day"] == 0
+    # The volume fields are gone from the export (#430).
+    assert "alert_volume" not in body["settings"]
+    assert "background_volume" not in body["settings"]
 
 
 def test_ac3_delete_cascades_clears_cookie_and_allows_signup(

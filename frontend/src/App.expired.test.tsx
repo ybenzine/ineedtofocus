@@ -194,7 +194,7 @@ describe('a 401 while a timer runs (#120)', () => {
     try {
       const settingsCache = JSON.stringify({
         owner: user.id,
-        values: { alert_volume: 33 },
+        values: { week_start_day: 3 },
         pending: {},
       })
       localStorage.setItem('ineedtofocus.settings', settingsCache)
