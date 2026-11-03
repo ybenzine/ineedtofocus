@@ -365,6 +365,16 @@ def test_gc_stops_stacks_of_gone_worktrees_only(lab: Lab) -> None:
         # The live worktree's and the main checkout's stacks stay.
         {"Name": "focus-m6-agent-live", "ConfigFiles": f"{live}/compose.yaml"},
         {"Name": "focus-local", "ConfigFiles": f"{lab.main}/compose.yaml"},
+        # A session's shared stack that subagents started from their worktrees with a copied
+        # .env (as before #442): its config files point into removed worktrees, but it's
+        # the session's, so it stays.
+        {
+            "Name": "focus-local",
+            "ConfigFiles": f"{worktrees}/agent-x/compose.yaml,{worktrees}/agent-y/compose.yaml",
+        },
+        {"Name": "focus-m6", "ConfigFiles": f"{worktrees}/agent-z/compose.yaml"},
+        # Some other project in a gone worktree, not named by worktree-env.
+        {"Name": "scratch", "ConfigFiles": f"{worktrees}/agent-w/compose.yaml"},
         # A gone worktree's stack with no slot record (e.g. a .env copied by hand).
         {
             "Name": "focus-m6-agent-old",
@@ -382,3 +392,46 @@ def test_gc_stops_stacks_of_gone_worktrees_only(lab: Lab) -> None:
     assert lab.owners() == {10: str(live.resolve())}
     assert "Freed slot 11" in result.stdout
     assert "focus-m6-agent-live" in result.stdout  # listed as still in use
+
+
+# --- The lean stack (compose.test.yaml) ----------------------------------------------------
+
+
+def lean_config(tmp_path: Path, *extra: str) -> dict[str, Any]:
+    if shutil.which("docker") is None:
+        pytest.skip("needs Docker Compose")
+    for name in ("compose.yaml", "compose.test.yaml"):
+        shutil.copy2(REPO / name, tmp_path / name)  # no .env next to them
+    result = subprocess.run(
+        ["docker", "compose", "-f", "compose.yaml", "-f", "compose.test.yaml", *extra, "config"]
+        + ["--format", "json"],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=tmp_path,
+        env={k: v for k, v in os.environ.items() if not k.startswith("COMPOSE_")},
+    )
+    config: dict[str, Any] = json.loads(result.stdout)
+    return config
+
+
+def test_the_lean_stack_is_app_and_postgres_on_a_tmpfs(tmp_path: Path) -> None:
+    config = lean_config(tmp_path)
+    services = config["services"]
+    assert sorted(services) == ["app", "db"]
+    # Throwaway database: no volume for `make down` to leave behind or `down -v` to remove.
+    assert "volumes" not in services["db"]
+    assert services["db"]["tmpfs"] == ["/var/lib/postgresql/data"]
+    assert not config.get("volumes")
+    assert list(services["app"]["depends_on"]) == ["db"]
+    env = services["app"]["environment"]
+    for signal in ("TRACES", "METRICS", "LOGS"):
+        assert env[f"OTEL_{signal}_EXPORTER"] == "none"
+    assert env["SIGNUP_MAX_PER_CLIENT"] == "1000"
+    # Every container still has a memory limit.
+    assert all(service.get("mem_limit") for service in services.values())
+
+
+def test_grafana_starts_only_when_asked(tmp_path: Path) -> None:
+    config = lean_config(tmp_path, "--profile", "observability")
+    assert "lgtm" in config["services"]

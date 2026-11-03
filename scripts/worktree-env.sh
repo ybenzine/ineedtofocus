@@ -170,7 +170,30 @@ project_name() {  # <session .env>
   session=${session:-focus-local}
   session=${session#focus-}
   worktree=$(basename "$root")
-  printf 'focus-%s-%s\n' "$session" "$worktree" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_\n-' '-'
+  printf 'focus-%s-%s\n' "$session" "$worktree" | sanitize
+}
+
+# Lowercase, and anything Compose doesn't take in a project name becomes `-`.
+sanitize() {
+  tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_\n-' '-'
+}
+
+# 0 if a `docker compose ls` entry is a stack this script named for a subagent worktree that
+# no longer exists: project focus-<session>-<worktree id>, every config file under that
+# worktree, none of them left. A session's own project (focus-local, focus-m3) is never
+# one, even when its config files point into a removed worktree because a subagent started
+# it there with a copied .env.
+is_orphan_stack() {  # <project> <comma-separated config files>
+  local file dir id="" ids
+  IFS=, read -r -a ids <<<"$2"
+  for file in "${ids[@]}"; do
+    [[ -e $file ]] && return 1
+    dir=$(dirname "$file")
+    [[ $(dirname "$dir") == */.claude/worktrees ]] || return 1
+    [[ -z $id || $id == "$(basename "$dir")" ]] || return 1
+    id=$(basename "$dir")
+  done
+  [[ -n $id && $1 == focus-?*-"$(printf '%s\n' "$id" | sanitize)" ]]
 }
 
 write_env() {  # <session folder>
@@ -285,11 +308,11 @@ gc() {
     clear_slot "$(slot_dir)/$slot"
     printf 'Freed slot %s (%s is gone).\n' "$slot" "$owner"
   done
-  # Stacks started from a subagent worktree that's gone, with or without a slot record.
+  # Stacks this script named for a subagent worktree that's gone, with or without a slot
+  # record (e.g. the slot was freed but the stack kept running).
   while IFS=$'\t' read -r name files; do
-    [[ -n $name && $files == */.claude/worktrees/* ]] || continue
-    [[ $stopped == *" $name "* ]] && continue
-    [[ -e ${files%%,*} ]] && continue
+    [[ -n $name && $stopped != *" $name "* ]] || continue
+    is_orphan_stack "$name" "$files" || continue
     stop_project "$name"
   done < <(docker compose ls --all --format json | jq -r '.[] | [.Name, .ConfigFiles] | @tsv')
   list
