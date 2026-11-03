@@ -44,9 +44,22 @@ async function expectNoSeriousViolations(page: Page): Promise<void> {
   expect(serious.map((v) => `${v.id}: ${v.help}`)).toEqual([])
 }
 
+/** The open popover has real padding and stays inside a 16 px gutter (#461). */
+async function expectPaddedPopover(page: Page): Promise<void> {
+  const box = page.getByRole('list', { name: 'Add to calendar' })
+  await expect(box).toBeVisible()
+  const padding = await box.evaluate((el) => getComputedStyle(el).paddingLeft)
+  expect(parseFloat(padding)).toBeGreaterThanOrEqual(12)
+  const rect = await box.boundingBox()
+  const width = page.viewportSize()?.width ?? 0
+  expect(rect?.x ?? 0).toBeGreaterThanOrEqual(16)
+  expect((rect?.x ?? 0) + (rect?.width ?? 0)).toBeLessThanOrEqual(width - 16)
+}
+
 test('a finished session offers Google Calendar and a .ics that parses, on the summary and in History', async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 360, height: 640 })
   await installClock(page)
   await signUp(page, newEmail())
   await finishCountdown(page, { minutes: 1, tag: 'study', goal: 'Read, think; write' })
@@ -56,6 +69,7 @@ test('a finished session offers Google Calendar and a .ics that parses, on the s
   await control.click()
   const google = page.getByRole('link', { name: 'Google Calendar' })
   await expect(google).toBeVisible()
+  await expectPaddedPopover(page)
   await expect(google).toHaveAttribute('target', '_blank')
   const url = new URL((await google.getAttribute('href')) ?? '')
   expect(url.origin + url.pathname).toBe('https://calendar.google.com/calendar/render')
@@ -81,6 +95,7 @@ test('a finished session offers Google Calendar and a .ics that parses, on the s
   await openHistoryFromSummary(page)
   await page.getByRole('button', { name: /^Add to calendar: Study, 1 min on / }).click()
   await expect(page.getByRole('link', { name: 'Google Calendar' })).toBeVisible()
+  await expectPaddedPopover(page)
   await expectNoSeriousViolations(page)
   const again = page.waitForEvent('download')
   await page.getByRole('link', { name: 'Apple Calendar / other (.ics)' }).click()
