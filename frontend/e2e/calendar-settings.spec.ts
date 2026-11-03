@@ -47,7 +47,7 @@ test('create a link, fetch it, see the session, reset it and the old link stops 
   )
   await expect(section.getByRole('link', { name: 'Add to Google Calendar' })).toHaveAttribute(
     'href',
-    /^https:\/\/calendar\.google\.com\/calendar\/r\?cid=/,
+    /^https:\/\/calendar\.google\.com\/calendar\/u\/0\/r\?cid=webcal%3A%2F%2F/,
   )
   await expect(section.getByText(/shown only now/)).toBeVisible()
   await expectNoSeriousViolations(page)

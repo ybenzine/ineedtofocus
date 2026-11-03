@@ -2,6 +2,7 @@
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cacheUser, forgetCachedUser } from '../auth/localData.ts'
 import type { CalendarApi } from '../calendar/api.ts'
 import type { ApiResult } from '../sync/api.ts'
 import type { HistoryApi, HistoryData, HistoryQuery, HistorySession } from './api.ts'
@@ -164,5 +165,33 @@ describe('Add to calendar (.ics) on History', () => {
     renderScreen([session()], api)
     fireEvent.click(await button())
     expect(await screen.findByRole('alert')).toHaveTextContent('Couldn’t make the calendar file')
+  })
+})
+
+describe('the per-row Add to calendar on iOS (#454)', () => {
+  const iosChoice = async (rows: HistorySession[]) => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0)',
+    )
+    cacheUser({ id: 'me', email: 'a@b.co', created_at: '2026-01-01T00:00:00Z' })
+    renderScreen(rows)
+    fireEvent.click(await screen.findByRole('button', { name: /^Add to calendar: / }))
+  }
+
+  afterEach(() => forgetCachedUser())
+
+  it('is disabled with "Not synced yet" for a session not on the server', async () => {
+    await iosChoice([session({ unsaved: true, indicator: 'not-synced-yet' })])
+    expect(
+      screen.getByRole('button', { name: 'Apple Calendar / other (.ics)' }),
+    ).toHaveAccessibleDescription('Not synced yet')
+  })
+
+  it('is a link to the server copy for a synced session', async () => {
+    await iosChoice([session()])
+    expect(screen.getByRole('link', { name: 'Apple Calendar / other (.ics)' })).toHaveAttribute(
+      'href',
+      '/api/calendar/session/a.ics?tz=UTC',
+    )
   })
 })

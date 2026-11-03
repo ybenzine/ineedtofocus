@@ -10,7 +10,8 @@ export function useSessionSynced(
   sessions: SessionStore | null | undefined,
   sync: SyncEngine | null | undefined,
 ): boolean {
-  const [synced, setSynced] = useState(false)
+  // Keyed by id, so a new id reads as not synced until its own answer arrives.
+  const [known, setKnown] = useState<{ id: string; synced: boolean } | null>(null)
   useEffect(() => {
     if (!sessions) return
     let alive = true
@@ -18,7 +19,7 @@ export function useSessionSynced(
       void sessions
         .get(id)
         .then((entry) => {
-          if (alive) setSynced(entry?.syncState === 'synced')
+          if (alive) setKnown({ id, synced: entry?.syncState === 'synced' })
         })
         .catch(() => undefined)
     read()
@@ -28,5 +29,5 @@ export function useSessionSynced(
       stop?.()
     }
   }, [id, sessions, sync])
-  return synced
+  return known?.id === id && known.synced
 }

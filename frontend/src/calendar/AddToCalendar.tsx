@@ -10,6 +10,7 @@ import { useSettingsState } from '../settings/SettingsContext.ts'
 import { useOnline } from '../sounds/useOnline.ts'
 import { useTagsView } from '../tags/context.ts'
 import { formatDuration } from '../timerscreen/format.ts'
+import { deviceTimeZone } from '../history/api.ts'
 import { signedInUserId } from '../auth/localData.ts'
 import { icsBlobUrl, isIos, sessionIcsPath } from './download.ts'
 import {
@@ -99,7 +100,7 @@ export default function AddToCalendar({
   // and a synced session.
   const ios = isIos()
   const icsName = icsFileName(session.startedAt, timeZone)
-  const zone = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+  const zone = timeZone ?? deviceTimeZone()
   const signedIn = signedInUserId() !== null
   const icsUrl = useMemo(() => {
     if (!open || ios) return null
