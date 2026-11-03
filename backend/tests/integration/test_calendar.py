@@ -774,3 +774,113 @@ def test_ac7_no_secret_goal_or_custom_tag_name_in_logs_or_spans(
     assert "calendar feed" in logs  # the management lines are logged, without data
     parsed = [json.loads(line) for line in logs.splitlines() if line.startswith("{")]
     assert parsed
+
+
+# --- one session (AC14.7, #454) ------------------------------------------------------------
+
+
+def _vevent(body: bytes) -> bytes:
+    """The VEVENT block with its DTSTAMP line removed."""
+    text = body.decode()
+    block = text[text.index("BEGIN:VEVENT") : text.index("END:VEVENT") + len("END:VEVENT")]
+    return "\r\n".join(x for x in block.split("\r\n") if not x.startswith("DTSTAMP")).encode()
+
+
+def test_ac7_one_session_is_the_feed_event_with_headers(ada: TestClient) -> None:
+    sid = save(ada, "2026-10-30T23:30:00", goal="Write, the; report")
+    save(ada, "2026-10-30T09:00:00")
+    feed = ada.get(make_feed(ada))
+    r = ada.get(f"/api/calendar/session/{sid}.ics?tz=Europe/Paris")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "text/calendar; charset=utf-8"
+    assert r.headers["content-disposition"] == (
+        'inline; filename="ineedtofocus-2026-10-31-0030.ics"'  # 23:30 UTC is 00:30 in Paris
+    )
+    assert r.headers["cache-control"] == "private, no-store"
+    assert [str(e["UID"]).split("@")[0] for e in events(r)] == [sid]
+    no_stamp = b"\r\n".join(x for x in feed.content.split(b"\r\n") if not x.startswith(b"DTSTAMP"))
+    assert _vevent(r.content) in no_stamp  # byte-identical to the feed's event, DTSTAMP aside
+    default = ada.get(f"/api/calendar/session/{sid}.ics")
+    assert 'filename="ineedtofocus-2026-10-30-2330.ics"' in default.headers["content-disposition"]
+
+
+def test_ac7_one_session_applies_settings_but_not_tag_or_length_filters(ada: TestClient) -> None:
+    tag = ada.post("/api/tags", json={"name": "Deep", "color": "teal"}).json()["id"]
+    sid = save(ada, "2026-10-30T09:00:00", minutes=3, tag=tag, goal="Plan")
+    r = ada.patch(
+        "/api/settings",
+        json={"calendar_min_minutes": 15, "calendar_excluded_tags": [tag]},
+    )
+    assert r.status_code == 200, r.text
+    assert uids(ada.get(make_feed(ada))) == []
+    assert uids(ada.get(f"/api/calendar/session/{sid}.ics")) == [sid]
+    ada.patch(
+        "/api/settings",
+        json={
+            "calendar_title_template": "{mode}: {goal}",
+            "calendar_include_goal": False,
+            "calendar_include_description": False,
+        },
+    )
+    (event,) = events(ada.get(f"/api/calendar/session/{sid}.ics"))
+    assert str(event["SUMMARY"]) == "Countdown"
+    assert "DESCRIPTION" not in event
+
+
+def test_ac7_one_session_needs_sign_in(make_client: MakeClient) -> None:
+    sid = str(uuid.uuid4())
+    with make_client() as c:
+        assert c.get(f"/api/calendar/session/{sid}.ics").status_code == 401
+        assert c.head(f"/api/calendar/session/{sid}.ics").status_code == 401
+
+
+def test_ac7_one_session_not_yours_missing_archived_or_malformed_is_the_same_404(
+    ada: TestClient, bob: TestClient
+) -> None:
+    mine = save(ada, "2026-10-30T09:00:00")
+    archived = save(ada, "2026-10-30T10:00:00")
+    assert ada.post(f"/api/sessions/{archived}/archive").status_code == 200
+    answers = [
+        bob.get(f"/api/calendar/session/{mine}.ics"),
+        ada.get(f"/api/calendar/session/{uuid.uuid4()}.ics"),
+        ada.get(f"/api/calendar/session/{archived}.ics"),
+        ada.get("/api/calendar/session/not-a-uuid.ics"),
+    ]
+    assert {(r.status_code, r.text) for r in answers} == {(404, answers[0].text)}
+    assert "Not Found" in answers[0].text
+
+
+def test_ac7_one_session_validates_tz_and_supports_head(ada: TestClient) -> None:
+    sid = save(ada, "2026-10-30T09:00:00")
+    url = f"/api/calendar/session/{sid}.ics"
+    assert ada.get(f"{url}?tz=Nope/Zone").status_code == 422
+    got = ada.get(url)
+    head = ada.head(url)
+    assert head.status_code == 200
+    assert head.content == b""
+    for name in ("content-type", "content-disposition", "cache-control"):
+        assert head.headers[name] == got.headers[name]
+    assert int(head.headers["content-length"]) == len(got.content)
+
+
+def test_ac7_one_session_keeps_goal_tag_and_id_out_of_logs_and_spans(
+    traced: tuple[TestClient, InMemorySpanExporter, io.StringIO],
+) -> None:
+    c, exporter, stream = traced
+    assert signup(c).status_code == 201
+    tag = c.post("/api/tags", json={"name": TAG_NAME, "color": "teal"}).json()["id"]
+    sid = save(c, "2026-10-30T09:00:00", tag=tag, goal=GOAL)
+    assert c.get(f"/api/calendar/session/{sid}.ics").status_code == 200
+    assert c.head(f"/api/calendar/session/{sid}.ics").status_code == 200
+    assert c.get(f"/api/calendar/session/{uuid.uuid4()}.ics?x={GOAL}").status_code == 404
+    spans = exporter.get_finished_spans()
+    dumped = repr([(s.name, dict(s.attributes or {})) for s in spans])
+    logs = stream.getvalue()
+    for needle in (sid, GOAL, "merger", "Zebrafish", "ledger"):
+        assert needle not in dumped, needle
+        assert needle not in logs, needle
+    route = "/api/calendar/session/{session_id}.ics"
+    routed = [s for s in spans if (s.attributes or {}).get("http.route") == route]
+    assert len(routed) >= 3
+    for s in routed:
+        assert (s.attributes or {})["url.path"] == route
