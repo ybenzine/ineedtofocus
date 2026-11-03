@@ -84,9 +84,9 @@ class UserSettings(Base):
     )
     # 0 = Sunday ... 6 = Saturday (AC10.6: Sunday by default).
     week_start_day: Mapped[int] = mapped_column(SmallInteger, server_default=text("0"))
-    # `alert_volume` and `background_volume` are not mapped (#430): unused since #336. The columns
-    # stay in the database (NOT NULL, server defaults 80/50, so inserts work) until migration
-    # 0009 drops them in a later release, so no query names a column that is about to go.
+    # `alert_volume` and `background_volume` (device settings since #336) were dropped by
+    # migration 0009 (#430). The model stopped mapping them one release earlier (#446), so no
+    # query named a column that was about to go.
     keep_screen_awake: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     # Pause Rain/YouTube audio during Pomodoro breaks (AC12.6); on for everyone by default.
     pause_audio_on_breaks: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
