@@ -151,7 +151,7 @@ def test_countdown_recent_minutes_is_nullable_and_the_previous_release_ignores_i
         )
     )
     run(_exec(test_db_url, "INSERT INTO user_settings (user_id) VALUES (:u)", u=USER))
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "0006")
 
     def read(conn: Connection) -> Any:
         return conn.execute(text("SELECT countdown_recent_minutes FROM user_settings")).scalar_one()
@@ -196,7 +196,7 @@ def test_pause_audio_on_breaks_existing_rows_read_true_and_it_rolls_back(
         )
     )
     run(_exec(test_db_url, "INSERT INTO user_settings (user_id) VALUES (:u)", u=USER))
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "0008")
 
     def read(conn: Connection) -> Any:
         return conn.execute(text("SELECT pause_audio_on_breaks FROM user_settings")).scalar_one()
@@ -651,3 +651,45 @@ def test_430_migration_0009_drops_the_volume_columns_and_round_trips(
 
     command.upgrade(alembic_config, "head")
     assert not volumes & run(_with_conn(test_db_url, columns))
+
+
+def test_430_model_selects_and_inserts_with_and_without_the_volume_columns(
+    alembic_config: Config, test_db_url: str
+) -> None:
+    """The model does not map alert_volume/background_volume (#446). At 0008, where the columns
+    still exist, a select and an insert through the model work and the database fills the NOT
+    NULL columns from their server defaults (80, 50). At 0009/head, where they are gone, the
+    same statements work too."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models import User, UserSettings
+
+    async def go(email: str) -> int:
+        engine = create_async_engine(test_db_url)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                user = User(email=email, password_hash="x")
+                session.add(user)
+                await session.flush()
+                session.add(UserSettings(user_id=user.id))
+                await session.commit()
+                rows = (await session.execute(select(UserSettings))).scalars().all()
+                return len(rows)
+        finally:
+            await engine.dispose()
+
+    def volumes(conn: Connection) -> Any:
+        return [
+            tuple(r)
+            for r in conn.execute(
+                text("SELECT alert_volume, background_volume FROM user_settings")
+            )
+        ]
+
+    command.upgrade(alembic_config, "0008")
+    assert run(go("a@b.c")) == 1
+    assert run(_with_conn(test_db_url, volumes)) == [(80, 50)]  # filled by the server defaults
+
+    command.upgrade(alembic_config, "head")
+    assert run(go("d@e.f")) == 2

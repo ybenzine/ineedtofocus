@@ -1,10 +1,13 @@
 """Drop the unused sound-level settings (#430). The repo's first contract migration.
 
-The sound levels have been device settings since #336 (AC12.2). The release before this one
-no longer reads, writes or returns the two columns (#443), so dropping them is safe for it.
-A release from before #443 still reads them and would fail on this schema, which is why this
-revision sets each environment's rollback floor when that environment deploys it
-(_docs/deployment.md, Rollback floor). Dropping a column drops its CHECK constraint too.
+The sound levels have been device settings since #336 (AC12.2). Two releases got the code out
+first: #443 stopped returning, accepting and exporting the two columns, and #446 (96538d6)
+stopped mapping them in the model, so the release before this one no longer maps, reads,
+writes or returns them. Dropping them is safe for it, but not for a release from before #446:
+that one selects and inserts them and would fail on this schema. So prod must take #446 before
+this revision, and the revision sets each environment's rollback floor when that environment
+deploys it (_docs/deployment.md, Rollback floor). Dropping a column drops its CHECK constraint
+too.
 
 downgrade() puts both columns back with their old defaults (80, 50) and checks. Rows get the
 defaults: the values they held are not recoverable.
