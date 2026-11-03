@@ -9,6 +9,8 @@ import { HISTORY_PATH } from '../nav/screens.ts'
 import { AuthLink } from '../anonymous/AuthLink.tsx'
 import AddToCalendar from '../calendar/AddToCalendar.tsx'
 import { recordToCalendarSession } from '../calendar/session.ts'
+import { useSessionSynced } from '../calendar/useSynced.ts'
+import type { SessionStore, SyncEngine } from '../sync/index.ts'
 
 export { HISTORY_PATH }
 
@@ -23,6 +25,9 @@ export interface SessionSummaryProps {
   savePrompt?: boolean
   /** The session was just saved into the account from the prompt (#331). */
   inAccount?: boolean
+  /** The device's session store and sync engine, to know when the session reaches the server (#454). */
+  sessions?: SessionStore | null
+  sync?: SyncEngine | null
   onNewSession: () => void
   /** Switches to the History screen; without it the link is a plain `/history` link. */
   onViewHistory?: () => void
@@ -33,10 +38,13 @@ export default function SessionSummary({
   recordPending,
   savePrompt = false,
   inAccount = false,
+  sessions,
+  sync,
   onNewSession,
   onViewHistory,
 }: SessionSummaryProps) {
   const headingRef = useRef<HTMLHeadingElement>(null)
+  const synced = useSessionSynced(outcome.kind === 'saved' ? outcome.record.id : '', sessions, sync)
   useEffect(() => {
     headingRef.current?.focus()
   }, [])
@@ -94,7 +102,9 @@ export default function SessionSummary({
             </p>
           )}
           {/* Signed-in only (AC14.7): a session without an account has no calendar control. */}
-          {!savePrompt && <AddToCalendar session={recordToCalendarSession(outcome.record)} />}
+          {!savePrompt && (
+            <AddToCalendar session={recordToCalendarSession(outcome.record)} synced={synced} />
+          )}
           {savePrompt && (
             <p className="summary-prompt">
               <AuthLink form="signup" origin="prompt">

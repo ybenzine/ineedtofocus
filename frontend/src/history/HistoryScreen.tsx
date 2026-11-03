@@ -907,7 +907,7 @@ function SessionRow({
           >
             Edit
           </button>
-          <AddToCalendar session={session} timeZone={timeZone} />
+          <AddToCalendar session={session} timeZone={timeZone} synced={!session.unsaved} />
           {session.editRejected && !discarding && (
             <button
               type="button"

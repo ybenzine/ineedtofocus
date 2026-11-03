@@ -187,3 +187,52 @@ test.describe('at 360 px', () => {
     await expectNoSidewaysScroll(page)
   })
 })
+
+test.describe('on iOS (#454)', () => {
+  test.use({
+    userAgent:
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
+  })
+
+  test('the .ics choice is a same-tab link to the server copy once synced', async ({ page }) => {
+    await installClock(page)
+    await signUp(page, newEmail())
+    await finishCountdown(page, { minutes: 1, tag: 'work', goal: 'Read' })
+    await page.getByRole('button', { name: /^Add to calendar: Work, 1 min on / }).click()
+
+    // Enabled as a link once the session has synced (a disabled button until then).
+    const choice = page.getByRole('link', { name: 'Apple Calendar / other (.ics)' })
+    await expect(choice).toBeVisible({ timeout: 15_000 })
+    await expect(choice).toHaveAttribute('target', '_self')
+    await expect(choice).not.toHaveAttribute('download')
+    const href = (await choice.getAttribute('href')) ?? ''
+    expect(href).toMatch(/^\/api\/calendar\/session\/[0-9a-f-]{36}\.ics\?tz=[^&]+$/)
+    await expectNoSeriousViolations(page)
+
+    // Following it returns the session's event as text/calendar.
+    const response = await page.context().request.get(href)
+    expect(response.status()).toBe(200)
+    expect(response.headers()['content-type']).toContain('text/calendar')
+    const props = parseIcs(await response.text())
+    const id = /session\/([0-9a-f-]{36})\.ics/.exec(href)?.[1]
+    expect(props.UID).toBe(`${id}@ineedtofoc.us`)
+    expect(props.SUMMARY).toContain('Work')
+
+    // A real click on the link requests the same URL.
+    const requested = page.waitForRequest((r) => r.url().endsWith(href))
+    await choice.click().catch(() => undefined)
+    await requested
+  })
+
+  test('offline the choice is disabled with a hint', async ({ page, context }) => {
+    await installClock(page)
+    await signUp(page, newEmail())
+    await finishCountdown(page, { minutes: 1, tag: 'work' })
+    await context.setOffline(true)
+    await page.getByRole('button', { name: /^Add to calendar: Work, 1 min on / }).click()
+    const choice = page.getByRole('button', { name: 'Apple Calendar / other (.ics)' })
+    await expect(choice).toHaveAttribute('aria-disabled', 'true')
+    await expect(page.getByText('Needs a connection').first()).toBeVisible()
+    await context.setOffline(false)
+  })
+})

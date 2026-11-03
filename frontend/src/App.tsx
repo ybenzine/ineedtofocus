@@ -562,6 +562,8 @@ function AppBody({
           recordPending={view.update.recordPending}
           savePrompt={anonymous !== null && view.update.outcome.kind === 'saved'}
           inAccount={view.inAccount}
+          sessions={services.sessions}
+          sync={services.sync}
           onNewSession={() => goTo('setup')}
           onViewHistory={() => goTo('history')}
         />
