@@ -33,7 +33,7 @@ export function soundForEvents(events: readonly TimerEvent[]): SoundName | null 
   return sound
 }
 
-/** Where the alert volume (0–100) comes from: the Settings API's `alert_volume` (#22). */
+/** Where the alert volume (0–100) comes from: the device's sound level (#336). */
 export interface AlertVolumeStore {
   load(): number
   save(volume: number): void

@@ -615,7 +615,7 @@ def test_ac1_a_built_in_edit_made_during_a_rollback_wins_and_clears_the_custom_i
     assert run(_scalar(app_url, kept.format("user_settings")))[0][0] == 1
     # The next write of each row clears the custom id.
     assert ada.patch(f"/api/sessions/{sid}", json={"goal": "New goal"}).json()["tag"] == "study"
-    assert ada.patch("/api/settings", json={"alert_volume": 10}).json()["last_tag"] == "nap"
+    assert ada.patch("/api/settings", json={"week_start_day": 1}).json()["last_tag"] == "nap"
     assert run(_scalar(app_url, kept.format("focus_sessions")))[0][0] == 0
     assert run(_scalar(app_url, kept.format("user_settings")))[0][0] == 0
 

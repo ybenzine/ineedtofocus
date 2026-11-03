@@ -27,7 +27,7 @@ export const RAIN_LOOP_END = 56.1
 /** Gain ramp on start, pause and stop, so the noise never clicks (seconds). */
 export const FADE_SECONDS = 0.04
 
-/** Settings API `background_volume` default (0-100). */
+/** Default background volume (0-100), a device setting (#336). */
 export const DEFAULT_BACKGROUND_VOLUME = 50
 
 export function clampBackgroundVolume(value: number): number {

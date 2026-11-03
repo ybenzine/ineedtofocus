@@ -120,7 +120,8 @@ def test_ac1_settings_defaults_patch_and_account_export(ada: TestClient) -> None
     assert r.json()["calendar_excluded_tags"] == ["nap", tag]
     assert ada.get("/api/settings").json() == r.json()
     # An omitted field is unchanged.
-    assert ada.patch("/api/settings", json={"alert_volume": 5}).json()["calendar_min_minutes"] == 15
+    patched = ada.patch("/api/settings", json={"week_start_day": 5}).json()
+    assert patched["calendar_min_minutes"] == 15
     export = ada.get("/api/account/export").json()
     assert export["settings"]["calendar_excluded_tags"] == ["nap", tag]
     assert export["settings"]["calendar_name"] == "My focus"

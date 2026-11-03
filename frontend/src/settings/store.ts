@@ -43,12 +43,6 @@ export interface SettingsState {
   pending: SettingsPatch
   /** True after a send failed (offline, server trouble, signed out) until one succeeds. */
   stalled: boolean
-  /**
-   * True once the copy holds a server answer (GET or PATCH). Before that the values are the
-   * defaults plus local edits, so the sound levels must not seed from them (#336). A cache from
-   * a client before #336 has no flag and counts as loaded.
-   */
-  loaded: boolean
 }
 
 export interface SettingsStoreOptions {
@@ -68,12 +62,6 @@ export interface SettingsStoreOptions {
   key?: string
   /** The Web Lock that guards the device copy. */
   lock?: string
-  /**
-   * Told the settings as soon as a real copy of them is known: the cached copy at construction
-   * or a `GET /api/settings` answer, never the defaults shown before. The sound levels (device
-   * settings, #336) seed from it once.
-   */
-  onLoaded?: (values: Settings) => void
 }
 
 const MAX_RETRY_MS = 60_000
@@ -102,7 +90,6 @@ export class SettingsStore {
   readonly #retryBaseMs: number
   readonly #key: string
   readonly #lock: string
-  readonly #onLoaded: ((values: Settings) => void) | undefined
   #abort = new AbortController()
   #state: SettingsState
   #disposed = false
@@ -127,16 +114,12 @@ export class SettingsStore {
     this.#retryBaseMs = options.retryBaseMs ?? 2000
     this.#key = options.key ?? SETTINGS_KEY
     this.#lock = options.lock ?? SETTINGS_LOCK
-    this.#onLoaded = options.onLoaded
     const stored = this.#readStored()
     this.#state = stored ?? {
       values: DEFAULT_SETTINGS,
       pending: {},
       stalled: false,
-      loaded: false,
     }
-    // Deferred: the app builds the store while rendering, and seeding updates other components.
-    if (stored?.loaded) queueMicrotask(() => this.#onLoaded?.(stored.values))
   }
 
   /** False once disposed or once a different user is signed in. */
@@ -158,7 +141,6 @@ export class SettingsStore {
           owner?: unknown
           values?: unknown
           pending?: unknown
-          loaded?: unknown
         }
         // Someone else's cache is never shown to or sent for this user.
         if ((stored.owner ?? null) === this.#owner) {
@@ -166,7 +148,6 @@ export class SettingsStore {
             values: parseSettings(stored.values),
             pending: pickKnown(stored.pending),
             stalled: false,
-            loaded: stored.loaded === undefined || stored.loaded === true,
           }
         }
       }
@@ -192,7 +173,6 @@ export class SettingsStore {
           owner: this.#owner,
           values: without(state.values),
           pending: without(state.pending),
-          loaded: state.loaded,
         }),
       )
     } catch {
@@ -391,7 +371,6 @@ export class SettingsStore {
           values: { ...base.values, ...lost },
           pending: { ...base.pending, ...lost },
           stalled: this.#state.stalled,
-          loaded: base.loaded,
         }
         this.#write(merged)
         if (this.#writing === 1) this.#adopt(merged)
@@ -458,7 +437,6 @@ export class SettingsStore {
       if (server) {
         this.#revision++
         this.#attempt = 0
-        this.#onLoaded?.(server)
       }
       // A field another tab (or the user) changed meanwhile stays pending: only what was sent goes.
       this.#commit((state) => {
@@ -472,7 +450,6 @@ export class SettingsStore {
           values: server ? { ...server, ...pending } : state.values,
           pending,
           stalled: false,
-          loaded: state.loaded || server !== null,
         }
       })
     }
@@ -504,13 +481,11 @@ export class SettingsStore {
     const revision = this.#revision
     try {
       const server = await api.get(this.#abort.signal)
-      if (this.#live()) this.#onLoaded?.(server)
       // An edit or an accepted send happened meanwhile: this answer is older than the device.
       if (revision !== this.#revision) {
-        this.#commit(() => ({ loaded: true }))
         return
       }
-      this.#commit((state) => ({ values: { ...server, ...state.pending }, loaded: true }))
+      this.#commit((state) => ({ values: { ...server, ...state.pending } }))
     } catch (error) {
       if (error instanceof SettingsError && error.kind === 'unauthorized' && this.#live()) {
         this.#onUnauthorized?.()

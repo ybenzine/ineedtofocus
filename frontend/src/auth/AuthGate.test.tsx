@@ -102,7 +102,7 @@ function fill(email: string, password: string) {
 function seedUserData() {
   localStorage.setItem(
     SETTINGS_KEY,
-    JSON.stringify({ owner: 'u', values: { alert_volume: 40 }, pending: { week_start_day: 1 } }),
+    JSON.stringify({ owner: 'u', values: { week_start_day: 4 }, pending: { week_start_day: 1 } }),
   )
   for (const legacy of ['preferences', 'keepAwake', 'alertVolume']) {
     localStorage.setItem(`ineedtofocus.${legacy}`, '1')
