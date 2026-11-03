@@ -43,7 +43,7 @@ Folders fill in as their issues land.
 
 ## Commands
 
-All entry points go through `make` (`make help` lists them). Needs Docker with Compose v2, [uv](https://docs.astral.sh/uv/), Node.js ≥ 22 and [jq](https://jqlang.org/) (`make test-scripts` uses it; macOS 15+ and the Ubuntu runners ship it).
+All entry points go through `make` (`make help` lists them). Needs Docker with Compose v2 (2.24 or later for `make up-test`), [uv](https://docs.astral.sh/uv/), Node.js ≥ 22 and [jq](https://jqlang.org/) (`make test-scripts` uses it; macOS 15+ and the Ubuntu runners ship it).
 
 | Command | Does |
 |---|---|
@@ -51,7 +51,7 @@ All entry points go through `make` (`make help` lists them). Needs Docker with C
 | `make up` | Start the full local stack (app, Postgres, Grafana/OTel) with Docker Compose; the app service arrives with #4 |
 | `make down` | Stop it (keeps the database volume) |
 | `make up-test` | Lean stack for tests: app + Postgres on a throwaway tmpfs, no Grafana/OTLP (`compose.test.yaml`) |
-| `make worktree-env SESSION=<folder>` | In a subagent worktree: write its `.env` with its own Compose project and a free slot of ports (#442); `make down` frees the slot, `make worktree-gc` stops stacks of removed worktrees |
+| `make worktree-env SESSION=<folder>` | In a subagent worktree: write its `.env` with its own Compose project and a free slot of ports (#442); `make down` frees the slot, `make worktree-gc` stops stacks of removed worktrees and lists, never removes, their leftover database volumes |
 | `make test` | Run every test suite: backend unit + integration, frontend unit, repo scripts, the server bootstrap in an Ubuntu container, the production config checks (`test-infra`), Playwright end-to-end (run only if a stack answers at `PLAYWRIGHT_BASE_URL`, default this checkout's own app: the port its stack publishes, else `APP_PORT` from the environment or `.env`, else 8000; otherwise skipped loudly, a failure when `CI` is set. A subagent worktree with no `.env` and no `PLAYWRIGHT_BASE_URL` skips it the same way without probing, and `make test-e2e` stops there ([Subagent worktrees](_docs/process.md#parallel-sessions-one-worktree-each)); elsewhere `make test-e2e` always runs it and tests that URL; a default local stack allows 10 sign-ups an hour, so start it with `SIGNUP_MAX_PER_CLIENT=1000`). `make test-prod-stack` smoke-tests the production stack separately |
 | `make lint` | Linters and type checks for backend (ruff, mypy), frontend (ESLint, Prettier, tsc), repo scripts, shell scripts (shellcheck) and workflows (actionlint) |
 | `make fmt` | Auto-format |

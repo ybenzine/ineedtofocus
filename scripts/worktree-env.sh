@@ -17,10 +17,14 @@
 #   scripts/worktree-env.sh release
 #       (`make down`) Free the slot this worktree holds.
 #   scripts/worktree-env.sh gc
-#       (`make worktree-gc`) Stop the stacks of subagent worktrees whose folder is gone and
-#       free their slots, then list the slots in use.
+#       (`make worktree-gc`) Stop the stacks this script set up for subagent worktrees whose
+#       folder is gone and free their slots, list leftover database volumes (never removes
+#       them), then list the slots in use.
 #   scripts/worktree-env.sh list
 #       List the slots in use.
+#   scripts/worktree-env.sh require-compose
+#       (`make up-test`) Stop unless Docker Compose is 2.24 or later, which compose.test.yaml's
+#       `!override` and `!reset` tags need.
 #
 # claim and release do nothing in a checkout whose .env has no WORKTREE_SLOT line: the main
 # checkout, a session worktree, CI, or a .env copied by hand.
@@ -30,10 +34,20 @@
 # checkout (+0), a second session worktree (+10) or a third (+20). Eight slots: two parallel
 # sessions of at most 4 subagents each (#172).
 #
-# A slot is a directory, <git common dir>/focus-worktree-slots/<k>, holding the owning
-# worktree's path. `mkdir` either creates it or fails, so two agents starting at once never
-# get the same slot. A slot whose owner folder no longer exists is stale and can be taken
-# over. A new slot is only taken if none of its ports answers on 127.0.0.1.
+# A slot is a directory, <git common dir>/focus-worktree-slots/<k>, with `owner` (the owning
+# worktree's path) and `project` (its Compose project). `mkdir` either creates it or fails,
+# so two agents starting at once never get the same slot. A new slot is only taken if none
+# of its ports answers on 127.0.0.1.
+#
+# A slot is stale when its owner folder no longer exists, or when it has had no owner for
+# over a minute (an agent killed between `mkdir` and writing `owner`). Clearing a stale slot
+# happens only under a lock (<slots>/.lock) and after checking again that it's still
+# stale, so a claim another agent just made is never cleared.
+#
+# `project` is written only by the slot's owner, and only with a name this script gives that
+# worktree (focus-<session>-<its id>). gc stops a recorded project only when it still has
+# that form for the slot's owner, so it never stops a session's shared stack (focus-local,
+# focus-m3) or another worktree's.
 #
 # Environment: WORKTREE_SLOT_DIR overrides where slots live (tests).
 # WORKTREE_SLOT_TEST_BUSY_PORTS, when set, replaces the real port check with that
@@ -49,10 +63,19 @@ LAST_SLOT=17
 PORTS="APP_PORT:8000 VITE_PORT:5173 GRAFANA_PORT:3000 OTLP_GRPC_PORT:4317 OTLP_HTTP_PORT:4318 POSTGRES_PORT:5432"
 # Lines of the session's .env this script sets itself.
 OWN_KEYS="WORKTREE_SESSION|WORKTREE_SLOT|COMPOSE_PROJECT_NAME|APP_PORT|GRAFANA_PORT|OTLP_GRPC_PORT|OTLP_HTTP_PORT|POSTGRES_PORT|DATABASE_URL"
+# How long, in minutes, an owner-less slot or the lock may sit before it counts as left over.
+GRACE_MINUTES=1
+# compose.test.yaml's `!override` and `!reset` need this Compose version or later.
+COMPOSE_MIN_MAJOR=2
+COMPOSE_MIN_MINOR=24
 
 die() {
   printf 'worktree-env: %s\n' "$*" >&2
   exit 1
+}
+
+git_common_dir() {
+  (cd "$root" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
 }
 
 slot_dir() {
@@ -61,9 +84,20 @@ slot_dir() {
     return
   fi
   local common
-  common=$(cd "$root" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) ||
-    die "not in a git checkout, so there is nowhere shared to keep the slots"
+  common=$(git_common_dir) || die "not in a git checkout, so there is nowhere shared to keep the slots"
   printf '%s/focus-worktree-slots\n' "$common"
+}
+
+# Where subagent worktrees live: <main checkout>/.claude/worktrees.
+worktrees_dir() {
+  local common
+  if [[ $root/ == */.claude/worktrees/* ]]; then
+    printf '%s/.claude/worktrees\n' "${root%%/.claude/worktrees/*}"
+  elif common=$(git_common_dir); then
+    printf '%s/.claude/worktrees\n' "$(dirname "$common")"
+  else
+    printf '%s/.claude/worktrees\n' "$root"
+  fi
 }
 
 # The last value of KEY in an env file, the way Compose reads it: `KEY=v` or `export KEY=v`,
@@ -77,6 +111,18 @@ env_get() {  # <file> <key>
   value=${value//\"/}
   value=${value//\'/}
   printf '%s\n' "$value"
+}
+
+# Lowercase, and anything Compose doesn't take in a project name becomes `-`.
+sanitize() {
+  tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_\n-' '-'
+}
+
+# 0 if <project> is a name this script gives the worktree at <path>: focus-<session>-<its id>.
+is_own_project() {  # <project> <worktree path>
+  local id
+  id=$(basename "$2" | sanitize)
+  [[ -n $id && $1 == focus-?*-"$id" ]]
 }
 
 port_in_use() {  # <port>
@@ -104,31 +150,81 @@ owner_of() {  # <slot>: the owning worktree's path, or nothing
   fi
 }
 
-# 0 if the slot is taken by a worktree folder that no longer exists.
-is_stale() {  # <slot>
-  local owner
-  owner=$(owner_of "$1")
-  [[ -n $owner && ! -d $owner ]]
+project_of() {  # <slot>: the recorded Compose project, or nothing
+  cat "$(slot_dir)/$1/project" 2>/dev/null || true
 }
 
-# Take <slot> for this worktree. 0 on success (also when it already holds it).
+older_than_grace() {  # <path>
+  [[ -n $(find "$1" -maxdepth 0 -mmin +"$GRACE_MINUTES" 2>/dev/null) ]]
+}
+
+# 0 if the slot is taken but left over: its owner folder is gone, or it has had no owner
+# for longer than the grace period.
+is_stale() {  # <slot>
+  local dir owner
+  dir="$(slot_dir)/$1"
+  [[ -d $dir ]] || return 1
+  owner=$(owner_of "$1")
+  if [[ -n $owner ]]; then
+    [[ ! -d $owner ]]
+  else
+    older_than_grace "$dir"
+  fi
+}
+
+# Run a command holding the slots' lock. A lock older than the grace period was left by a
+# killed run and is broken.
+with_lock() {  # <command> [args]
+  local lock tries=0 status=0
+  lock="$(slot_dir)/.lock"
+  until mkdir "$lock" 2>/dev/null; do
+    if older_than_grace "$lock"; then
+      rmdir "$lock" 2>/dev/null || true
+      continue
+    fi
+    tries=$((tries + 1))
+    ((tries < 300)) || die "the slots stayed locked for 30 s ($lock)"
+    sleep 0.1
+  done
+  "$@" || status=$?
+  rmdir "$lock" 2>/dev/null || true
+  return "$status"
+}
+
+clear_slot() {  # <slot>
+  local dir
+  dir="$(slot_dir)/$1"
+  rm -f "$dir/owner" "$dir/project"
+  rmdir "$dir" 2>/dev/null || true
+}
+
+# Under the lock: clear the slot only if it's still stale now.
+clear_if_stale() {  # <slot>
+  if is_stale "$1"; then
+    clear_slot "$1"
+  fi
+}
+
+# Take <slot> for this worktree. 0 on success (also when it already holds it). Records only
+# the owner; the project is recorded by record_project.
 take() {  # <slot>
   local dir
   dir="$(slot_dir)/$1"
   [[ $(owner_of "$1") == "$root" ]] && return 0
   if is_stale "$1"; then
-    # Move the stale claim aside first: of two agents doing this at once, only one rename
-    # succeeds, and only one mkdir below.
-    mv "$dir" "$dir.stale.$$" 2>/dev/null && clear_slot "$dir.stale.$$"
+    with_lock clear_if_stale "$1"
   fi
   mkdir "$dir" 2>/dev/null || return 1
   printf '%s\n' "$root" >"$dir/owner"
-  printf '%s\n' "$(env_get "$env_file" COMPOSE_PROJECT_NAME)" >"$dir/project"
+  [[ $(owner_of "$1") == "$root" ]]
 }
 
-clear_slot() {  # <slot directory>
-  rm -f "$1/owner" "$1/project"
-  rmdir "$1" 2>/dev/null || true
+# Record <project> for <slot>, only while this worktree owns the slot and only if it's a
+# name this script gives this worktree.
+record_project() {  # <slot> <project>
+  [[ $(owner_of "$1") == "$root" ]] || return 0
+  is_own_project "$2" "$root" || return 0
+  printf '%s\n' "$2" >"$(slot_dir)/$1/project"
 }
 
 # The slots this worktree holds.
@@ -149,15 +245,18 @@ allocate() {
     return
   fi
   for ((slot = FIRST_SLOT; slot <= LAST_SLOT; slot++)); do
-    if ! slot_ports_free "$slot" && [[ -z $(owner_of "$slot") ]]; then
+    if ! slot_ports_free "$slot" && ! [[ -d "$(slot_dir)/$slot" ]]; then
       continue  # something outside the slots (another process, an old stack) holds a port
     fi
-    if take "$slot"; then
-      if slot_ports_free "$slot"; then
-        printf '%s\n' "$slot"
-        return
-      fi
-      clear_slot "$(slot_dir)/$slot"  # a stale owner's stack still runs there
+    take "$slot" || continue
+    if ! slot_ports_free "$slot"; then
+      clear_slot "$slot"  # a stale owner's stack still runs there
+      continue
+    fi
+    # Still ours? Then it's the slot.
+    if [[ $(owner_of "$slot") == "$root" ]]; then
+      printf '%s\n' "$slot"
+      return
     fi
   done
   list >&2
@@ -171,11 +270,6 @@ project_name() {  # <session .env>
   session=${session#focus-}
   worktree=$(basename "$root")
   printf 'focus-%s-%s\n' "$session" "$worktree" | sanitize
-}
-
-# Lowercase, and anything Compose doesn't take in a project name becomes `-`.
-sanitize() {
-  tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9_\n-' '-'
 }
 
 # 0 if a `docker compose ls` entry is a stack this script named for a subagent worktree that
@@ -193,7 +287,7 @@ is_orphan_stack() {  # <project> <comma-separated config files>
     [[ -z $id || $id == "$(basename "$dir")" ]] || return 1
     id=$(basename "$dir")
   done
-  [[ -n $id && $1 == focus-?*-"$(printf '%s\n' "$id" | sanitize)" ]]
+  [[ -n $id ]] && is_own_project "$1" "$id"
 }
 
 write_env() {  # <session folder>
@@ -210,7 +304,7 @@ write_env() {  # <session folder>
   project=$(project_name "$source")
   mkdir -p "$(slot_dir)"
   slot=$(allocate)
-  printf '%s\n' "$project" >"$(slot_dir)/$slot/project"
+  record_project "$slot" "$project"
   offset=$((10 * slot))
   user=$(env_get "$source" POSTGRES_USER)
   password=$(env_get "$source" POSTGRES_PASSWORD)
@@ -243,7 +337,7 @@ EOF
 
   local extra
   for extra in $(held_slots); do
-    [[ $extra == "$slot" ]] || clear_slot "$(slot_dir)/$extra"
+    [[ $extra == "$slot" ]] || clear_slot "$extra"
   done
   printf 'Wrote %s from %s\n' "$env_file" "$source"
   printf '  project %s, slot %s: app http://localhost:%s, Vite %s, Grafana %s, Postgres %s\n' \
@@ -257,6 +351,9 @@ claim() {
   [[ -n $slot ]] || return 0
   mkdir -p "$(slot_dir)"
   if take "$slot"; then
+    # .env is one write_env made; record_project still refuses a name that isn't this
+    # worktree's own, e.g. one edited in by hand.
+    record_project "$slot" "$(env_get "$env_file" COMPOSE_PROJECT_NAME)"
     return 0
   fi
   session=$(env_get "$env_file" WORKTREE_SESSION)
@@ -270,7 +367,7 @@ release() {
   local slot
   [[ -n $(env_get "$env_file" WORKTREE_SLOT) ]] || return 0
   for slot in $(held_slots); do
-    clear_slot "$(slot_dir)/$slot"
+    clear_slot "$slot"
     printf 'Freed slot %s.\n' "$slot"
   done
 }
@@ -281,9 +378,14 @@ list() {
   for ((slot = FIRST_SLOT; slot <= LAST_SLOT; slot++)); do
     [[ -d "$(slot_dir)/$slot" ]] || continue
     owner=$(owner_of "$slot")
-    project=$(cat "$(slot_dir)/$slot/project" 2>/dev/null || true)
-    state=$owner
-    [[ -d $owner ]] || state="$owner (gone)"
+    project=$(project_of "$slot")
+    if [[ -z $owner ]]; then
+      state="(no owner yet)"
+    elif [[ -d $owner ]]; then
+      state=$owner
+    else
+      state="$owner (gone)"
+    fi
     printf '%-5s %-9s %-45s %s\n' "$slot" $((8000 + 10 * slot)) "${project:-?}" "$state"
   done
 }
@@ -295,18 +397,40 @@ stop_project() {  # <project>
     down --rmi local --remove-orphans
 }
 
+# Database volumes a full `make up` left in subagent worktrees (agent-<id>, as Claude Code
+# names them) whose folder is gone and that no container uses.
+leftover_volumes() {
+  local name id dir
+  dir=$(worktrees_dir)
+  while read -r name; do
+    [[ $name == focus-?*-agent-?*_db-data ]] || continue
+    id=${name%_db-data}
+    id=agent-${id##*-agent-}
+    [[ -d $dir/$id ]] && continue
+    [[ -n $(docker ps -aq --filter "volume=$name") ]] && continue
+    printf '%s\n' "$name"
+  done < <(docker volume ls --format '{{.Name}}')
+}
+
 gc() {
-  local slot owner project stopped=" " name files
+  local slot owner project stopped=" " name files volumes
   for ((slot = FIRST_SLOT; slot <= LAST_SLOT; slot++)); do
     is_stale "$slot" || continue
     owner=$(owner_of "$slot")
-    project=$(cat "$(slot_dir)/$slot/project" 2>/dev/null || true)
-    if [[ -n $project ]]; then
+    project=$(project_of "$slot")
+    if [[ -n $project && -n $owner ]] && is_own_project "$project" "$owner"; then
       stop_project "$project"
       stopped+="$project "
+    elif [[ -n $project ]]; then
+      printf 'Slot %s records project %s, which is not a name worktree-env gives %s: left running.\n' \
+        "$slot" "$project" "${owner:-an owner-less slot}"
     fi
-    clear_slot "$(slot_dir)/$slot"
-    printf 'Freed slot %s (%s is gone).\n' "$slot" "$owner"
+    with_lock clear_if_stale "$slot"
+    if [[ -n $owner ]]; then
+      printf 'Freed slot %s (%s is gone).\n' "$slot" "$owner"
+    else
+      printf 'Freed slot %s (no owner for over %s minute).\n' "$slot" "$GRACE_MINUTES"
+    fi
   done
   # Stacks this script named for a subagent worktree that's gone, with or without a slot
   # record (e.g. the slot was freed but the stack kept running).
@@ -315,7 +439,24 @@ gc() {
     is_orphan_stack "$name" "$files" || continue
     stop_project "$name"
   done < <(docker compose ls --all --format json | jq -r '.[] | [.Name, .ConfigFiles] | @tsv')
+  volumes=$(leftover_volumes)
+  if [[ -n $volumes ]]; then
+    printf 'Database volumes left by a full make up in subagent worktrees that are gone.\n'
+    printf 'Not removed: deleting data is a human gate (_docs/process.md). To remove them:\n'
+    printf '  docker volume rm %s\n' "${volumes//$'\n'/ }"
+  fi
   list
+}
+
+require_compose() {
+  local version
+  version=$(docker compose version --short 2>/dev/null || true)
+  version=${version#v}
+  [[ $version =~ ^([0-9]+)\.([0-9]+) ]] || return 0  # unknown: let Compose speak for itself
+  local major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]}
+  if ((major < COMPOSE_MIN_MAJOR || (major == COMPOSE_MIN_MAJOR && minor < COMPOSE_MIN_MINOR))); then
+    die "make up-test needs Docker Compose $COMPOSE_MIN_MAJOR.$COMPOSE_MIN_MINOR or later (compose.test.yaml uses !override and !reset); this is $version. Update Docker, or run the full stack with make up."
+  fi
 }
 
 case "${1:-}" in
@@ -324,8 +465,9 @@ case "${1:-}" in
   release) release ;;
   gc) gc ;;
   list) list ;;
+  require-compose) require_compose ;;
   *)
-    echo "usage: scripts/worktree-env.sh write <session folder> | claim | release | gc | list" >&2
+    echo "usage: scripts/worktree-env.sh write <session folder> | claim | release | gc | list | require-compose" >&2
     exit 2
     ;;
 esac

@@ -70,8 +70,9 @@ up: ## Build and start the local stack, wait until it is healthy, print its URLs
 	$(COMPOSE) up -d --build --wait
 	@scripts/stack-urls.sh
 
-up-test: ## Lean stack for tests: app + Postgres on a tmpfs, no Grafana/OTLP (compose.test.yaml)
+up-test: ## Lean stack for tests: app + Postgres on a tmpfs, no Grafana/OTLP (compose.test.yaml; Compose 2.24+)
 	@$(WORKTREE_ENV_GUARD) "make up-test"
+	@$(WORKTREE_ENV) require-compose
 	@$(WORKTREE_ENV) claim
 	$(COMPOSE) -f compose.yaml -f compose.test.yaml up -d --build --wait
 	@scripts/stack-urls.sh
@@ -84,7 +85,7 @@ down: ## Stop the local stack (keeps the database volume; a subagent worktree's 
 worktree-env: ## In a subagent worktree: write its .env (own project and ports) from SESSION=<session folder>'s
 	@$(WORKTREE_ENV) write "$(SESSION)"
 
-worktree-gc: ## Stop stacks of subagent worktrees whose folder is gone, free their slots, list the rest
+worktree-gc: ## Stop stacks of subagent worktrees whose folder is gone, free their slots, list leftover volumes and slots
 	@$(WORKTREE_ENV) gc
 
 logs: ## Follow the local stack's logs

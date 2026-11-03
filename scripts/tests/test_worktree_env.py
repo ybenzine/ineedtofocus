@@ -38,6 +38,9 @@ case "$1 $2" in
   "compose port") exit 1 ;;
   "compose config") echo "name: focus-test" ;;
   "compose ls") printf '%s\\n' "${FAKE_COMPOSE_LS:-[]}" ;;
+  "compose version") echo "${FAKE_COMPOSE_VERSION:-2.29.1}" ;;
+  "volume ls") [ -n "${FAKE_VOLUMES:-}" ] && printf '%s\\n' $FAKE_VOLUMES ;;
+  "ps -aq") case " ${FAKE_VOLUMES_IN_USE:-} " in *" ${4#volume=} "*) echo c0ffee ;; esac ;;
 esac
 exit 0
 """
@@ -306,7 +309,30 @@ def test_make_up_test_claims_the_slot_again_and_starts_the_lean_stack(lab: Lab) 
     assert result.returncode == 0, result.stderr
     assert lab.owners() == {10: str(root.resolve())}
     calls = lab.log.read_text().splitlines()
-    assert calls[0] == "docker compose -f compose.yaml -f compose.test.yaml up -d --build --wait"
+    assert calls[:2] == [
+        "docker compose version --short",
+        "docker compose -f compose.yaml -f compose.test.yaml up -d --build --wait",
+    ]
+
+
+@pytest.mark.parametrize("version", ["2.20.3", "v2.23.9", "1.29.2"])
+def test_make_up_test_stops_on_a_compose_too_old_for_the_override(lab: Lab, version: str) -> None:
+    root = lab.worktree("agent-old-compose")
+    lab.write(root)
+    result = lab.make(root, "up-test", FAKE_COMPOSE_VERSION=version)
+    assert result.returncode != 0
+    assert "needs Docker Compose 2.24 or later" in result.stderr
+    assert f"this is {version.removeprefix('v')}" in result.stderr
+    assert lab.log.read_text().splitlines() == ["docker compose version --short"]
+
+
+@pytest.mark.parametrize("version", ["2.24.0", "v2.29.1", "5.6.1", "unknown"])
+def test_make_up_test_runs_on_a_recent_or_unknown_compose(lab: Lab, version: str) -> None:
+    root = lab.worktree("agent-new-compose")
+    lab.write(root)
+    result = lab.make(root, "up-test", FAKE_COMPOSE_VERSION=version)
+    assert result.returncode == 0, result.stderr
+    assert "up -d --build --wait" in lab.log.read_text()
 
 
 def test_claim_moves_to_a_free_slot_when_another_worktree_took_it(lab: Lab) -> None:
@@ -440,3 +466,160 @@ def test_the_lean_stack_is_app_and_postgres_on_a_tmpfs(tmp_path: Path) -> None:
 def test_grafana_starts_only_when_asked(tmp_path: Path) -> None:
     config = lean_config(tmp_path, "--profile", "observability")
     assert "lgtm" in config["services"]
+
+
+# --- Review round 1: records, races, owner-less slots, leftover volumes ---------------------
+
+OLD = 1_600_000_000  # an mtime long past the one-minute grace period
+
+
+def fake_slot(lab: Lab, slot: int, owner: str | None, project: str | None = None) -> Path:
+    path = lab.slots / str(slot)
+    path.mkdir(parents=True)
+    if owner is not None:
+        (path / "owner").write_text(f"{owner}\n")
+    if project is not None:
+        (path / "project").write_text(f"{project}\n")
+    return path
+
+
+def slot_dirs(lab: Lab) -> list[str]:
+    return sorted(path.name for path in lab.slots.iterdir() if path.name.isdigit())
+
+
+def test_gc_never_stops_a_recorded_project_it_did_not_name(lab: Lab) -> None:
+    """A stale record naming the session's shared stack, a session project or another live
+    worktree's stack is freed, but nothing is stopped."""
+    live = lab.worktree("agent-live")
+    lab.write(live)  # slot 10, focus-m6-agent-live
+    worktrees = lab.main / ".claude" / "worktrees"
+    fake_slot(lab, 11, str(worktrees / "agent-gone"), "focus-local")
+    fake_slot(lab, 12, str(worktrees / "agent-gone2"), "focus-m6-agent-live")
+    fake_slot(lab, 13, str(worktrees / "agent-gone3"), "focus-m6")
+    result = lab.make(live, "worktree-gc")
+    assert result.returncode == 0, result.stderr
+    assert [line for line in lab.log.read_text().splitlines() if " down" in line] == []
+    for slot, project in [(11, "focus-local"), (12, "focus-m6-agent-live"), (13, "focus-m6")]:
+        assert f"Slot {slot} records project {project}, which is not a name" in result.stdout
+        assert f"Freed slot {slot} (" in result.stdout
+    assert lab.owners() == {10: str(live.resolve())}
+
+
+def test_gc_stops_a_recorded_project_it_named(lab: Lab) -> None:
+    live = lab.worktree("agent-live")
+    lab.write(live)
+    fake_slot(lab, 11, str(lab.main / ".claude/worktrees/agent-gone"), "focus-m6-agent-gone")
+    result = lab.make(live, "worktree-gc")
+    downs = [line for line in lab.log.read_text().splitlines() if " down" in line]
+    assert len(downs) == 1, result.stdout
+    assert "-p focus-m6-agent-gone down" in downs[0]
+
+
+def test_claim_never_records_a_name_that_is_not_the_worktrees_own(lab: Lab) -> None:
+    """take() records only the owner, and claim's record refuses a hand-edited name, so a
+    .env still naming the session's project can't get it into a record."""
+    root = lab.worktree("agent-edited")
+    (root / ".env").write_text("WORKTREE_SLOT=10\nCOMPOSE_PROJECT_NAME=focus-local\n")
+    result = lab.make(root, "up")
+    assert result.returncode == 0, result.stderr
+    assert lab.owners() == {10: str(root.resolve())}
+    assert not (lab.slots / "10" / "project").exists()
+
+
+def test_a_hand_copied_env_never_reaches_the_record(lab: Lab) -> None:
+    """The migration case: the worktree still has a session .env naming focus-local."""
+    root = lab.worktree("agent-copied")
+    (root / ".env").write_text(SESSION_ENV.replace("focus-m6", "focus-local"))
+    env = lab.write(root)
+    assert env["COMPOSE_PROJECT_NAME"] == "focus-m6-agent-copied"
+    assert (lab.slots / "10" / "project").read_text().strip() == "focus-m6-agent-copied"
+
+
+def test_agents_racing_for_a_stale_slot_each_end_up_with_their_own(lab: Lab) -> None:
+    """Every agent sees slot 10 as stale at once: one gets it, the rest get other slots, and
+    every record (owner and project) belongs to the worktree whose .env names that slot."""
+    fake_slot(lab, 10, str(lab.main / ".claude/worktrees/agent-gone"), "focus-m6-agent-gone")
+    roots = [lab.worktree(f"agent-r{n}") for n in range(8)]
+    procs = [
+        subprocess.Popen(
+            [str(root / "scripts" / "worktree-env.sh"), "write", str(lab.session)],
+            env=lab.env(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for root in roots
+    ]
+    for proc in procs:
+        _, err = proc.communicate()
+        assert proc.returncode == 0, err
+    slots = {root: int(read_env(root)["WORKTREE_SLOT"]) for root in roots}
+    assert sorted(slots.values()) == list(SLOTS)
+    owners = lab.owners()
+    for root, slot in slots.items():
+        assert owners[slot] == str(root.resolve())
+        project = (lab.slots / str(slot) / "project").read_text().strip()
+        assert project == read_env(root)["COMPOSE_PROJECT_NAME"] == f"focus-m6-{root.name}"
+    assert not (lab.slots / ".lock").exists()
+    assert slot_dirs(lab) == sorted(str(slot) for slot in SLOTS)
+
+
+def test_an_owner_less_slot_is_taken_over_only_after_the_grace_period(lab: Lab) -> None:
+    """An agent killed between mkdir and writing `owner` leaves an owner-less slot."""
+    fresh = fake_slot(lab, 10, None)  # someone is claiming it right now
+    old = fake_slot(lab, 11, None)
+    os.utime(old, (OLD, OLD))
+    first = lab.worktree("agent-o1")
+    assert lab.write(first)["WORKTREE_SLOT"] == "11"
+    assert fresh.exists() and not (fresh / "owner").exists()
+    # gc frees an old owner-less slot, and leaves a fresh one alone.
+    os.utime(fresh, (OLD, OLD))
+    fake_slot(lab, 12, None)
+    result = lab.make(first, "worktree-gc")
+    assert result.returncode == 0, result.stderr
+    assert "Freed slot 10 (no owner for over 1 minute)." in result.stdout
+    assert "Freed slot 12" not in result.stdout
+    assert slot_dirs(lab) == ["11", "12"]
+    assert "(no owner yet)" in result.stdout  # slot 12, listed
+
+
+def test_a_lock_left_by_a_killed_run_is_broken(lab: Lab) -> None:
+    fake_slot(lab, 10, str(lab.main / ".claude/worktrees/agent-gone"))
+    lock = lab.slots / ".lock"
+    lock.mkdir()
+    os.utime(lock, (OLD, OLD))
+    root = lab.worktree("agent-lock")
+    assert lab.write(root)["WORKTREE_SLOT"] == "10"
+    assert not lock.exists()
+
+
+def test_gc_lists_leftover_database_volumes_without_removing_them(lab: Lab) -> None:
+    live = lab.worktree("agent-live")
+    lab.write(live)
+    volumes = [
+        "focus-m6-agent-gone_db-data",  # listed: its worktree is gone
+        "focus-local-agent-gone2_db-data",  # listed
+        "focus-m6-agent-live_db-data",  # its worktree still exists
+        "focus-m6-agent-busy_db-data",  # a container still uses it
+        "focus-local_db-data",  # the main checkout's
+        "focus-m6-358_db-data",  # a session worktree's
+    ]
+    result = lab.make(
+        live,
+        "worktree-gc",
+        FAKE_VOLUMES=" ".join(volumes),
+        FAKE_VOLUMES_IN_USE="focus-m6-agent-busy_db-data",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Not removed: deleting data is a human gate" in result.stdout
+    expected = "  docker volume rm focus-m6-agent-gone_db-data focus-local-agent-gone2_db-data\n"
+    assert expected in result.stdout
+    assert "volume rm" not in lab.log.read_text()
+
+
+def test_gc_says_nothing_about_volumes_when_none_are_left(lab: Lab) -> None:
+    live = lab.worktree("agent-live")
+    lab.write(live)
+    result = lab.make(live, "worktree-gc", FAKE_VOLUMES="focus-local_db-data")
+    assert result.returncode == 0, result.stderr
+    assert "volume" not in result.stdout
