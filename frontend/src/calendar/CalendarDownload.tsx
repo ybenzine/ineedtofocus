@@ -39,7 +39,7 @@ export default function CalendarDownload({
       return
     }
     // The file comes after a request, so it is saved, not opened in a new tab.
-    saveIcs(result.value.text, result.value.fileName, { open: false })
+    saveIcs(result.value.text, result.value.fileName)
   }
 
   return (
