@@ -20,7 +20,12 @@ import yaml  # type: ignore[import-untyped]  # no stubs in the locked env
 
 REPO = Path(__file__).resolve().parents[2]
 GUARD = "require-worktree-env.sh"
-COPIED = ["Makefile", "scripts/require-worktree-env.sh", "scripts/stack-urls.sh"]
+COPIED = [
+    "Makefile",
+    "scripts/require-worktree-env.sh",
+    "scripts/stack-urls.sh",
+    "scripts/worktree-env.sh",
+]
 
 # Logs each call to $FAKE_LOG as "<name> <args>". `docker compose port` reports nothing running.
 FAKE = """#!/usr/bin/env bash
@@ -36,7 +41,7 @@ exit 0
 # Where GitHub Actions checks the repo out (actions/checkout without `path:`).
 CI_PATH = "home/runner/work/ineedtofocus/ineedtofocus"
 SUBAGENT_PATH = "ineedtofocus/.claude/worktrees/agent-a3556db4"
-STACK_TARGETS = ["up", "down", "logs", "check-stack", "test-e2e"]
+STACK_TARGETS = ["up", "up-test", "down", "logs", "check-stack", "test-e2e"]
 
 
 def make_checkout(tmp_path: Path, relative: str, *, env_file: bool) -> Path:
@@ -83,7 +88,8 @@ def assert_stopped_by_guard(result: subprocess.CompletedProcess[str], target: st
     assert f"make {target} stopped: this checkout is a subagent worktree with no .env" in (
         result.stderr
     )
-    assert "cp <session folder>/.env .env" in result.stderr
+    assert "make worktree-env SESSION=<session folder>" in result.stderr
+    assert "cp <session folder>/.env" not in result.stderr
     assert "_docs/process.md → Parallel sessions → Subagent worktrees" in result.stderr
 
 

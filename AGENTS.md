@@ -43,13 +43,15 @@ Folders fill in as their issues land.
 
 ## Commands
 
-All entry points go through `make` (`make help` lists them). Needs Docker with Compose v2, [uv](https://docs.astral.sh/uv/), Node.js ≥ 22 and [jq](https://jqlang.org/) (`make test-scripts` uses it; macOS 15+ and the Ubuntu runners ship it).
+All entry points go through `make` (`make help` lists them). Needs Docker with Compose v2 (2.24 or later for `make up-test`), [uv](https://docs.astral.sh/uv/), Node.js ≥ 22 and [jq](https://jqlang.org/) (`make test-scripts` uses it; macOS 15+ and the Ubuntu runners ship it).
 
 | Command | Does |
 |---|---|
 | `make install` | Install backend (uv) and frontend (npm) dependencies; the other targets do this on demand |
 | `make up` | Start the full local stack (app, Postgres, Grafana/OTel) with Docker Compose; the app service arrives with #4 |
 | `make down` | Stop it (keeps the database volume) |
+| `make up-test` | Lean stack for tests: app + Postgres on a throwaway tmpfs, no Grafana/OTLP (`compose.test.yaml`) |
+| `make worktree-env SESSION=<folder>` | In a subagent worktree: write its `.env` with its own Compose project and a free slot of ports (#442); `make down` frees the slot, `make worktree-gc` stops stacks of removed worktrees and lists, never removes, their leftover database volumes |
 | `make test` | Run every test suite: backend unit + integration, frontend unit, repo scripts, the server bootstrap in an Ubuntu container, the production config checks (`test-infra`), Playwright end-to-end (run only if a stack answers at `PLAYWRIGHT_BASE_URL`, default this checkout's own app: the port its stack publishes, else `APP_PORT` from the environment or `.env`, else 8000; otherwise skipped loudly, a failure when `CI` is set. A subagent worktree with no `.env` and no `PLAYWRIGHT_BASE_URL` skips it the same way without probing, and `make test-e2e` stops there ([Subagent worktrees](_docs/process.md#parallel-sessions-one-worktree-each)); elsewhere `make test-e2e` always runs it and tests that URL; a default local stack allows 10 sign-ups an hour, so start it with `SIGNUP_MAX_PER_CLIENT=1000`). `make test-prod-stack` smoke-tests the production stack separately |
 | `make lint` | Linters and type checks for backend (ruff, mypy), frontend (ESLint, Prettier, tsc), repo scripts, shell scripts (shellcheck) and workflows (actionlint) |
 | `make fmt` | Auto-format |
@@ -62,7 +64,7 @@ All entry points go through `make` (`make help` lists them). Needs Docker with C
 - **Commits:** Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`, `ci:`), referencing the issue (`Refs #10`).
 - **Never push to `main`.** Everything lands through a squash-merged PR that says `Closes #<n>`.
 - **Run git from the repo root, as the session's start directory.** Start Claude Code in the repo root (or a worktree's root) and run plain `git …` there: no `git -C <path>`, and no `cd` into another directory before git. The permission rules in `.claude/settings.json` only recognise the plain form, and git after a `cd` away from the start directory prompts. If a session started elsewhere, restart it from the repo root rather than working around the prompt.
-- **One worktree per parallel session.** Two Claude Code sessions never share a folder: each runs in its own git worktree with its own `.env` (Compose project name and ports), so branches and local stacks stay apart. Setup and removal: [_docs/process.md → Parallel sessions](_docs/process.md#parallel-sessions-one-worktree-each).
+- **One worktree per parallel session.** Two Claude Code sessions never share a folder: each runs in its own git worktree with its own `.env` (Compose project name and ports), so branches and local stacks stay apart. A subagent worktree under `.claude/worktrees/` gets a stack of its own with `make worktree-env SESSION=<session folder>`, then `make up-test`. Setup and removal: [_docs/process.md → Parallel sessions](_docs/process.md#parallel-sessions-one-worktree-each).
 - **Act as the agent account, never as Yacine.** Sessions start with the `claude-focus` alias, so `gh` and `git push` use the machine account `merciful-poseidon`, which can't approve prod deploys or change repo settings (#127). `gh auth status` must show `merciful-poseidon`; if it shows `ybenzine`, stop and ask for a restart. See [infra/github/README.md](infra/github/README.md#agent-account-127).
 - **Acceptance criteria are the contract.** If an AC is wrong, missing or ambiguous, ask the product manager agent on the issue — it decides or escalates — don't silently change scope.
 - **Python:** 3.12, type hints everywhere, `ruff` + `mypy`, `pytest`. **TypeScript:** `strict`, ESLint + Prettier, Vitest.

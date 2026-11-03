@@ -18,7 +18,7 @@ Follow `_docs/process.md`; the tracker comments below are the exact templates. P
    > 🟡 **qa agent — started**
    > Branch `qa/<n>-<slug>`. Plan: <2–4 bullets mapping to the ACs>.
 2. **Build** on branch `qa/<n>-<slug>` from up-to-date `main`, implementing exactly the ACs.
-3. **Test:** Playwright suites in `frontend/e2e/` against the real Compose stack, fake clocks, never real waiting. `make test` must pass.
+3. **Test:** Playwright suites in `frontend/e2e/` against the real Compose stack, fake clocks, never real waiting. `make test` must pass. In a worktree under `.claude/worktrees/`, give it a stack of its own before any `make up`: `make worktree-env SESSION=<session folder the lead named>`, then `make up-test` (`make up` if you need Grafana), and `make down` when you're done (`_docs/process.md` → Subagent worktrees).
 4. **Open the PR** from `.github/pull_request_template.md` (`Closes #<n>`, one line per AC). Comment on the issue and run `scripts/board-status.sh <n> "In review"`:
    > 🔵 **qa agent — PR open:** #<pr>. All ACs addressed; `make test` green (or N/A: docs only).
 5. **Stop and report back** (PR link, anything unresolved). Do not merge: the lead runs the reviewer first.
