@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, literal_column, select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -31,7 +32,7 @@ from app.calendar_ics import (
 )
 from app.deps import CurrentUser, DbSession
 from app.errors import ErrorResponse
-from app.history import View, local_date
+from app.history import View, local_date, time_zone
 from app.history_api import (
     DateParam,
     EndParam,
@@ -265,6 +266,87 @@ async def download_history(
         **{
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Cache-Control": "no-store",
+        },
+    )
+
+
+@router.head("/session/{session_id}.ics", include_in_schema=False)
+@router.get(
+    "/session/{session_id}.ics",
+    response_class=Response,
+    responses={
+        **_UNAUTHORIZED,
+        **_ICS_BODY,
+        404: {"model": ErrorResponse, "description": "Not found, not yours, or archived"},
+    },
+)
+async def download_session(
+    session_id: str, request: Request, user: CurrentUser, db: DbSession, tz: TzParam = "UTC"
+) -> Response:
+    """One of the caller's sessions as a single-event `.ics` (AC14.7, #454), for iOS, which
+    opens an https `text/calendar` response in Calendar's sheet. The event is the feed's, with
+    the same title, goal and description settings; the tag and minimum-length filters don't
+    apply. A session that doesn't exist, isn't the caller's or is archived is the same plain
+    404. `tz` (IANA name, default UTC) only sets the local date and time in the file name."""
+    try:
+        zone = time_zone(tz)
+    except ValueError:
+        raise RequestValidationError(
+            [
+                {
+                    "loc": ("query", "tz"),
+                    "msg": "Unknown time zone; use an IANA name such as Europe/Paris",
+                    "type": "value_error",
+                }
+            ]
+        ) from None
+    try:
+        wanted = uuid.UUID(session_id)
+    except ValueError:
+        raise _not_found() from None
+    row = (
+        await db.execute(
+            select(
+                FocusSession.id,
+                FocusSession.mode,
+                FocusSession.tag,
+                FocusSession.custom_tag_id,
+                FocusSession.goal,
+                FocusSession.started_at,
+                FocusSession.ended_at,
+                FocusSession.focus_seconds,
+                FocusSession.paused_seconds,
+                FocusSession.status,
+                FocusSession.mode_config,
+                FocusSession.blocks_completed,
+            ).where(
+                FocusSession.id == wanted,
+                FocusSession.user_id == user.id,
+                FocusSession.archived_at.is_(None),
+            )
+        )
+    ).first()
+    if row is None:
+        raise _not_found()
+    settings = await _settings(db, user.id)
+    names = await _tag_names(db, user.id)
+    rendered = await asyncio.to_thread(
+        render_calendar,
+        _events([row], names),
+        settings.calendar,
+        name=settings.name,
+        origin=_origin(request),
+        feed=False,
+        now=dt.datetime.now(dt.UTC),
+    )
+    local = row.started_at.astimezone(zone)
+    filename = f"ineedtofocus-{local:%Y-%m-%d-%H%M}.ics"
+    return _ics(
+        request,
+        rendered.body,
+        **{
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Cache-Control": "private, no-store",
         },
     )
 

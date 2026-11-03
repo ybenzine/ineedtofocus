@@ -2001,6 +2001,82 @@
         ]
       }
     },
+    "/api/calendar/session/{session_id}.ics": {
+      "get": {
+        "description": "One of the caller's sessions as a single-event `.ics` (AC14.7, #454), for iOS, which\nopens an https `text/calendar` response in Calendar's sheet. The event is the feed's, with\nthe same title, goal and description settings; the tag and minimum-length filters don't\napply. A session that doesn't exist, isn't the caller's or is archived is the same plain\n404. `tz` (IANA name, default UTC) only sets the local date and time in the file name.",
+        "operationId": "download_session_api_calendar_session__session_id__ics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "IANA time zone, e.g. Europe/Paris (AC10.5)",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "default": "UTC",
+              "description": "IANA time zone, e.g. Europe/Paris (AC10.5)",
+              "maxLength": 64,
+              "title": "Tz",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/calendar": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "iCalendar"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not found, not yours, or archived"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Download Session",
+        "tags": [
+          "calendar"
+        ]
+      }
+    },
     "/api/calendar/{secret}.ics": {
       "get": {
         "description": "The private subscription feed (AC14.4, AC14.5), read without signing in. Every\nnon-archived session of the account whose tag is in the calendar and whose focus time meets\nthe minimum length, newest first. An unknown, malformed, reset or turned-off secret is the\nsame plain 404. A weak `ETag` lets a refresh with `If-None-Match` get a 304.",
