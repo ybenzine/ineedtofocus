@@ -10,7 +10,7 @@ import { useSettingsState } from '../settings/SettingsContext.ts'
 import { useOnline } from '../sounds/useOnline.ts'
 import { useTagsView } from '../tags/context.ts'
 import { formatDuration } from '../timerscreen/format.ts'
-import { icsBlobUrl, isIos } from './download.ts'
+import { icsBlobUrl, icsDataUrl, isIos } from './download.ts'
 import {
   buildEvent,
   eventsToIcs,
@@ -86,15 +86,27 @@ export default function AddToCalendar({
 
   // The .ics is made when the menu opens, so the choice is a plain link the tap activates itself:
   // iOS Safari blocks a window.open after any async step and only shows the Calendar sheet for
-  // a navigation the user started (#445).
-  const [icsUrl, setIcsUrl] = useState<string | null>(null)
+  // a navigation the user started (#445). It is made again if the event changes while the menu is
+  // open (a setting changed in another tab), so the file always matches what the menu was built
+  // from. iOS gets a data URL, other platforms a blob download (#451).
+  const ios = isIos()
   const icsName = icsFileName(session.startedAt, timeZone)
+  const icsUrl = useMemo(() => {
+    if (!open) return null
+    const text = eventsToIcs([event], now())
+    return ios ? icsDataUrl(text) : icsBlobUrl(text)
+    // `now` only stamps the file; a new function each render must not rebuild it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, event, ios])
   useEffect(() => {
-    if (!icsUrl) return
-    // Replaced on the next open and freed on unmount, a while late: the browser may still be
-    // reading it after the tap.
+    if (!icsUrl?.startsWith('blob:')) return
+    // Freed a while late: the browser may still be reading it after the tap.
     return () => void setTimeout(() => URL.revokeObjectURL(icsUrl), 60_000)
   }, [icsUrl])
+
+  // True from a press inside the control until the next key press, so a blur with no related
+  // target can tell a tap (iOS focuses nothing) from Tab leaving the page.
+  const pressedInside = useRef(false)
 
   // A tap or click outside closes the menu. This replaces closing on blur: iOS Safari does not
   // focus a tapped button or link, so the blur (relatedTarget null) fires before the click and
@@ -138,16 +150,20 @@ export default function AddToCalendar({
       className="add-to-calendar"
       ref={root}
       onKeyDown={(e) => {
+        pressedInside.current = false
         if (e.key === 'Escape' && open) {
           e.stopPropagation()
           close(true)
         }
       }}
+      onPointerDown={() => void (pressedInside.current = true)}
       onBlur={(e) => {
         // Tabbing out of the control closes it, without stealing focus back. A null
-        // relatedTarget (a tap on iOS, which focuses nothing) is not tabbing out.
+        // relatedTarget is a tap on iOS (which focuses nothing, and pressed inside first) or
+        // Tab moving focus out of the page (no press): only the second closes.
         const next = e.relatedTarget as Node | null
-        if (open && next && !root.current?.contains(next)) setOpen(false)
+        if (!open) return
+        if (next ? !root.current?.contains(next) : !pressedInside.current) setOpen(false)
       }}
     >
       <button
@@ -157,7 +173,6 @@ export default function AddToCalendar({
         aria-controls={`${id}-choices`}
         aria-label={label}
         onClick={() => {
-          if (!open) setIcsUrl(icsBlobUrl(eventsToIcs([event], now())))
           setOpen(!open)
         }}
       >
@@ -191,7 +206,7 @@ export default function AddToCalendar({
             <a
               className="link-button"
               href={icsUrl ?? undefined}
-              {...(isIos() ? { target: '_blank', rel: 'noopener' } : { download: icsName })}
+              {...(ios ? { target: '_self' } : { download: icsName })}
               onClick={() => closeAfterNavigation(true)}
             >
               Apple Calendar / other (.ics)

@@ -8,27 +8,30 @@ export function isIos(): boolean {
   )
 }
 
-/**
- * Saves `text` as `fileName`. On iOS Safari the file is opened instead, which shows the
- * Calendar "Add event" sheet (only from a click, `open` not false); elsewhere it is a download.
- */
-export function saveIcs(text: string, fileName: string, options: { open?: boolean } = {}): void {
-  const url = URL.createObjectURL(new Blob([text], { type: 'text/calendar;charset=utf-8' }))
-  if (isIos() && options.open !== false) {
-    window.open(url, '_blank')
-  } else {
-    const link = document.createElement('a')
-    link.href = url
-    link.download = fileName
-    link.hidden = true
-    document.body.append(link)
-    link.click()
-    link.remove()
-  }
+/** Saves `text` as `fileName` through a hidden download link. Nothing is opened. */
+export function saveIcs(text: string, fileName: string): void {
+  const url = icsBlobUrl(text)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  link.hidden = true
+  document.body.append(link)
+  link.click()
+  link.remove()
   setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
 /** A blob URL for `text` made ahead of the tap, so the link can be activated by the tap itself. */
 export function icsBlobUrl(text: string): string {
   return URL.createObjectURL(new Blob([text], { type: 'text/calendar;charset=utf-8' }))
+}
+
+/**
+ * A `data:` URL for `text`, for iOS (#451). In the installed Home Screen app a `blob:` link opened
+ * in a new tab is handed to Safari, which can't read the app's blob (WebKit bug 197441); a data
+ * URL carries the file itself, so a same-tab navigation to it shows the Calendar "Add event"
+ * sheet. This is what add-to-calendar-button does on iOS.
+ */
+export function icsDataUrl(text: string): string {
+  return `data:text/calendar;charset=utf-8,${encodeURIComponent(text)}`
 }

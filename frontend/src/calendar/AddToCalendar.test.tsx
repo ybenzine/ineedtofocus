@@ -103,6 +103,16 @@ describe('the control', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'false')
   })
 
+  it('closes when Tab moves focus out of the page (blur with no related target, no press)', () => {
+    render(withProviders(<AddToCalendar session={session} />))
+    const toggle = screen.getByRole('button', { name: label })
+    fireEvent.click(toggle)
+    const google = screen.getByRole('link', { name: 'Google Calendar' })
+    fireEvent.keyDown(google, { key: 'Tab' })
+    fireEvent.blur(google, { relatedTarget: null })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  })
+
   it('names a custom tag by its current name, and an unknown tag "Tag"', async () => {
     const api = new FakeTagsApi()
     const tag = api.add('Side, project')
@@ -247,19 +257,60 @@ describe('Apple Calendar / other (.ics)', () => {
     expect(await (blobs[0] as Blob).text()).toContain('SUMMARY:Work: Write chapter 3')
   })
 
-  it('on iOS navigates to the file in a new tab (the Calendar sheet) instead of a download, with no window.open', () => {
-    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
-      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0)',
-    )
-    capture()
+  const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)'
+
+  function icsText(href: string | null) {
+    return decodeURIComponent((href ?? '').replace('data:text/calendar;charset=utf-8,', ''))
+  }
+
+  it.each([
+    ['Safari', false],
+    ['the installed Home Screen app', true],
+  ])('on iOS in %s is a same-tab data URL, with no download and no blob', (_name, standalone) => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE)
+    if (standalone)
+      Object.defineProperty(navigator, 'standalone', { value: true, configurable: true })
+    const { blobs } = capture()
     const open = vi.spyOn(window, 'open')
     render(withProviders(<AddToCalendar session={session} />))
     fireEvent.click(screen.getByRole('button', { name: label }))
-    expect(choice()).toHaveAttribute('href', 'blob:test')
-    expect(choice()).toHaveAttribute('target', '_blank')
+    const href = choice().getAttribute('href')
+    expect(href).toMatch(/^data:text\/calendar;charset=utf-8,BEGIN%3AVCALENDAR/)
+    expect(icsText(href)).toContain('SUMMARY:Work: Write chapter 3\r\n')
+    expect(choice()).toHaveAttribute('target', '_self')
     expect(choice()).not.toHaveAttribute('download')
+    expect(blobs).toHaveLength(0)
     fireEvent.click(choice())
     expect(open).not.toHaveBeenCalled()
+    delete (navigator as { standalone?: boolean }).standalone
+  })
+
+  it('on iOS also works offline', () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE)
+    setOnline(false)
+    render(withProviders(<AddToCalendar session={session} />))
+    fireEvent.click(screen.getByRole('button', { name: label }))
+    expect(choice().getAttribute('href')).toMatch(/^data:text\/calendar/)
+  })
+
+  it('keeps the blob download on other platforms', () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (X11; Linux x86_64)')
+    capture()
+    render(withProviders(<AddToCalendar session={session} />))
+    fireEvent.click(screen.getByRole('button', { name: label }))
+    expect(choice()).toHaveAttribute('href', 'blob:test')
+    expect(choice()).toHaveAttribute('download')
+    expect(choice()).not.toHaveAttribute('target')
+  })
+
+  it('makes the file again when a setting changes while the menu is open', () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE)
+    const settings = new SettingsStore()
+    render(withProviders(<AddToCalendar session={session} />, settings))
+    fireEvent.click(screen.getByRole('button', { name: label }))
+    expect(icsText(choice().getAttribute('href'))).toContain('SUMMARY:Work: Write chapter 3')
+    act(() => settings.update({ calendar_title_template: 'Focus on {tag}' }))
+    expect(icsText(choice().getAttribute('href'))).toContain('SUMMARY:Focus on Work')
   })
 })
 
