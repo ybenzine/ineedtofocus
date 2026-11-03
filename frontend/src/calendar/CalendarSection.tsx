@@ -559,6 +559,12 @@ function Subscribe({
           <p role="status" className="field-hint">
             {copied}
           </p>
+          {!mobile && (
+            <p className="field-hint">
+              If Add to Apple Calendar opens the wrong app, open Calendar, choose File, then New
+              Calendar Subscription…, and paste the link.
+            </p>
+          )}
           {mobile && (
             <p className="field-hint">
               Google Calendar can’t subscribe from a phone or tablet in one tap. Copy the link, open{' '}
