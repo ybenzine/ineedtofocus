@@ -227,6 +227,23 @@ def _tokens(sql: str) -> tuple[set[str], set[str]]:
     return set(_QUOTED.findall(sql)), set(_NUMBER.findall(_QUOTED.sub("", sql)))
 
 
+# Columns the migrations still create but the models no longer map, until the contract migration
+# that drops them (0009, #430) lands. Exactly these, nothing else: any other difference is drift.
+UNMAPPED_TABLE = "user_settings"
+UNMAPPED_COLUMNS = {"alert_volume", "background_volume"}
+UNMAPPED_CHECKS = {"ck_user_settings_alert_volume", "ck_user_settings_background_volume"}
+
+
+def _is_allowed_unmapped(diff: Any) -> bool:
+    """Alembic's `remove_column` for one of the unmapped columns of `user_settings`."""
+    return (
+        isinstance(diff, tuple)
+        and diff[0] == "remove_column"
+        and diff[2] == UNMAPPED_TABLE
+        and diff[3].name in UNMAPPED_COLUMNS
+    )
+
+
 def drift(conn: Connection) -> list[str]:
     """Differences between the models and the migrated database.
 
@@ -239,6 +256,7 @@ def drift(conn: Connection) -> list[str]:
             MigrationContext.configure(conn, opts={"compare_server_default": True}),
             Base.metadata,
         )
+        if not _is_allowed_unmapped(d)
     ]
     insp = inspect(conn)
     for table in Base.metadata.sorted_tables:
@@ -249,6 +267,8 @@ def drift(conn: Connection) -> list[str]:
         declared = [c.name for c in table.constraints if isinstance(c, CheckConstraint)]
         for name in sorted({n for n in declared if declared.count(n) > 1}, key=str):
             problems.append(f"{table.name}: CHECK {name} is declared more than once")
+        if table.name == UNMAPPED_TABLE:
+            in_db = {n: s for n, s in in_db.items() if n not in UNMAPPED_CHECKS}
         if set(in_db) != set(in_model):
             names = sorted(set(in_db) ^ set(in_model))
             problems.append(f"{table.name}: CHECK names differ: {names}")
@@ -293,10 +313,10 @@ def test_drift_detects_changed_default(
     alembic_config: Config, test_db_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     command.upgrade(alembic_config, "head")
-    column = Base.metadata.tables["user_settings"].c.alert_volume
+    column = Base.metadata.tables["user_settings"].c.week_start_day
     monkeypatch.setattr(column, "server_default", DefaultClause(text("99")))
     problems = run(_with_conn(test_db_url, drift))
-    assert any("alert_volume" in p for p in problems)
+    assert any("week_start_day" in p for p in problems)
 
 
 # --- constraints ---------------------------------------------------------------
@@ -598,3 +618,58 @@ def test_database_errors_do_not_leak_parameters(db: str) -> None:
     assert email not in logged
     assert email.split("@")[0] not in logged
     assert "IntegrityError" in logged  # still useful for diagnosis
+
+
+def test_430_model_selects_and_inserts_against_the_schema_that_still_has_the_volume_columns(
+    alembic_config: Config, test_db_url: str
+) -> None:
+    """The model no longer maps alert_volume/background_volume. Before 0009 drops them, a
+    select and an insert through the model work, and the database fills the NOT NULL columns
+    from their server defaults (80, 50). After 0009 the same model works too."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models import User, UserSettings
+
+    command.upgrade(alembic_config, "0008")
+
+    async def go() -> list[Any]:
+        engine = create_async_engine(test_db_url)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                user = User(email="a@b.c", password_hash="x")
+                session.add(user)
+                await session.flush()
+                session.add(UserSettings(user_id=user.id))
+                await session.commit()
+                row = (await session.execute(select(UserSettings))).scalar_one()
+                assert row.week_start_day == 0
+            async with engine.connect() as conn:
+                return list(
+                    (
+                        await conn.execute(
+                            text("SELECT alert_volume, background_volume FROM user_settings")
+                        )
+                    ).one()
+                )
+        finally:
+            await engine.dispose()
+
+    assert run(go()) == [80, 50]
+
+
+def test_430_drift_allowance_covers_only_the_two_unmapped_volume_columns(
+    alembic_config: Config, test_db_url: str
+) -> None:
+    """Any other column the migrations create and the model lacks is still drift."""
+    command.upgrade(alembic_config, "head")
+    assert run(_with_conn(test_db_url, drift)) == []
+    table = Base.metadata.tables["user_settings"]
+    column = table.c.week_start_day
+    table._columns.remove(column)
+    try:
+        problems = run(_with_conn(test_db_url, drift))
+    finally:
+        table._columns.add(column)
+    assert any("week_start_day" in p for p in problems)
+    assert not any("alert_volume" in p or "background_volume" in p for p in problems)
