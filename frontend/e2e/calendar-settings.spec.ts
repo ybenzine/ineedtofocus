@@ -50,6 +50,9 @@ test('create a link, fetch it, see the session, reset it and the old link stops 
     /^https:\/\/calendar\.google\.com\/calendar\/u\/0\/r\?cid=webcal%3A%2F%2F/,
   )
   await expect(section.getByText(/shown only now/)).toBeVisible()
+  await expect(
+    section.getByText(/opens the wrong app, open Calendar, choose File, then/),
+  ).toBeVisible()
   await expectNoSeriousViolations(page)
 
   // Nothing of the secret is kept on the device.
@@ -143,6 +146,7 @@ test.describe('at 360 px', () => {
     await page.getByLabel('Event title').fill('{tag}: {goal} · {mode} · {focus_time}'.repeat(3))
     await page.getByRole('button', { name: 'Create link' }).click()
     await expect(page.getByLabel('Subscription link')).toBeVisible()
+    await expect(page.getByText(/opens the wrong app, open Calendar/)).toBeVisible()
     await expectNoSidewaysScroll(page)
     await expectNoSeriousViolations(page)
   })

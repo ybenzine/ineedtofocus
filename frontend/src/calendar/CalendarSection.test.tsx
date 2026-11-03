@@ -371,6 +371,9 @@ describe('Tags in the calendar (AC12.8, AC7.8)', () => {
   })
 })
 
+const HAND_HINT =
+  /If Add to Apple Calendar opens the wrong app, open Calendar, choose File, then New Calendar Subscription…, and paste the link\./
+
 describe('subscribing (AC14.4)', () => {
   describe('on a phone or tablet (#453)', () => {
     afterEach(() => {
@@ -390,6 +393,7 @@ describe('subscribing (AC14.4)', () => {
       expect(screen.queryByRole('link', { name: 'Add to Google Calendar' })).toBeNull()
       expect(screen.getByRole('link', { name: 'Add to Apple Calendar' })).toBeVisible()
       expect(screen.getByText(/can’t subscribe from a phone or tablet in one tap/)).toBeVisible()
+      expect(screen.queryByText(HAND_HINT)).toBeNull()
       const site = screen.getByRole('link', { name: 'calendar.google.com' })
       expect(site).toHaveAttribute('href', 'https://calendar.google.com')
       expect(site).toHaveAttribute('target', '_blank')
@@ -411,6 +415,15 @@ describe('subscribing (AC14.4)', () => {
       await screen.findByLabelText('Subscription link')
       expect(screen.getByRole('link', { name: 'Add to Google Calendar' })).toBeVisible()
       expect(screen.queryByText(/in one tap/)).toBeNull()
+    })
+
+    it('shows the Apple Calendar by-hand hint on a desktop, without arrows (#464)', async () => {
+      renderSection()
+      expect(screen.queryByText(HAND_HINT)).toBeNull() // only once a link is shown
+      fireEvent.click(await screen.findByRole('button', { name: 'Create link' }))
+      await screen.findByLabelText('Subscription link')
+      expect(screen.getByText(HAND_HINT)).toBeVisible()
+      expect(screen.getByText(HAND_HINT).textContent).not.toMatch(/[→>]/)
     })
   })
 
