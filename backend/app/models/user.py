@@ -86,6 +86,8 @@ class UserSettings(Base):
     )
     # 0 = Sunday ... 6 = Saturday (AC10.6: Sunday by default).
     week_start_day: Mapped[int] = mapped_column(SmallInteger, server_default=text("0"))
+    # Unused since #336 and not in the API (#430); the columns stay until the contract migration
+    # that drops them, so the previous release still runs on this schema.
     alert_volume: Mapped[int] = mapped_column(SmallInteger, server_default=text("80"))
     background_volume: Mapped[int] = mapped_column(SmallInteger, server_default=text("50"))
     keep_screen_awake: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))

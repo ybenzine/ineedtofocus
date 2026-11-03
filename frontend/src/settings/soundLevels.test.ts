@@ -44,12 +44,7 @@ function serverApi(value: Settings): SettingsApi & { patches: unknown[] } {
 
 function device(api: SettingsApi, storage: Storage) {
   const levels = new SoundLevelsStore(storage)
-  const settings = new SettingsStore({
-    api,
-    storage,
-    owner: 'u1',
-    onLoaded: (values) => levels.seed(values),
-  })
+  const settings = new SettingsStore({ api, storage, owner: 'u1' })
   return { levels, settings }
 }
 
@@ -112,18 +107,11 @@ describe('SoundLevelsStore (AC12.2, #336)', () => {
         JSON.stringify({ owner: null, values: { alert_volume: 20, background_volume: 90 } }),
       )
       const levels = new SoundLevelsStore(localStorage)
-      levels.seed({ alert_volume: 30, background_volume: 70 })
+      levels.seed()
       expect(levels.getState()).toEqual({ alert: 20, background: 90 })
     })
 
-    it("else takes the account's server value", () => {
-      const levels = new SoundLevelsStore(localStorage)
-      levels.seed({ alert_volume: 30, background_volume: 70 })
-      expect(levels.getState()).toEqual({ alert: 30, background: 70 })
-      expect(localStorage.getItem(ALERT_VOLUME_KEY)).toBe('30')
-    })
-
-    it('else stays at the defaults and stores nothing', () => {
+    it('else stays at the defaults (the account is no source) and stores nothing', () => {
       const levels = new SoundLevelsStore(localStorage)
       levels.seed()
       expect(levels.getState()).toEqual({ alert: 80, background: 50 })
@@ -131,12 +119,20 @@ describe('SoundLevelsStore (AC12.2, #336)', () => {
     })
 
     it('happens once: a level the device already has is never replaced', () => {
+      localStorage.setItem(
+        ANON_SETTINGS_KEY,
+        JSON.stringify({ owner: null, values: { alert_volume: 20, background_volume: 90 } }),
+      )
       const levels = new SoundLevelsStore(localStorage)
       levels.set('alert', 10)
-      levels.seed({ alert_volume: 30, background_volume: 70 })
-      expect(levels.getState()).toEqual({ alert: 10, background: 70 })
-      levels.seed({ alert_volume: 99, background_volume: 99 })
-      expect(levels.getState()).toEqual({ alert: 10, background: 70 })
+      levels.seed()
+      expect(levels.getState()).toEqual({ alert: 10, background: 90 })
+      localStorage.setItem(
+        ANON_SETTINGS_KEY,
+        JSON.stringify({ owner: null, values: { alert_volume: 99, background_volume: 99 } }),
+      )
+      levels.seed()
+      expect(levels.getState()).toEqual({ alert: 10, background: 90 })
     })
   })
 
@@ -155,66 +151,30 @@ describe('SoundLevelsStore (AC12.2, #336)', () => {
 })
 
 describe('the levels and the settings store', () => {
-  it('seeds 30/70 from the first real load, never from the 80/50 shown before it', async () => {
-    const storage = memoryStorage()
-    const api = serverApi({ ...DEFAULT_SETTINGS, alert_volume: 30, background_volume: 70 })
-    const { levels, settings } = device(api, storage)
-    expect(levels.getState()).toEqual({ alert: 80, background: 50 }) // shown, not stored
-    expect(storage.length).toBe(0)
-    await settings.refresh()
-    expect(levels.getState()).toEqual({ alert: 30, background: 70 })
-    expect(storage.getItem(ALERT_VOLUME_KEY)).toBe('30')
-  })
-
-  it('seeds from the cached settings at start-up, offline', async () => {
+  it('does not seed from the server or the cached account settings (the fields are gone)', async () => {
     const storage = memoryStorage()
     storage.setItem(
       'ineedtofocus.settings',
       JSON.stringify({ owner: 'u1', values: { alert_volume: 25, background_volume: 65 } }),
     )
-    const api: SettingsApi = {
-      get: () => Promise.reject(new Error('offline')),
-      patch: () => Promise.reject(new Error('offline')),
-    }
-    const { levels } = device(api, storage)
-    await Promise.resolve()
-    expect(levels.getState()).toEqual({ alert: 25, background: 65 })
-  })
-
-  it('does not store 80/50 when an edit was cached before the first load, then reloaded', async () => {
-    const storage = memoryStorage()
-    const down: SettingsApi = {
-      get: () => Promise.reject(new Error('offline')),
-      patch: () => Promise.reject(new Error('offline')),
-    }
-    device(down, storage).settings.update({ theme: 'light' }) // cache = defaults + the edit
-    const server = serverApi({ ...DEFAULT_SETTINGS, alert_volume: 30, background_volume: 70 })
-    const reloaded = device(server, storage)
-    await Promise.resolve()
-    expect(storage.getItem(ALERT_VOLUME_KEY)).toBeNull()
-    await reloaded.settings.refresh()
-    expect(reloaded.levels.getState()).toEqual({ alert: 30, background: 70 })
-  })
-
-  it('does not seed from a cache that is not this user’s', () => {
-    const storage = memoryStorage()
-    storage.setItem(
-      'ineedtofocus.settings',
-      JSON.stringify({ owner: 'other', values: { alert_volume: 25 } }),
+    const { levels, settings } = device(
+      serverApi({ ...DEFAULT_SETTINGS, alert_volume: 30, background_volume: 70 } as Settings),
+      storage,
     )
-    const { levels } = device(serverApi(DEFAULT_SETTINGS), storage)
-    expect(levels.alert).toBe(80)
+    await settings.refresh()
+    levels.seed()
+    expect(levels.getState()).toEqual({ alert: 80, background: 50 })
     expect(storage.getItem(ALERT_VOLUME_KEY)).toBeNull()
+    expect(storage.getItem(BACKGROUND_VOLUME_KEY)).toBeNull()
   })
 
   it('keeps each device’s own levels: no PATCH carries a volume, and a reload and a settings load keep them', async () => {
-    const api = serverApi({ ...DEFAULT_SETTINGS, alert_volume: 40, background_volume: 40 })
+    const api = serverApi(DEFAULT_SETTINGS)
     const phoneStorage = memoryStorage()
     const laptopStorage = memoryStorage()
     const phone = device(api, phoneStorage)
     const laptop = device(api, laptopStorage)
     await Promise.all([phone.settings.refresh(), laptop.settings.refresh()])
-    expect(phone.levels.getState()).toEqual({ alert: 40, background: 40 })
 
     phone.levels.set('alert', 10)
     phone.levels.set('background', 95)
@@ -224,7 +184,7 @@ describe('the levels and the settings store', () => {
     expect(api.patches).toEqual([{ week_start_day: 2 }])
 
     await laptop.settings.refresh()
-    expect(laptop.levels.getState()).toEqual({ alert: 40, background: 40 })
+    expect(laptop.levels.getState()).toEqual({ alert: 80, background: 50 })
     expect(laptop.settings.values.week_start_day).toBe(2) // the other settings still sync
 
     // After a reload of each device.
@@ -232,6 +192,6 @@ describe('the levels and the settings store', () => {
     const reloadedLaptop = device(api, laptopStorage)
     await Promise.all([reloadedPhone.settings.refresh(), reloadedLaptop.settings.refresh()])
     expect(reloadedPhone.levels.getState()).toEqual({ alert: 10, background: 95 })
-    expect(reloadedLaptop.levels.getState()).toEqual({ alert: 40, background: 40 })
+    expect(reloadedLaptop.levels.getState()).toEqual({ alert: 80, background: 50 })
   })
 })

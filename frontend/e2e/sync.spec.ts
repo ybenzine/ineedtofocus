@@ -115,12 +115,13 @@ test('AC12.2: sound levels are per device; the same account keeps a different le
     await expect(b.getByLabel('Background audio volume')).toHaveValue('50')
     await b.getByLabel('Alert volume').fill('90')
 
-    // The server never saw a level change: its copy is still the default.
-    const settings = (await (await a.request.get('/api/settings')).json()) as {
-      alert_volume: number
-      background_volume: number
-    }
-    expect(settings).toMatchObject({ alert_volume: 80, background_volume: 50 })
+    // The server has no volume fields at all (#430).
+    const settings = (await (await a.request.get('/api/settings')).json()) as Record<
+      string,
+      unknown
+    >
+    expect(settings).not.toHaveProperty('alert_volume')
+    expect(settings).not.toHaveProperty('background_volume')
 
     // After a reload (and a settings load) each device keeps its own.
     await a.reload()

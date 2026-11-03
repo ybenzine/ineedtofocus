@@ -20,7 +20,7 @@ type Which = keyof SoundLevels
 
 const KEYS: Record<Which, string> = { alert: ALERT_VOLUME_KEY, background: BACKGROUND_VOLUME_KEY }
 const DEFAULTS: SoundLevels = { alert: DEFAULT_ALERT_LEVEL, background: DEFAULT_BACKGROUND_LEVEL }
-/** The deprecated server settings a device is seeded from. */
+/** The field of the guest settings a device is seeded from. */
 const settingsField = (which: Which): string =>
   which === 'alert' ? 'alert_volume' : 'background_volume'
 
@@ -100,12 +100,12 @@ export class SoundLevelsStore {
   }
 
   /**
-   * Gives a level the device doesn't have yet a value, once: from the guest settings
-   * (`ineedtofocus.anonymous.settings`), else from `fallback` (the account's settings, passed
-   * only after a real load of them, never the pre-load defaults), else it stays at the default.
-   * A level the device already has is never touched.
+   * Gives a level the device doesn't have yet a value, once, from the guest settings
+   * (`ineedtofocus.anonymous.settings`), else it stays at the default. The account's settings
+   * are no source (the server no longer has these fields). A level the device already has is
+   * never touched.
    */
-  seed(fallback?: { alert_volume?: unknown; background_volume?: unknown }): void {
+  seed(): void {
     const storage = this.#storage
     if (!storage) return
     let guest: Record<string, unknown> = {}
@@ -114,13 +114,12 @@ export class SoundLevelsStore {
       const values = raw ? (JSON.parse(raw) as { values?: unknown }).values : null
       if (typeof values === 'object' && values !== null) guest = values as Record<string, unknown>
     } catch {
-      // Unreadable guest settings: fall through to the account's.
+      // Unreadable guest settings: the defaults apply.
     }
-    const server = (fallback ?? {}) as Record<string, unknown>
     for (const which of ['alert', 'background'] as const) {
       if (this.#stored(which) !== null) continue
       const field = settingsField(which)
-      const value = level(guest[field]) ?? level(server[field])
+      const value = level(guest[field])
       if (value === null) continue
       try {
         storage.setItem(KEYS[which], JSON.stringify(value))

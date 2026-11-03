@@ -640,18 +640,6 @@
       },
       "SettingsOut": {
         "properties": {
-          "alert_volume": {
-            "deprecated": true,
-            "description": "Deprecated (#336): the sound levels are device settings now and the frontend no longer sends or reads them, except to seed a device once. 0-100.",
-            "title": "Alert Volume",
-            "type": "integer"
-          },
-          "background_volume": {
-            "deprecated": true,
-            "description": "Deprecated (#336), like `alert_volume`. 0-100.",
-            "title": "Background Volume",
-            "type": "integer"
-          },
           "calendar_excluded_tags": {
             "description": "The tags left out of the subscription feed (AC12.8): built-in identifiers or custom tag ids, removed ones included; a tag created later is in",
             "items": {
@@ -770,8 +758,6 @@
         },
         "required": [
           "week_start_day",
-          "alert_volume",
-          "background_volume",
           "keep_screen_awake",
           "pause_audio_on_breaks",
           "default_reminder_minutes",
@@ -794,22 +780,6 @@
         "additionalProperties": false,
         "description": "Partial update: send only the fields to change. An omitted field means unchanged; no\nfield has a default. `null` is a value for `default_reminder_minutes` (Off),\n`pomodoro_config`, `last_tag` and `countdown_recent_minutes` (back to none).",
         "properties": {
-          "alert_volume": {
-            "deprecated": true,
-            "description": "Deprecated (#336): still accepted so an older client works.",
-            "maximum": 100.0,
-            "minimum": 0.0,
-            "title": "Alert Volume",
-            "type": "integer"
-          },
-          "background_volume": {
-            "deprecated": true,
-            "description": "Deprecated (#336), like `alert_volume`.",
-            "maximum": 100.0,
-            "minimum": 0.0,
-            "title": "Background Volume",
-            "type": "integer"
-          },
           "calendar_excluded_tags": {
             "items": {
               "description": "A built-in tag identifier (work, study, nap, read, meditation, exercise) or the id of one of the user's own custom tags, removed ones included",
