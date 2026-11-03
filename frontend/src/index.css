@@ -1261,6 +1261,15 @@ main.focus-screen {
   color: var(--error);
 }
 
+.history-row-actions {
+  position: relative;
+}
+
+/* The popover anchors to the whole actions row, so it stays inside the page gutter (#461). */
+.history-row-actions .add-to-calendar {
+  position: static;
+}
+
 .history-row-actions,
 .history-edit {
   display: flex;
@@ -2231,7 +2240,8 @@ main.setup-screen:has(~ .tab-bar) {
   align-self: center;
 }
 
-.add-to-calendar-choices {
+/* Two classes: beats `.history ul` (a reset to margin 0 and padding 0) on History rows (#461). */
+.add-to-calendar .add-to-calendar-choices {
   position: absolute;
   bottom: 100%;
   left: 0;
