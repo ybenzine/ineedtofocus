@@ -246,6 +246,34 @@ describe('the sound levels are not synced (AC12.2, #336)', () => {
   })
 })
 
+describe('a cache written by the release before #430', () => {
+  it('is read, and rewritten without the volumes or the loaded flag', async () => {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        owner: null,
+        values: { week_start_day: 3, alert_volume: 25, background_volume: 65 },
+        pending: { alert_volume: 5 },
+        loaded: true,
+      }),
+    )
+    const store = new SettingsStore({ storage: localStorage })
+    expect(store.values.week_start_day).toBe(3)
+    expect(store.values).not.toHaveProperty('alert_volume')
+    store.update({ theme: 'light' })
+    await store.flush()
+    await vi.waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}')
+      expect(stored.values.theme).toBe('light')
+      expect(stored.values.week_start_day).toBe(3)
+      expect(stored.values).not.toHaveProperty('alert_volume')
+      expect(stored.values).not.toHaveProperty('background_volume')
+      expect(stored.pending).not.toHaveProperty('alert_volume')
+      expect(stored).not.toHaveProperty('loaded')
+    })
+  })
+})
+
 describe('countdown_recent_minutes (#409)', () => {
   it('is none by default and ignores a preset or out-of-range value from the cache', () => {
     expect(DEFAULT_SETTINGS.countdown_recent_minutes).toBeNull()
