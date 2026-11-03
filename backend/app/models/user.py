@@ -52,8 +52,6 @@ class UserSettings(Base):
     __tablename__ = "user_settings"
     __table_args__ = (
         CheckConstraint("week_start_day BETWEEN 0 AND 6", name="week_start_day"),
-        CheckConstraint("alert_volume BETWEEN 0 AND 100", name="alert_volume"),
-        CheckConstraint("background_volume BETWEEN 0 AND 100", name="background_volume"),
         CheckConstraint(
             "default_reminder_minutes IS NULL OR "
             + in_list("default_reminder_minutes", REMINDER_MINUTES),
@@ -86,10 +84,6 @@ class UserSettings(Base):
     )
     # 0 = Sunday ... 6 = Saturday (AC10.6: Sunday by default).
     week_start_day: Mapped[int] = mapped_column(SmallInteger, server_default=text("0"))
-    # Unused since #336 and not in the API (#430); the columns stay until the contract migration
-    # that drops them, so the previous release still runs on this schema.
-    alert_volume: Mapped[int] = mapped_column(SmallInteger, server_default=text("80"))
-    background_volume: Mapped[int] = mapped_column(SmallInteger, server_default=text("50"))
     keep_screen_awake: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     # Pause Rain/YouTube audio during Pomodoro breaks (AC12.6); on for everyone by default.
     pause_audio_on_breaks: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
