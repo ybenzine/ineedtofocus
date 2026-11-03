@@ -372,6 +372,48 @@ describe('Tags in the calendar (AC12.8, AC7.8)', () => {
 })
 
 describe('subscribing (AC14.4)', () => {
+  describe('on a phone or tablet (#453)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+      // jsdom has no own maxTouchPoints; drop the one the iPad case defines.
+      Reflect.deleteProperty(navigator, 'maxTouchPoints')
+    })
+
+    it.each([
+      ['an iPhone', 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)'],
+      ['an Android phone', 'Mozilla/5.0 (Linux; Android 15; Pixel 9) Mobile Safari/537.36'],
+    ])('swaps the Google button for copy-the-link steps on %s', async (_name, agent) => {
+      vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(agent)
+      renderSection()
+      fireEvent.click(await screen.findByRole('button', { name: 'Create link' }))
+      await screen.findByLabelText('Subscription link')
+      expect(screen.queryByRole('link', { name: 'Add to Google Calendar' })).toBeNull()
+      expect(screen.getByRole('link', { name: 'Add to Apple Calendar' })).toBeVisible()
+      expect(screen.getByText(/can’t subscribe from a phone or tablet in one tap/)).toBeVisible()
+      const site = screen.getByRole('link', { name: 'calendar.google.com' })
+      expect(site).toHaveAttribute('href', 'https://calendar.google.com')
+      expect(site).toHaveAttribute('target', '_blank')
+      expect(site).toHaveAttribute('rel', 'noopener noreferrer')
+    })
+
+    it('does the same on an iPad that reports itself as a Mac', async () => {
+      vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
+      Object.defineProperty(navigator, 'maxTouchPoints', { value: 5, configurable: true })
+      renderSection()
+      fireEvent.click(await screen.findByRole('button', { name: 'Create link' }))
+      await screen.findByLabelText('Subscription link')
+      expect(screen.queryByRole('link', { name: 'Add to Google Calendar' })).toBeNull()
+    })
+
+    it('keeps the Google button on a desktop', async () => {
+      renderSection()
+      fireEvent.click(await screen.findByRole('button', { name: 'Create link' }))
+      await screen.findByLabelText('Subscription link')
+      expect(screen.getByRole('link', { name: 'Add to Google Calendar' })).toBeVisible()
+      expect(screen.queryByText(/in one tap/)).toBeNull()
+    })
+  })
+
   it('goes off → created → reset → off', async () => {
     const { api } = renderSection()
     await screen.findByText('Subscribe in your calendar app')
@@ -386,8 +428,8 @@ describe('subscribing (AC14.4)', () => {
     expect(webcal.getAttribute('href')).toMatch(/^webcal:\/\/.*\/api\/calendar\/s1-/)
     const google = screen.getByRole('link', { name: 'Add to Google Calendar' })
     const googleUrl = new URL(google.getAttribute('href') ?? '')
-    expect(googleUrl.origin + googleUrl.pathname).toBe('https://calendar.google.com/calendar/r')
-    expect(googleUrl.searchParams.get('cid')).toBe((field as HTMLInputElement).value)
+    expect(googleUrl.origin + googleUrl.pathname).toBe('https://calendar.google.com/calendar/u/0/r')
+    expect(googleUrl.searchParams.get('cid')).toBe(webcal.getAttribute('href'))
     expect(google).toHaveAttribute('target', '_blank')
     expect(
       screen.getByText(

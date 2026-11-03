@@ -8,6 +8,11 @@ export function isIos(): boolean {
   )
 }
 
+/** A phone or tablet. Google Calendar can't subscribe to a feed by URL from one (#453). */
+export function isMobile(): boolean {
+  return isIos() || /Android/i.test(navigator.userAgent)
+}
+
 /** Saves `text` as `fileName` through a hidden download link. Nothing is opened. */
 export function saveIcs(text: string, fileName: string): void {
   const url = icsBlobUrl(text)

@@ -115,7 +115,7 @@ describe('subscribeLinks', () => {
     expect(links.https).toBe('https://ineedtofoc.us/api/calendar/abc.ics')
     expect(links.webcal).toBe('webcal://ineedtofoc.us/api/calendar/abc.ics')
     expect(links.google).toBe(
-      'https://calendar.google.com/calendar/r?cid=https%3A%2F%2Fineedtofoc.us%2Fapi%2Fcalendar%2Fabc.ics',
+      'https://calendar.google.com/calendar/u/0/r?cid=webcal%3A%2F%2Fineedtofoc.us%2Fapi%2Fcalendar%2Fabc.ics',
     )
   })
 
