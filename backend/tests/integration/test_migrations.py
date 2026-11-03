@@ -682,9 +682,7 @@ def test_430_model_selects_and_inserts_with_and_without_the_volume_columns(
     def volumes(conn: Connection) -> Any:
         return [
             tuple(r)
-            for r in conn.execute(
-                text("SELECT alert_volume, background_volume FROM user_settings")
-            )
+            for r in conn.execute(text("SELECT alert_volume, background_volume FROM user_settings"))
         ]
 
     command.upgrade(alembic_config, "0008")
