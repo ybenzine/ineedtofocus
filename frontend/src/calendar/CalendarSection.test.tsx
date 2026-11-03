@@ -372,6 +372,19 @@ describe('Tags in the calendar (AC12.8, AC7.8)', () => {
 })
 
 describe('subscribing (AC14.4)', () => {
+  it('on a phone, swaps the Google button for copy-the-link steps (#453)', async () => {
+    const ua = vi
+      .spyOn(navigator, 'userAgent', 'get')
+      .mockReturnValue('Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)')
+    renderSection()
+    fireEvent.click(await screen.findByRole('button', { name: 'Create link' }))
+    await screen.findByLabelText('Subscription link')
+    expect(screen.queryByRole('link', { name: 'Add to Google Calendar' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'Add to Apple Calendar' })).toBeVisible()
+    expect(screen.getByText(/Google Calendar can only subscribe from a computer/)).toBeVisible()
+    ua.mockRestore()
+  })
+
   it('goes off → created → reset → off', async () => {
     const { api } = renderSection()
     await screen.findByText('Subscribe in your calendar app')
@@ -386,8 +399,8 @@ describe('subscribing (AC14.4)', () => {
     expect(webcal.getAttribute('href')).toMatch(/^webcal:\/\/.*\/api\/calendar\/s1-/)
     const google = screen.getByRole('link', { name: 'Add to Google Calendar' })
     const googleUrl = new URL(google.getAttribute('href') ?? '')
-    expect(googleUrl.origin + googleUrl.pathname).toBe('https://calendar.google.com/calendar/r')
-    expect(googleUrl.searchParams.get('cid')).toBe((field as HTMLInputElement).value)
+    expect(googleUrl.origin + googleUrl.pathname).toBe('https://calendar.google.com/calendar/u/0/r')
+    expect(googleUrl.searchParams.get('cid')).toBe(webcal.getAttribute('href'))
     expect(google).toHaveAttribute('target', '_blank')
     expect(
       screen.getByText(

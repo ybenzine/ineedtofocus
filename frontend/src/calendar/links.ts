@@ -1,7 +1,7 @@
 // The subscription link in the forms a calendar app wants (AC14.4).
 
 export interface SubscribeLinks {
-  /** For the copy field and for Google. */
+  /** For the copy field. */
   https: string
   /** Opens Apple Calendar (and most desktop calendar apps). */
   webcal: string
@@ -11,8 +11,9 @@ export interface SubscribeLinks {
 
 /**
  * `path` is what the server returned (`/api/calendar/<secret>.ics`), `origin` the address of
- * this app. Google's documented form is `https://calendar.google.com/calendar/r?cid=<url>`;
- * `cid` takes the feed's address, here its https form, URL-encoded.
+ * this app. Google's subscribe-by-URL link is `https://calendar.google.com/calendar/u/0/r?cid=<url>`
+ * where `<url>` is the feed's `webcal://` address, URL-encoded: Google refuses the https form with
+ * "unable to add calendar" (#453). The same form add-to-calendar-button ships.
  */
 export function subscribeLinks(path: string, origin: string): SubscribeLinks {
   const https = `${origin}${path}`
@@ -20,7 +21,7 @@ export function subscribeLinks(path: string, origin: string): SubscribeLinks {
   return {
     https,
     webcal,
-    google: `https://calendar.google.com/calendar/r?cid=${encodeURIComponent(https)}`,
+    google: `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(webcal)}`,
   }
 }
 

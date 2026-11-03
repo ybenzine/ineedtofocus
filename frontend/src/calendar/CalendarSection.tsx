@@ -20,6 +20,7 @@ import { TagDot } from '../tags/TagName.tsx'
 import { HttpCalendarApi, type CalendarApi, type FeedStatus } from './api.ts'
 import type { CalendarSession } from './AddToCalendar.tsx'
 import { buildEvent, type CalendarEvent } from './event.ts'
+import { isMobile } from './download.ts'
 import { relativeTime, subscribeLinks } from './links.ts'
 import { recordToCalendarSession } from './session.ts'
 
@@ -471,6 +472,7 @@ function Subscribe({
   }
 
   const links = shown ? subscribeLinks(shown, window.location.origin) : null
+  const mobile = isMobile()
   const needsConnection = !online
   const hint = needsConnection ? (
     <span id={`${id}-offline`} className="field-hint">
@@ -543,18 +545,26 @@ function Subscribe({
             <a className="link-button" href={links.webcal}>
               Add to Apple Calendar
             </a>
-            <a
-              className="link-button"
-              href={links.google}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Add to Google Calendar
-            </a>
+            {!mobile && (
+              <a
+                className="link-button"
+                href={links.google}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Add to Google Calendar
+              </a>
+            )}
           </div>
           <p role="status" className="field-hint">
             {copied}
           </p>
+          {mobile && (
+            <p className="field-hint">
+              Google Calendar can only subscribe from a computer. Copy the link, then on a computer
+              open Google Calendar, choose Other calendars, + , From URL, and paste it.
+            </p>
+          )}
           <p className="field-hint">
             This link is shown only now. Anyone with it can see your sessions
             {includeGoal ? ', including goals' : ''}. Reset it if it’s shared by mistake.
