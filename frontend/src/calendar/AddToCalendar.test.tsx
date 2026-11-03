@@ -1,6 +1,6 @@
 // The Add to calendar control (F14, AC14.7): choices, settings applied, offline, keyboard.
 
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettingsContext } from '../settings/SettingsContext.ts'
@@ -68,9 +68,39 @@ describe('the control', () => {
     fireEvent.click(button)
     expect(button).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByRole('link', { name: 'Google Calendar' })).toBeInTheDocument()
-    expect(
-      screen.getByRole('button', { name: 'Apple Calendar / other (.ics)' }),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Apple Calendar / other (.ics)' })).toBeInTheDocument()
+  })
+
+  it('keeps the choice when a tap blurs with no related target (iOS focuses nothing), then closes', () => {
+    render(withProviders(<AddToCalendar session={session} />))
+    fireEvent.click(screen.getByRole('button', { name: label }))
+    const ics = screen.getByRole('link', { name: 'Apple Calendar / other (.ics)' })
+    // iOS order for a tap on the second choice: pointerdown, blur of the focused first choice
+    // with relatedTarget null, then click.
+    fireEvent.pointerDown(ics)
+    fireEvent.blur(screen.getByRole('link', { name: 'Google Calendar' }), { relatedTarget: null })
+    expect(screen.getByRole('link', { name: 'Apple Calendar / other (.ics)' })).toBe(ics)
+    expect(fireEvent.click(ics)).toBe(true) // not default-prevented: the browser follows the link
+  })
+
+  it('closes on a press outside, and on tabbing out', () => {
+    render(
+      withProviders(
+        <div>
+          <AddToCalendar session={session} />
+          <button>other</button>
+        </div>,
+      ),
+    )
+    const toggle = screen.getByRole('button', { name: label })
+    fireEvent.click(toggle)
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'other' }))
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(toggle)
+    fireEvent.blur(screen.getByRole('link', { name: 'Google Calendar' }), {
+      relatedTarget: screen.getByRole('button', { name: 'other' }),
+    })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
   })
 
   it('names a custom tag by its current name, and an unknown tag "Tag"', async () => {
@@ -158,6 +188,7 @@ describe('Google Calendar', () => {
 describe('Apple Calendar / other (.ics)', () => {
   function capture() {
     const blobs: Blob[] = []
+    const revoked = vi.fn()
     vi.stubGlobal(
       'URL',
       Object.assign(URL, {
@@ -165,24 +196,19 @@ describe('Apple Calendar / other (.ics)', () => {
           blobs.push(blob)
           return 'blob:test'
         },
-        revokeObjectURL: vi.fn(),
+        revokeObjectURL: revoked,
       }),
     )
-    const downloads: string[] = []
-    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
-      this: HTMLAnchorElement,
-    ) {
-      downloads.push(this.download)
-    })
-    return { blobs, downloads }
+    return { blobs, revoked }
   }
+  const choice = () => screen.getByRole('link', { name: 'Apple Calendar / other (.ics)' })
 
-  it('saves ineedtofocus-<local date>-<HHMM>.ics with a one-event file', async () => {
-    const { blobs, downloads } = capture()
+  it('is a link to a one-event file made before the tap, named ineedtofocus-<local date>-<HHMM>.ics', async () => {
+    const { blobs } = capture()
     render(withProviders(<AddToCalendar session={session} timeZone="UTC" />))
     fireEvent.click(screen.getByRole('button', { name: label }))
-    fireEvent.click(screen.getByRole('button', { name: 'Apple Calendar / other (.ics)' }))
-    expect(downloads).toEqual(['ineedtofocus-2026-10-30-0900.ics'])
+    expect(choice()).toHaveAttribute('href', 'blob:test')
+    expect(choice()).toHaveAttribute('download', 'ineedtofocus-2026-10-30-0900.ics')
     expect(blobs[0]?.type).toBe('text/calendar;charset=utf-8')
     const text = await (blobs[0] as Blob).text()
     expect(text).toContain('BEGIN:VCALENDAR\r\n')
@@ -191,30 +217,49 @@ describe('Apple Calendar / other (.ics)', () => {
     expect(text).toContain('DTSTART:20261030T090000Z\r\nDTEND:20261030T092500Z\r\n')
     expect(text).toContain('TRANSP:TRANSPARENT\r\n')
     expect(text).not.toContain('VALARM')
-    // Closed afterwards, focus back on the button.
-    expect(screen.getByRole('button', { name: label })).toHaveFocus()
+  })
+
+  it('closes after the tap, with focus back on the button, and frees the file later', () => {
+    vi.useFakeTimers()
+    const { revoked } = capture()
+    const { unmount } = render(withProviders(<AddToCalendar session={session} timeZone="UTC" />))
+    const toggle = screen.getByRole('button', { name: label })
+    fireEvent.click(toggle)
+    expect(fireEvent.click(choice())).toBe(true)
+    // Still there during the click, so the browser can follow the link.
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    act(() => void vi.advanceTimersByTime(0))
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(toggle).toHaveFocus()
+    expect(revoked).not.toHaveBeenCalled()
+    unmount()
+    act(() => void vi.advanceTimersByTime(60_000))
+    expect(revoked).toHaveBeenCalledWith('blob:test')
+    vi.useRealTimers()
   })
 
   it('works offline', async () => {
     setOnline(false)
-    const { blobs, downloads } = capture()
+    const { blobs } = capture()
     render(withProviders(<AddToCalendar session={session} timeZone="UTC" />))
     fireEvent.click(screen.getByRole('button', { name: label }))
-    fireEvent.click(screen.getByRole('button', { name: 'Apple Calendar / other (.ics)' }))
-    expect(downloads).toHaveLength(1)
+    expect(choice()).toHaveAttribute('href', 'blob:test')
     expect(await (blobs[0] as Blob).text()).toContain('SUMMARY:Work: Write chapter 3')
   })
 
-  it('opens the file on iOS, which shows the Calendar sheet', () => {
+  it('on iOS navigates to the file in a new tab (the Calendar sheet) instead of a download, with no window.open', () => {
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
       'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0)',
     )
     capture()
-    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    const open = vi.spyOn(window, 'open')
     render(withProviders(<AddToCalendar session={session} />))
     fireEvent.click(screen.getByRole('button', { name: label }))
-    fireEvent.click(screen.getByRole('button', { name: 'Apple Calendar / other (.ics)' }))
-    expect(open).toHaveBeenCalledWith('blob:test', '_blank')
+    expect(choice()).toHaveAttribute('href', 'blob:test')
+    expect(choice()).toHaveAttribute('target', '_blank')
+    expect(choice()).not.toHaveAttribute('download')
+    fireEvent.click(choice())
+    expect(open).not.toHaveBeenCalled()
   })
 })
 

@@ -1,7 +1,7 @@
 // Hands a generated .ics file to the user (AC14.7). Nothing is uploaded: the file is made in
 // memory from the session on the device, so it works offline.
 
-function isIos(): boolean {
+export function isIos(): boolean {
   const nav = navigator
   return (
     /iP(hone|ad|od)/.test(nav.userAgent) || (nav.platform === 'MacIntel' && nav.maxTouchPoints > 1)
@@ -26,4 +26,9 @@ export function saveIcs(text: string, fileName: string, options: { open?: boolea
     link.remove()
   }
   setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}
+
+/** A blob URL for `text` made ahead of the tap, so the link can be activated by the tap itself. */
+export function icsBlobUrl(text: string): string {
+  return URL.createObjectURL(new Blob([text], { type: 'text/calendar;charset=utf-8' }))
 }

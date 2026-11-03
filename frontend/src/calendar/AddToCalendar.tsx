@@ -10,7 +10,7 @@ import { useSettingsState } from '../settings/SettingsContext.ts'
 import { useOnline } from '../sounds/useOnline.ts'
 import { useTagsView } from '../tags/context.ts'
 import { formatDuration } from '../timerscreen/format.ts'
-import { saveIcs } from './download.ts'
+import { icsBlobUrl, isIos } from './download.ts'
 import {
   buildEvent,
   eventsToIcs,
@@ -84,6 +84,30 @@ export default function AddToCalendar({
     [session, tagName, values],
   )
 
+  // The .ics is made when the menu opens, so the choice is a plain link the tap activates itself:
+  // iOS Safari blocks a window.open after any async step and only shows the Calendar sheet for
+  // a navigation the user started (#445).
+  const [icsUrl, setIcsUrl] = useState<string | null>(null)
+  const icsName = icsFileName(session.startedAt, timeZone)
+  useEffect(() => {
+    if (!icsUrl) return
+    // Replaced on the next open and freed on unmount, a while late: the browser may still be
+    // reading it after the tap.
+    return () => void setTimeout(() => URL.revokeObjectURL(icsUrl), 60_000)
+  }, [icsUrl])
+
+  // A tap or click outside closes the menu. This replaces closing on blur: iOS Safari does not
+  // focus a tapped button or link, so the blur (relatedTarget null) fires before the click and
+  // used to remove the choice before it was activated.
+  useEffect(() => {
+    if (!open) return
+    const outside = (e: PointerEvent) => {
+      if (!root.current?.contains(e.target as Node | null)) setOpen(false)
+    }
+    document.addEventListener('pointerdown', outside)
+    return () => document.removeEventListener('pointerdown', outside)
+  }, [open])
+
   useEffect(() => {
     if (open)
       root.current?.querySelector<HTMLElement>('.add-to-calendar-choices :is(a, button)')?.focus()
@@ -104,6 +128,11 @@ export default function AddToCalendar({
     if (returnFocus) toggle.current?.focus()
   }
 
+  /** Closes once the link's own navigation or download has started: unmounting it first could cancel it. */
+  function closeAfterNavigation(returnFocus: boolean) {
+    setTimeout(() => close(returnFocus), 0)
+  }
+
   return (
     <div
       className="add-to-calendar"
@@ -115,8 +144,10 @@ export default function AddToCalendar({
         }
       }}
       onBlur={(e) => {
-        // Tabbing out of the control closes it, without stealing focus back.
-        if (open && !root.current?.contains(e.relatedTarget as Node | null)) setOpen(false)
+        // Tabbing out of the control closes it, without stealing focus back. A null
+        // relatedTarget (a tap on iOS, which focuses nothing) is not tabbing out.
+        const next = e.relatedTarget as Node | null
+        if (open && next && !root.current?.contains(next)) setOpen(false)
       }}
     >
       <button
@@ -125,7 +156,10 @@ export default function AddToCalendar({
         aria-expanded={open}
         aria-controls={`${id}-choices`}
         aria-label={label}
-        onClick={() => setOpen(!open)}
+        onClick={() => {
+          if (!open) setIcsUrl(icsBlobUrl(eventsToIcs([event], now())))
+          setOpen(!open)
+        }}
       >
         Add to calendar
       </button>
@@ -138,7 +172,7 @@ export default function AddToCalendar({
                 href={googleCalendarUrl(event)}
                 target="_blank"
                 rel="noopener noreferrer"
-                onClick={() => close(false)}
+                onClick={() => closeAfterNavigation(false)}
               >
                 Google Calendar
               </a>
@@ -154,15 +188,14 @@ export default function AddToCalendar({
             )}
           </li>
           <li>
-            <button
-              type="button"
-              onClick={() => {
-                saveIcs(eventsToIcs([event], now()), icsFileName(session.startedAt, timeZone))
-                close(true)
-              }}
+            <a
+              className="link-button"
+              href={icsUrl ?? undefined}
+              {...(isIos() ? { target: '_blank', rel: 'noopener' } : { download: icsName })}
+              onClick={() => closeAfterNavigation(true)}
             >
               Apple Calendar / other (.ics)
-            </button>
+            </a>
           </li>
         </ul>
       )}
