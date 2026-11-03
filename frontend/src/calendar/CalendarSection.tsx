@@ -561,8 +561,12 @@ function Subscribe({
           </p>
           {mobile && (
             <p className="field-hint">
-              Google Calendar can only subscribe from a computer. Copy the link, then on a computer
-              open Google Calendar, choose Other calendars, + , From URL, and paste it.
+              Google Calendar can’t subscribe from this button on a phone. Copy the link, open{' '}
+              <a href="https://calendar.google.com" target="_blank" rel="noopener">
+                calendar.google.com
+              </a>{' '}
+              in your browser (a computer is easier), then go to Other calendars → + → From URL and
+              paste it.
             </p>
           )}
           <p className="field-hint">

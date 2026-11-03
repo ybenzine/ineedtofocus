@@ -381,7 +381,11 @@ describe('subscribing (AC14.4)', () => {
     await screen.findByLabelText('Subscription link')
     expect(screen.queryByRole('link', { name: 'Add to Google Calendar' })).toBeNull()
     expect(screen.getByRole('link', { name: 'Add to Apple Calendar' })).toBeVisible()
-    expect(screen.getByText(/Google Calendar can only subscribe from a computer/)).toBeVisible()
+    expect(screen.getByText(/can’t subscribe from this button on a phone/)).toBeVisible()
+    const site = screen.getByRole('link', { name: 'calendar.google.com' })
+    expect(site).toHaveAttribute('href', 'https://calendar.google.com')
+    expect(site).toHaveAttribute('target', '_blank')
+    expect(site).toHaveAttribute('rel', 'noopener')
     ua.mockRestore()
   })
 
