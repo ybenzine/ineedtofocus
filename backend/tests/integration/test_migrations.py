@@ -151,7 +151,7 @@ def test_countdown_recent_minutes_is_nullable_and_the_previous_release_ignores_i
         )
     )
     run(_exec(test_db_url, "INSERT INTO user_settings (user_id) VALUES (:u)", u=USER))
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "0006")
 
     def read(conn: Connection) -> Any:
         return conn.execute(text("SELECT countdown_recent_minutes FROM user_settings")).scalar_one()
@@ -159,7 +159,7 @@ def test_countdown_recent_minutes_is_nullable_and_the_previous_release_ignores_i
     assert run(_with_conn(test_db_url, read)) is None
 
     # The previous release's statements name the old columns only and still work.
-    run(_exec(test_db_url, "UPDATE user_settings SET alert_volume = 5, theme = 'dark'"))
+    run(_exec(test_db_url, "UPDATE user_settings SET keep_screen_awake = true, theme = 'dark'"))
     other = "00000000-0000-0000-0000-0000000000b2"
     run(
         _exec(
@@ -196,14 +196,14 @@ def test_pause_audio_on_breaks_existing_rows_read_true_and_it_rolls_back(
         )
     )
     run(_exec(test_db_url, "INSERT INTO user_settings (user_id) VALUES (:u)", u=USER))
-    command.upgrade(alembic_config, "head")
+    command.upgrade(alembic_config, "0008")
 
     def read(conn: Connection) -> Any:
         return conn.execute(text("SELECT pause_audio_on_breaks FROM user_settings")).scalar_one()
 
     assert run(_with_conn(test_db_url, read)) is True
     # The previous release's statements leave the column alone and still work.
-    run(_exec(test_db_url, "UPDATE user_settings SET alert_volume = 5"))
+    run(_exec(test_db_url, "UPDATE user_settings SET keep_screen_awake = true"))
     command.downgrade(alembic_config, "0007")
 
     def columns(conn: Connection) -> Any:
@@ -293,10 +293,10 @@ def test_drift_detects_changed_default(
     alembic_config: Config, test_db_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     command.upgrade(alembic_config, "head")
-    column = Base.metadata.tables["user_settings"].c.alert_volume
+    column = Base.metadata.tables["user_settings"].c.week_start_day
     monkeypatch.setattr(column, "server_default", DefaultClause(text("99")))
     problems = run(_with_conn(test_db_url, drift))
-    assert any("alert_volume" in p for p in problems)
+    assert any("week_start_day" in p for p in problems)
 
 
 # --- constraints ---------------------------------------------------------------
@@ -416,7 +416,7 @@ def test_settings_defaults_and_ranges(db: str) -> None:
     def read(conn: Connection) -> Any:
         return conn.execute(
             text(
-                "SELECT week_start_day, alert_volume, background_volume, keep_screen_awake, "
+                "SELECT week_start_day, keep_screen_awake, "
                 "default_reminder_minutes, theme, countdown_recent_minutes FROM user_settings"
             )
         ).one()
@@ -424,8 +424,6 @@ def test_settings_defaults_and_ranges(db: str) -> None:
     row = run(_with_conn(db, read))
     assert tuple(row) == (
         0,
-        80,
-        50,
         False,
         None,
         "system",
@@ -433,7 +431,6 @@ def test_settings_defaults_and_ranges(db: str) -> None:
     )  # Sunday, reminders Off, follow the device
     for bad in (
         "week_start_day = 7",
-        "alert_volume = 101",
         "default_reminder_minutes = 20",
         "last_tag = 'Gaming'",
         "theme = 'sepia'",
@@ -598,3 +595,99 @@ def test_database_errors_do_not_leak_parameters(db: str) -> None:
     assert email not in logged
     assert email.split("@")[0] not in logged
     assert "IntegrityError" in logged  # still useful for diagnosis
+
+
+def test_430_migration_0009_drops_the_volume_columns_and_round_trips(
+    alembic_config: Config, test_db_url: str
+) -> None:
+    """0009 (#430) is the first contract migration: it drops both columns; downgrade puts them
+    back with the old defaults and checks; upgrading again works."""
+    command.upgrade(alembic_config, "0008")
+    run(
+        _exec(
+            test_db_url,
+            "INSERT INTO users (id, email, password_hash) VALUES (:u, 'a@b.c', 'x')",
+            u=USER,
+        )
+    )
+    run(_exec(test_db_url, "INSERT INTO user_settings (user_id) VALUES (:u)", u=USER))
+    run(_exec(test_db_url, "UPDATE user_settings SET alert_volume = 5, background_volume = 6"))
+
+    def columns(conn: Connection) -> Any:
+        return {c["name"] for c in inspect(conn).get_columns("user_settings")}
+
+    def checks(conn: Connection) -> Any:
+        return {c["name"] for c in inspect(conn).get_check_constraints("user_settings")}
+
+    volumes = {"alert_volume", "background_volume"}
+    assert volumes <= run(_with_conn(test_db_url, columns))
+
+    command.upgrade(alembic_config, "0009")
+    assert not volumes & run(_with_conn(test_db_url, columns))
+    assert not {"ck_user_settings_alert_volume", "ck_user_settings_background_volume"} & run(
+        _with_conn(test_db_url, checks)
+    )
+    # The row and the other settings survive.
+    count = run(
+        _with_conn(
+            test_db_url,
+            lambda c: c.execute(text("SELECT count(*) FROM user_settings")).scalar_one(),
+        )
+    )
+    assert count == 1
+
+    command.downgrade(alembic_config, "0008")
+    assert volumes <= run(_with_conn(test_db_url, columns))
+
+    def read(conn: Connection) -> Any:
+        return tuple(
+            conn.execute(text("SELECT alert_volume, background_volume FROM user_settings")).one()
+        )
+
+    assert run(_with_conn(test_db_url, read)) == (80, 50)  # the old defaults
+    for bad in ("alert_volume = 101", "background_volume = -1"):
+        with pytest.raises((IntegrityError, DBAPIError)):
+            run(_exec(test_db_url, f"UPDATE user_settings SET {bad}"))
+
+    command.upgrade(alembic_config, "head")
+    assert not volumes & run(_with_conn(test_db_url, columns))
+
+
+def test_430_model_selects_and_inserts_with_and_without_the_volume_columns(
+    alembic_config: Config, test_db_url: str
+) -> None:
+    """The model does not map alert_volume/background_volume (#446). At 0008, where the columns
+    still exist, a select and an insert through the model work and the database fills the NOT
+    NULL columns from their server defaults (80, 50). At 0009/head, where they are gone, the
+    same statements work too."""
+    from sqlalchemy import select
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models import User, UserSettings
+
+    async def go(email: str) -> int:
+        engine = create_async_engine(test_db_url)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                user = User(email=email, password_hash="x")
+                session.add(user)
+                await session.flush()
+                session.add(UserSettings(user_id=user.id))
+                await session.commit()
+                rows = (await session.execute(select(UserSettings))).scalars().all()
+                return len(rows)
+        finally:
+            await engine.dispose()
+
+    def volumes(conn: Connection) -> Any:
+        return [
+            tuple(r)
+            for r in conn.execute(text("SELECT alert_volume, background_volume FROM user_settings"))
+        ]
+
+    command.upgrade(alembic_config, "0008")
+    assert run(go("a@b.c")) == 1
+    assert run(_with_conn(test_db_url, volumes)) == [(80, 50)]  # filled by the server defaults
+
+    command.upgrade(alembic_config, "head")
+    assert run(go("d@e.f")) == 2

@@ -33,7 +33,7 @@ function tree(levels: SoundLevelsStore, settings: SettingsStore) {
 }
 
 describe('the device sound levels in the app (#430)', () => {
-  it('start from the guest settings, else 80/50, and never from the account', () => {
+  it('start from the guest settings', () => {
     guest(20, 90)
     const levels = new SoundLevelsStore(localStorage)
     expect(levels.getState()).toEqual({ alert: 80, background: 50 })
