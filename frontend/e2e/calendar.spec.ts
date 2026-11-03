@@ -64,7 +64,7 @@ test('a finished session offers Google Calendar and a .ics that parses, on the s
   await expectNoSeriousViolations(page)
 
   const downloading = page.waitForEvent('download')
-  await page.getByRole('button', { name: 'Apple Calendar / other (.ics)' }).click()
+  await page.getByRole('link', { name: 'Apple Calendar / other (.ics)' }).click()
   const download = await downloading
   expect(download.suggestedFilename()).toMatch(/^ineedtofocus-\d{4}-\d{2}-\d{2}-\d{4}\.ics$/)
   const path = await download.path()
@@ -83,7 +83,7 @@ test('a finished session offers Google Calendar and a .ics that parses, on the s
   await expect(page.getByRole('link', { name: 'Google Calendar' })).toBeVisible()
   await expectNoSeriousViolations(page)
   const again = page.waitForEvent('download')
-  await page.getByRole('button', { name: 'Apple Calendar / other (.ics)' }).click()
+  await page.getByRole('link', { name: 'Apple Calendar / other (.ics)' }).click()
   const second = parseIcs(readFileSync((await (await again).path()) ?? '', 'utf-8'))
   expect(second.UID).toBe(props.UID)
 })
@@ -101,9 +101,33 @@ test('offline, Google Calendar is disabled and the .ics still downloads', async 
   await expect(google).toHaveAttribute('aria-disabled', 'true')
   await expect(page.getByText('Needs a connection')).toBeVisible()
   const downloading = page.waitForEvent('download')
-  await page.getByRole('button', { name: 'Apple Calendar / other (.ics)' }).click()
+  await page.getByRole('link', { name: 'Apple Calendar / other (.ics)' }).click()
   expect((await downloading).suggestedFilename()).toMatch(/\.ics$/)
   await context.setOffline(false)
+})
+
+test.describe('by touch (#445)', () => {
+  test.use({ hasTouch: true, isMobile: true })
+
+  test('tapping each choice opens Google in a new tab and downloads the .ics', async ({ page }) => {
+    await installClock(page)
+    await signUp(page, newEmail())
+    await finishCountdown(page, { minutes: 1, tag: 'work' })
+    await page.getByRole('button', { name: /^Add to calendar: / }).tap()
+    // iOS Safari focuses nothing on a tap, so the blur that used to close the menu fired first.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+    await page
+      .context()
+      .route('https://calendar.google.com/**', (route) => route.fulfill({ body: 'ok' }))
+    const popup = page.waitForEvent('popup')
+    await page.getByRole('link', { name: 'Google Calendar' }).tap()
+    expect((await popup).url()).toContain('calendar.google.com')
+    await page.getByRole('button', { name: /^Add to calendar: / }).tap()
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+    const downloading = page.waitForEvent('download')
+    await page.getByRole('link', { name: 'Apple Calendar / other (.ics)' }).tap()
+    expect((await downloading).suggestedFilename()).toMatch(/\.ics$/)
+  })
 })
 
 test('with the menu open on the summary, one click on View history opens History and nothing shifts (#429)', async ({
