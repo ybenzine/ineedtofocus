@@ -27,11 +27,10 @@ export function icsBlobUrl(text: string): string {
 }
 
 /**
- * A `data:` URL for `text`, for iOS (#451). In the installed Home Screen app a `blob:` link opened
- * in a new tab is handed to Safari, which can't read the app's blob (WebKit bug 197441); a data
- * URL carries the file itself, so a same-tab navigation to it shows the Calendar "Add event"
- * sheet. This is what add-to-calendar-button does on iOS.
+ * Where the server serves one session as an .ics (#454), for iOS. A `data:` or `blob:` link does
+ * nothing there (#451 was not enough, even installed), but a same-origin https link the user
+ * taps shows the Calendar "Add event" sheet. The user's time zone names the file's local times.
  */
-export function icsDataUrl(text: string): string {
-  return `data:text/calendar;charset=utf-8,${encodeURIComponent(text)}`
+export function sessionIcsPath(id: string, timeZone: string): string {
+  return `/api/calendar/session/${encodeURIComponent(id)}.ics?tz=${encodeURIComponent(timeZone)}`
 }

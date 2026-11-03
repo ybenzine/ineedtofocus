@@ -1,8 +1,8 @@
 // "Add to calendar" for one session (F14, AC14.7), on the session summary and each History row.
 //
 // A button that opens two choices: Google Calendar (a pre-filled page in a new tab, which needs
-// a connection) and Apple Calendar / other (a one-event .ics, which works offline). The event is
-// built from the session this device has, so unsynced sessions work too. Signed-in users only:
+// a connection) and Apple Calendar / other (a one-event .ics). Off iOS the file is built on the device, so it
+// works offline and for unsynced sessions; on iOS it is the server's copy (#454). Signed-in users only:
 // the screens that can show a session without an account don't render this.
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
@@ -10,7 +10,8 @@ import { useSettingsState } from '../settings/SettingsContext.ts'
 import { useOnline } from '../sounds/useOnline.ts'
 import { useTagsView } from '../tags/context.ts'
 import { formatDuration } from '../timerscreen/format.ts'
-import { icsBlobUrl, icsDataUrl, isIos } from './download.ts'
+import { signedInUserId } from '../auth/localData.ts'
+import { icsBlobUrl, isIos, sessionIcsPath } from './download.ts'
 import {
   buildEvent,
   eventsToIcs,
@@ -41,6 +42,11 @@ export interface AddToCalendarProps {
   session: CalendarSession
   /** The user's time zone for the file name and label; the device's by default. */
   timeZone?: string
+  /**
+   * The server has this session (#454). On iOS the .ics is served by the server, so the choice
+   * needs it; other platforms build the file on the device and ignore this.
+   */
+  synced?: boolean
   /** The clock for the file's DTSTAMP; injectable for tests. */
   now?: () => Date
 }
@@ -48,6 +54,7 @@ export interface AddToCalendarProps {
 export default function AddToCalendar({
   session,
   timeZone,
+  synced = false,
   now = () => new Date(),
 }: AddToCalendarProps) {
   const { values } = useSettingsState()
@@ -84,20 +91,29 @@ export default function AddToCalendar({
     [session, tagName, values],
   )
 
-  // The .ics is made when the menu opens, so the choice is a plain link the tap activates itself:
-  // iOS Safari blocks a window.open after any async step and only shows the Calendar sheet for
-  // a navigation the user started (#445). It is made again if the event changes while the menu is
-  // open (a setting changed in another tab), so the file always matches what the menu was built
-  // from. iOS gets a data URL, other platforms a blob download (#451).
+  // Other platforms: the .ics is made when the menu opens, so the choice is a plain link the tap
+  // activates itself (a window.open after an async step is blocked, #445). It is made again if
+  // the event changes while the menu is open, so the file always matches the menu.
+  // iOS: a data: or blob: URL can't be opened there (#451 did not work, #454), so the choice is a
+  // same-tab link to the server's own copy of the session, which needs an account, a connection
+  // and a synced session.
   const ios = isIos()
   const icsName = icsFileName(session.startedAt, timeZone)
+  const zone = timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone
+  const signedIn = signedInUserId() !== null
   const icsUrl = useMemo(() => {
-    if (!open) return null
-    const text = eventsToIcs([event], now())
-    return ios ? icsDataUrl(text) : icsBlobUrl(text)
+    if (!open || ios) return null
+    return icsBlobUrl(eventsToIcs([event], now()))
     // `now` only stamps the file; a new function each render must not rebuild it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, event, ios])
+  const iosHint = !signedIn
+    ? 'Sign in first'
+    : !online
+      ? 'Needs a connection'
+      : !synced
+        ? 'Not synced yet'
+        : null
   useEffect(() => {
     if (!icsUrl?.startsWith('blob:')) return
     // Freed a while late: the browser may still be reading it after the tap.
@@ -203,14 +219,25 @@ export default function AddToCalendar({
             )}
           </li>
           <li>
-            <a
-              className="link-button"
-              href={icsUrl ?? undefined}
-              {...(ios ? { target: '_self' } : { download: icsName })}
-              onClick={() => closeAfterNavigation(true)}
-            >
-              Apple Calendar / other (.ics)
-            </a>
+            {ios && iosHint ? (
+              <>
+                <button type="button" aria-disabled="true" aria-describedby={`${id}-ics-hint`}>
+                  Apple Calendar / other (.ics)
+                </button>
+                <span id={`${id}-ics-hint`} className="field-hint">
+                  {iosHint}
+                </span>
+              </>
+            ) : (
+              <a
+                className="link-button"
+                href={ios ? sessionIcsPath(session.id, zone) : (icsUrl ?? undefined)}
+                {...(ios ? { target: '_self' } : { download: icsName })}
+                onClick={() => closeAfterNavigation(true)}
+              >
+                Apple Calendar / other (.ics)
+              </a>
+            )}
           </li>
         </ul>
       )}

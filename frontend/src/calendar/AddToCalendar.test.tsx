@@ -3,6 +3,7 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cacheUser, forgetCachedUser } from '../auth/localData.ts'
 import { SettingsContext } from '../settings/SettingsContext.ts'
 import { SettingsStore } from '../settings/store.ts'
 import { TagsContext } from '../tags/context.ts'
@@ -55,7 +56,10 @@ function setOnline(online: boolean) {
 const label = /^Add to calendar: Work, 25 min on /
 
 beforeEach(() => setOnline(true))
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  forgetCachedUser()
+})
 
 describe('the control', () => {
   it('is a button named by the session, which opens two choices', () => {
@@ -259,38 +263,68 @@ describe('Apple Calendar / other (.ics)', () => {
 
   const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)'
 
-  function icsText(href: string | null) {
-    return decodeURIComponent((href ?? '').replace('data:text/calendar;charset=utf-8,', ''))
+  const ICS = 'Apple Calendar / other (.ics)'
+
+  function signIn() {
+    cacheUser({ id: 'u1', email: 'a@b.co' } as never)
   }
 
   it.each([
     ['Safari', false],
     ['the installed Home Screen app', true],
-  ])('on iOS in %s is a same-tab data URL, with no download and no blob', (_name, standalone) => {
+  ])(
+    'on iOS in %s is a same-tab link to the server copy, with no download and no blob',
+    (_name, standalone) => {
+      vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE)
+      if (standalone)
+        Object.defineProperty(navigator, 'standalone', { value: true, configurable: true })
+      signIn()
+      const { blobs } = capture()
+      const open = vi.spyOn(window, 'open')
+      render(withProviders(<AddToCalendar session={session} timeZone="Europe/Paris" synced />))
+      fireEvent.click(screen.getByRole('button', { name: label }))
+      expect(choice()).toHaveAttribute(
+        'href',
+        `/api/calendar/session/${session.id}.ics?tz=Europe%2FParis`,
+      )
+      expect(choice()).toHaveAttribute('target', '_self')
+      expect(choice()).not.toHaveAttribute('download')
+      expect(blobs).toHaveLength(0)
+      fireEvent.click(choice())
+      expect(open).not.toHaveBeenCalled()
+      delete (navigator as { standalone?: boolean }).standalone
+    },
+  )
+
+  it('on iOS uses the device time zone when none is given', () => {
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE)
-    if (standalone)
-      Object.defineProperty(navigator, 'standalone', { value: true, configurable: true })
-    const { blobs } = capture()
-    const open = vi.spyOn(window, 'open')
-    render(withProviders(<AddToCalendar session={session} />))
+    signIn()
+    render(withProviders(<AddToCalendar session={session} synced />))
     fireEvent.click(screen.getByRole('button', { name: label }))
-    const href = choice().getAttribute('href')
-    expect(href).toMatch(/^data:text\/calendar;charset=utf-8,BEGIN%3AVCALENDAR/)
-    expect(icsText(href)).toContain('SUMMARY:Work: Write chapter 3\r\n')
-    expect(choice()).toHaveAttribute('target', '_self')
-    expect(choice()).not.toHaveAttribute('download')
-    expect(blobs).toHaveLength(0)
-    fireEvent.click(choice())
-    expect(open).not.toHaveBeenCalled()
-    delete (navigator as { standalone?: boolean }).standalone
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    expect(choice().getAttribute('href')).toContain(`?tz=${encodeURIComponent(zone)}`)
   })
 
-  it('on iOS also works offline', () => {
+  it.each([
+    ['offline', false, true, 'Needs a connection'],
+    ['not synced yet', true, false, 'Not synced yet'],
+  ])('on iOS is disabled with a hint when %s', (_name, online, synced, hint) => {
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE)
-    setOnline(false)
-    render(withProviders(<AddToCalendar session={session} />))
+    signIn()
+    setOnline(online)
+    render(withProviders(<AddToCalendar session={session} synced={synced} />))
     fireEvent.click(screen.getByRole('button', { name: label }))
-    expect(choice().getAttribute('href')).toMatch(/^data:text\/calendar/)
+    expect(screen.queryByRole('link', { name: ICS })).toBeNull()
+    const button = screen.getByRole('button', { name: ICS })
+    expect(button).toHaveAttribute('aria-disabled', 'true')
+    expect(button).toHaveAccessibleDescription(hint)
+  })
+
+  it('on iOS is disabled when not signed in', () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE)
+    render(withProviders(<AddToCalendar session={session} synced />))
+    fireEvent.click(screen.getByRole('button', { name: label }))
+    expect(screen.getByRole('button', { name: ICS })).toHaveAccessibleDescription('Sign in first')
   })
 
   it('keeps the blob download on other platforms', () => {
@@ -303,14 +337,23 @@ describe('Apple Calendar / other (.ics)', () => {
     expect(choice()).not.toHaveAttribute('target')
   })
 
-  it('makes the file again when a setting changes while the menu is open', () => {
-    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE)
+  it('off iOS, unsynced and offline still gets the device-built file', async () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (X11; Linux x86_64)')
+    setOnline(false)
+    const { blobs } = capture()
+    render(withProviders(<AddToCalendar session={session} synced={false} />))
+    fireEvent.click(screen.getByRole('button', { name: label }))
+    expect(choice()).toHaveAttribute('download')
+    expect(await (blobs[0] as Blob).text()).toContain('SUMMARY:Work: Write chapter 3')
+  })
+
+  it('makes the file again when a setting changes while the menu is open', async () => {
+    const { blobs } = capture()
     const settings = new SettingsStore()
     render(withProviders(<AddToCalendar session={session} />, settings))
     fireEvent.click(screen.getByRole('button', { name: label }))
-    expect(icsText(choice().getAttribute('href'))).toContain('SUMMARY:Work: Write chapter 3')
     act(() => settings.update({ calendar_title_template: 'Focus on {tag}' }))
-    expect(icsText(choice().getAttribute('href'))).toContain('SUMMARY:Focus on Work')
+    expect(await (blobs.at(-1) as Blob).text()).toContain('SUMMARY:Focus on Work')
   })
 })
 
