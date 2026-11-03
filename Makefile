@@ -10,7 +10,7 @@ UV      := uv --directory backend
 NPM     := npm --prefix frontend
 COMPOSE := docker compose
 
-.PHONY: help install up down logs check-stack test test-backend test-backend-unit \
+.PHONY: help install up up-test down logs check-stack worktree-env worktree-gc test test-backend test-backend-unit \
 	test-backend-integration test-frontend test-e2e test-e2e-if-up test-scripts test-server test-infra test-prod-stack \
 	migrate lint lint-backend \
 	lint-frontend lint-scripts lint-shell lint-workflows openapi fmt fmt-backend fmt-frontend hooks
@@ -57,15 +57,35 @@ frontend/node_modules: frontend/package.json frontend/package-lock.json
 # scripts/require-worktree-env.sh: in a subagent worktree (.claude/worktrees/) with no .env,
 # Compose would drive the main checkout's stack instead, so it stops there (#188).
 WORKTREE_ENV_GUARD := scripts/require-worktree-env.sh
+# A subagent worktree's own stack (#442): `make worktree-env` writes its .env with a Compose
+# project and a slot of ports; `make up`/`up-test` claim the slot, `make down` frees it.
+# Both do nothing in a checkout whose .env names no slot (main checkout, session worktree, CI).
+WORKTREE_ENV := scripts/worktree-env.sh
+# This checkout's slot, from .env: set only in a subagent worktree with a written .env.
+WORKTREE_SLOT = $(shell sed -n 's/^WORKTREE_SLOT=//p' .env 2>/dev/null)
 
 up: ## Build and start the local stack, wait until it is healthy, print its URLs (compose.yaml)
 	@$(WORKTREE_ENV_GUARD) "make up"
+	@$(WORKTREE_ENV) claim
 	$(COMPOSE) up -d --build --wait
 	@scripts/stack-urls.sh
 
-down: ## Stop the local stack (keeps the database volume)
+up-test: ## Lean stack for tests: app + Postgres on a tmpfs, no Grafana/OTLP (compose.test.yaml)
+	@$(WORKTREE_ENV_GUARD) "make up-test"
+	@$(WORKTREE_ENV) claim
+	$(COMPOSE) -f compose.yaml -f compose.test.yaml up -d --build --wait
+	@scripts/stack-urls.sh
+
+down: ## Stop the local stack (keeps the database volume; a subagent worktree's also frees its slot)
 	@$(WORKTREE_ENV_GUARD) "make down"
-	$(COMPOSE) down
+	$(COMPOSE) down$(if $(WORKTREE_SLOT), --rmi local)
+	@$(WORKTREE_ENV) release
+
+worktree-env: ## In a subagent worktree: write its .env (own project and ports) from SESSION=<session folder>'s
+	@$(WORKTREE_ENV) write "$(SESSION)"
+
+worktree-gc: ## Stop stacks of subagent worktrees whose folder is gone, free their slots, list the rest
+	@$(WORKTREE_ENV) gc
 
 logs: ## Follow the local stack's logs
 	@$(WORKTREE_ENV_GUARD) "make logs"
@@ -118,7 +138,7 @@ test-prod-stack: ## Smoke-test the production stack: Caddy + prod + dev (#27; ne
 test-e2e-if-up:
 	@if [ -z "$${PLAYWRIGHT_BASE_URL:-}" ] && ! $(WORKTREE_ENV_GUARD) "make test's e2e step"; then \
 		if [ -n "$${CI:-}" ]; then echo "FAILED e2e: no stack of this worktree's own (CI is set)." >&2; exit 1; fi; \
-		echo "SKIPPED e2e: no stack of this worktree's own. Copy the session's .env, then make up and make test-e2e." >&2; \
+		echo "SKIPPED e2e: no stack of this worktree's own. Run make worktree-env SESSION=<session folder>, then make up-test and make test-e2e." >&2; \
 		exit 0; \
 	fi; \
 	url="$${PLAYWRIGHT_BASE_URL:-$$(scripts/stack-urls.sh app)}"; \

@@ -1,0 +1,37 @@
+# Lean test stack (#442): `make up-test`, i.e.
+#   docker compose -f compose.yaml -f compose.test.yaml up -d --build --wait
+#
+# Only what `make test` and `make test-e2e` use: the app and Postgres. Grafana and the OTLP
+# collector (`lgtm`) sit in the `observability` profile, so they don't start; `make up`
+# starts the full stack, Grafana included, on the same ports.
+#
+# The database lives on a tmpfs, not in a volume: it's throwaway, so `make down` (plain
+# `docker compose down`) leaves nothing behind and no run stalls on the volume-removal
+# prompt (`docker compose down -v` asks first, .claude/settings.json). Stopping the db
+# container empties it; the app's migrations rebuild the schema on the next start. tmpfs
+# pages count against the db container's mem_limit.
+#
+# The log-privacy e2e test reads `docker compose logs app`, which works the same here: the
+# app's JSON logs go to stdout whatever the OTLP exporters do.
+
+services:
+  app:
+    environment:
+      # No collector to send to, so no exporter errors in the logs.
+      OTEL_TRACES_EXPORTER: none
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+      # Playwright signs up a fresh account per test; the local default (10 an hour per
+      # client) runs out partway through a suite. CI's e2e job uses the same value.
+      SIGNUP_MAX_PER_CLIENT: "1000"
+    depends_on: !override
+      db:
+        condition: service_healthy
+
+  db:
+    volumes: !reset []
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  lgtm:
+    profiles: [observability]

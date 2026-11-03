@@ -7,7 +7,7 @@ You are the **lead** working through the backlog of ybenzine/ineedtofocus. Follo
 
 **Scope:** issues whose milestone title starts with `$ARGUMENTS` (e.g. `M2` matches `M2 · MVP app`); if no argument, every milestone `M1`–`M5` in order. Never touch `post-mvp` issues or the `Post-MVP` milestone.
 
-**Parallel milestones need separate worktrees** (#83): two `/work-backlog` sessions never run in the same folder. Each runs in its own git worktree with its own `.env` (Compose project name and host ports), set up as in `_docs/process.md` → Parallel sessions.
+**Parallel milestones need separate worktrees** (#83): two `/work-backlog` sessions never run in the same folder. Each runs in its own git worktree with its own `.env` (Compose project name and host ports), set up as in `_docs/process.md` → Parallel sessions. Subagents in worktrees under `.claude/worktrees/` don't share the session's stack either: each runs `make worktree-env SESSION=<session folder>` and then `make up-test` on a slot of its own (#442), so tell each one the session folder (`/work-issue` step 3). If one reports no free slot, run `make worktree-gc`.
 
 ## Collect
 1. Open issues: `gh issue list --state open --limit 500 --json number,title,labels,milestone` (REST fallback: `gh api --paginate "repos/ybenzine/ineedtofocus/issues?state=open&per_page=100"`, then drop entries that have a `pull_request` key — those are PRs).

@@ -444,6 +444,87 @@ def test_curl_rules_name_explicit_ports() -> None:
 def test_a_port_outside_the_documented_ones_still_prompts() -> None:
     assert matching("allow", "curl http://localhost:8020/healthz") == []
     assert matching("allow", "curl http://localhost:8010@evil.example/healthz") == []
+    # Just past the subagent slots (#442), and between two of them.
+    assert matching("allow", "curl http://localhost:8180/healthz") == []
+    assert matching("allow", "curl http://localhost:8105/healthz") == []
+    assert matching("allow", "curl http://localhost:8100@evil.example/healthz") == []
+
+
+# --- Local curl for each subagent worktree's own stack (#442) -----------------------------
+# scripts/worktree-env.sh gives each subagent worktree slot k (10-17), every default port +
+# 10k, so up to 8 subagents (two sessions of 4, #172) each run a stack of their own.
+
+WORKTREE_ENV = REPO / "scripts" / "worktree-env.sh"
+
+
+def slot_range() -> range:
+    script = WORKTREE_ENV.read_text()
+    first = re.search(r"^FIRST_SLOT=(\d+)$", script, re.MULTILINE)
+    last = re.search(r"^LAST_SLOT=(\d+)$", script, re.MULTILINE)
+    assert first and last
+    return range(int(first[1]), int(last[1]) + 1)
+
+
+SLOT_PORTS = sorted(
+    port + 10 * slot for slot in slot_range() for port in DEFAULT_PORTS.values()
+)
+
+
+def test_slots_cover_four_agents_and_miss_the_session_worktrees() -> None:
+    slots = slot_range()
+    assert len(slots) >= 4
+    # Session checkouts use +0 (main), +10 (second) and +20 (third, settings.local.json).
+    assert not {0, 1, 2} & set(slots)
+    # No slot's port is another service's port in another slot or checkout.
+    every = [port + 10 * k for k in [0, 1, 2, *slots] for port in DEFAULT_PORTS.values()]
+    assert len(every) == len(set(every))
+
+
+@pytest.mark.parametrize("port", SLOT_PORTS)
+def test_subagent_slot_ports_are_allowed(port: int) -> None:
+    for rule in curl_rules(port):
+        assert rule in PERMISSIONS["allow"], rule
+
+
+@pytest.mark.parametrize("port", SLOT_PORTS)
+@pytest.mark.parametrize("host", HOSTS)
+def test_curl_to_a_subagent_slot_runs_without_a_prompt(host: str, port: int) -> None:
+    for command in (
+        f"curl http://{host}:{port}/healthz",
+        f"curl -fsS --max-time 3 http://{host}:{port}/healthz",
+    ):
+        assert matching("allow", command), command
+        assert matching("deny", command) == [], command
+        assert matching("ask", command) == [], command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "make worktree-env SESSION=/Users/me/ineedtofocus-m6",
+        "make up-test",
+        "make down",
+        "make worktree-gc",
+        "scripts/worktree-env.sh gc",
+        # What `make down` and `make worktree-gc` run for a slot's stack: its database is
+        # on a tmpfs, so nothing needs the volume-removal prompt (`down -v`).
+        "docker compose down --rmi local",
+        "docker compose -p focus-m6-agent-a1 down --rmi local --remove-orphans",
+    ],
+)
+def test_a_subagent_stack_runs_unattended(command: str) -> None:
+    assert matching("allow", command), command
+    assert matching("deny", command) == [], command
+    assert matching("ask", command) == [], command
+
+
+def test_docs_list_the_subagent_slot_ports() -> None:
+    slots = slot_range()
+    span = ", ".join(
+        f"{base + 10 * slots[0]}-{base + 10 * slots[-1]}" for base in DEFAULT_PORTS.values()
+    )
+    assert f"slots {slots[0]}-{slots[-1]}: {span}" in PROCESS.read_text()
+    assert f"slots {slots[0]}-{slots[-1]}: {span}" in (REPO / "CLAUDE.md").read_text()
 
 
 def test_third_worktree_snippet_is_valid_and_explicit() -> None:

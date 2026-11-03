@@ -29,8 +29,10 @@ $target stopped: this checkout is a subagent worktree with no .env.
   $root
 Without one, Compose here uses the defaults (project focus-local, app on port 8000): that is
 the main checkout's stack, so this would replace, stop or test that stack instead of its own.
-Copy your session's .env first (the lead names the session folder when it delegates):
-  cp <session folder>/.env .env
+Give this worktree a stack of its own first (the lead names the session folder when it
+delegates): this writes a .env with its own Compose project and a free slot of ports.
+  make worktree-env SESSION=<session folder>
+Then make up-test (app + Postgres) or make up (full stack), and make down when done.
 See _docs/process.md → Parallel sessions → Subagent worktrees.
 EOF
 exit 1
