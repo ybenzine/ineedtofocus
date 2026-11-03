@@ -338,7 +338,8 @@ def test_without_a_slot_up_and_down_run_as_before(
     result = lab.make(root, target)
     assert result.returncode == 0, result.stderr
     first = lab.log.read_text().splitlines()[0]
-    assert first == {"up": "docker compose up -d --build --wait", "down": "docker compose down"}[target]
+    expected = {"up": "docker compose up -d --build --wait", "down": "docker compose down"}
+    assert first == expected[target]
     assert "slot" not in result.stdout + result.stderr
     assert not lab.slots.exists()
 
@@ -378,7 +379,9 @@ def test_gc_stops_stacks_of_gone_worktrees_only(lab: Lab) -> None:
         # A gone worktree's stack with no slot record (e.g. a .env copied by hand).
         {
             "Name": "focus-m6-agent-old",
-            "ConfigFiles": f"{worktrees}/agent-old/compose.yaml,{worktrees}/agent-old/compose.test.yaml",
+            "ConfigFiles": ",".join(
+                f"{worktrees}/agent-old/{name}" for name in ("compose.yaml", "compose.test.yaml")
+            ),
         },
         # The gone worktree with a slot: stopped once, not twice.
         {"Name": "focus-m6-agent-gone", "ConfigFiles": f"{gone}/compose.yaml"},
@@ -403,8 +406,10 @@ def lean_config(tmp_path: Path, *extra: str) -> dict[str, Any]:
     for name in ("compose.yaml", "compose.test.yaml"):
         shutil.copy2(REPO / name, tmp_path / name)  # no .env next to them
     result = subprocess.run(
-        ["docker", "compose", "-f", "compose.yaml", "-f", "compose.test.yaml", *extra, "config"]
-        + ["--format", "json"],
+        [
+            *("docker", "compose", "-f", "compose.yaml", "-f", "compose.test.yaml"),
+            *(*extra, "config", "--format", "json"),
+        ],
         capture_output=True,
         text=True,
         check=True,

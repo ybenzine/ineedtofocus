@@ -465,9 +465,7 @@ def slot_range() -> range:
     return range(int(first[1]), int(last[1]) + 1)
 
 
-SLOT_PORTS = sorted(
-    port + 10 * slot for slot in slot_range() for port in DEFAULT_PORTS.values()
-)
+SLOT_PORTS = sorted(port + 10 * slot for slot in slot_range() for port in DEFAULT_PORTS.values())
 
 
 def test_slots_cover_four_agents_and_miss_the_session_worktrees() -> None:
