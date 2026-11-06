@@ -758,6 +758,7 @@ describe('a stale anonymous tab after a sign-in in another tab', () => {
     const api = makeApi()
     renderApp({ api })
     await screen.findByRole('button', { name: 'Start' })
+    await act(async () => undefined) // let AuthGate's effects run first, as in signInElsewhere()
     localStorage.setItem(OWNER_KEY, alice.id)
     localStorage.setItem(USER_KEY, JSON.stringify(alice))
     vi.mocked(api.me).mockResolvedValue(alice)
@@ -789,7 +790,8 @@ describe('a stale anonymous tab after a sign-in in another tab', () => {
 
 describe('anonymous use never runs beside a signed-in device', () => {
   async function signInElsewhere() {
-    // The app's storage listener is registered in an effect that can run after the screen shows (#459).
+    // AuthGate's `anonymousShownRef` is set in an effect that can run after the screen shows; a
+    // storage event before it is ignored (#459).
     await act(async () => undefined)
     localStorage.setItem(OWNER_KEY, alice.id)
     localStorage.setItem(USER_KEY, JSON.stringify(alice))

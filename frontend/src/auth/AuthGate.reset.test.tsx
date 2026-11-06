@@ -276,6 +276,8 @@ describe('the reset page (AC8)', () => {
       'Use a password of 8 to 128 characters.',
     )
     expect(screen.getByRole('button', { name: 'Change password' })).toBeEnabled()
+    // Focus goes back to the field to fix.
+    await waitFor(() => expect(screen.getByLabelText('New password')).toHaveFocus())
     expect(peekResetToken()).toBe(TOKEN)
   })
 

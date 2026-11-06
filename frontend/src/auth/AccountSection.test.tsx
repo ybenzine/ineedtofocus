@@ -87,7 +87,8 @@ describe('Account section: export (AC1.6)', () => {
     expect(hook.trySync.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(api.exportData).mock.invocationCallOrder[0],
     )
-    expect(screen.getByRole('status')).toHaveTextContent('')
+    // The status is cleared in a `finally` after the click (seen failing once, seed 90210).
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(''))
   })
 
   it('says how many sessions on this device are not in the export', async () => {
