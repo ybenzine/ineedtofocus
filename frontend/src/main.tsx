@@ -1,3 +1,5 @@
+// First: takes a password reset token out of the address bar before anything else runs (#350).
+import './auth/captureResetToken.ts'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { AuthError, describeWait, type AuthApi, type User } from './api.ts'
 
+import { ResetLink, ResetOfferLink } from './ResetContext.tsx'
+import { useResetAvailable } from './resetOffer.ts'
 import type { AuthForm as Mode } from '../anonymous/AnonymousContext.ts'
 
 interface Props {
@@ -13,6 +15,8 @@ interface Props {
   onContinue?: () => void
   /** Shown above the form, e.g. after an offline sign-out. */
   notice?: string
+  /** Moves focus to the notice when the screen appears, so a screen reader reads it (#350). */
+  focusNotice?: boolean
   /** Runs before each sign-in or sign-up request; a returned message stops the request. */
   beforeSubmit?: () => Promise<string | null>
 }
@@ -26,6 +30,7 @@ export default function AuthScreen({
   onContinue,
   onSignedIn,
   notice,
+  focusNotice = false,
   beforeSubmit = () => Promise.resolve(null),
 }: Props) {
   const [email, setEmail] = useState('')
@@ -37,7 +42,14 @@ export default function AuthScreen({
   const emailRef = useRef<HTMLInputElement>(null)
   const passwordRef = useRef<HTMLInputElement>(null)
   const headingRef = useRef<HTMLHeadingElement>(null)
+  const noticeRef = useRef<HTMLParagraphElement>(null)
   const switched = useRef(false)
+  const resetAvailable = useResetAvailable(true)
+  const [limited, setLimited] = useState(false)
+
+  useEffect(() => {
+    if (focusNotice) noticeRef.current?.focus()
+  }, [focusNotice])
 
   // After switching between sign-in and sign-up, announce the new form by focusing its heading.
   useEffect(() => {
@@ -50,6 +62,7 @@ export default function AuthScreen({
     setEmailError('')
     setPasswordError('')
     setFormError('')
+    setLimited(false)
   }
 
   async function submit(event: FormEvent) {
@@ -61,6 +74,7 @@ export default function AuthScreen({
     setEmailError(emailProblem)
     setPasswordError(passwordProblem)
     setFormError('')
+    setLimited(false)
     if (emailProblem || passwordProblem) {
       ;(emailProblem ? emailRef : passwordRef).current?.focus()
       return
@@ -90,6 +104,7 @@ export default function AuthScreen({
           passwordRef.current?.focus()
         } else if (error.kind === 'rate_limited') {
           setFormError(`Too many attempts. ${describeWait(error.retryAfterSeconds)}`)
+          setLimited(mode === 'signin')
         } else setFormError(error.message)
       } else {
         setFormError('Something went wrong. Try again in a moment.')
@@ -102,7 +117,11 @@ export default function AuthScreen({
   return (
     <main>
       <h1>I Need To Focus</h1>
-      {notice && <p role="status">{notice}</p>}
+      {notice && (
+        <p ref={noticeRef} role="status" tabIndex={-1}>
+          {notice}
+        </p>
+      )}
       <h2 ref={headingRef} tabIndex={-1}>
         {signUp ? 'Create your account' : 'Sign in'}
       </h2>
@@ -147,6 +166,12 @@ export default function AuthScreen({
           </p>
         )}
         {formError && <p role="alert">{formError}</p>}
+        {limited && <ResetOfferLink email={email.trim()} />}
+        {resetAvailable && !signUp && (
+          <p>
+            <ResetLink email={email.trim()}>Forgot password?</ResetLink>
+          </p>
+        )}
         <button type="submit" className="primary" disabled={busy}>
           {signUp ? 'Create account' : 'Sign in'}
         </button>

@@ -2,6 +2,8 @@ import { useEffect, useId, useRef, useState, type FormEvent } from 'react'
 import { useAccount } from './AccountContext.tsx'
 import { AccountError, httpAccountApi, PASSWORD_MAX_LENGTH, type AccountApi } from './accountApi.ts'
 import { describeWait } from './api.ts'
+import { ResetOfferLink } from './ResetContext.tsx'
+import { useResetAvailable } from './resetOffer.ts'
 import type { TimerController } from '../timer/index.ts'
 import { countUnsynced, hasActiveTimer, notifySessionExpired, trySyncAll } from './localData.ts'
 
@@ -80,6 +82,9 @@ export default function AccountSection({
   const [blocked, setBlocked] = useState('')
   const [password, setPassword] = useState('')
   const [problem, setProblem] = useState('')
+  // The wrong password or the limit it counts against: a reset by email is offered (AC1.9).
+  const [offerReset, setOfferReset] = useState(false)
+  useResetAvailable(open)
   const [deleting, setDeleting] = useState(false)
   const [count, setCount] = useState<number | null>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
@@ -136,6 +141,7 @@ export default function AccountSection({
     }
     setPassword('')
     setProblem('')
+    setOfferReset(false)
     setCount(null)
     setOpen(true)
   }
@@ -144,12 +150,14 @@ export default function AccountSection({
     setOpen(false)
     setPassword('')
     setProblem('')
+    setOfferReset(false)
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (password === '' || deleting) return
     setProblem('')
+    setOfferReset(false)
     // Another tab may have started a timer while the confirmation was open.
     if (hasActiveTimer()) {
       setProblem(DELETE_ACTIVE_TIMER_MESSAGE)
@@ -162,6 +170,10 @@ export default function AccountSection({
       // Nothing is cleared on the device: the account (and its sessions) still exist.
       if (error instanceof AccountError && error.kind === 'unauthorized') notifySessionExpired()
       setProblem(deleteErrorMessage(error))
+      setOfferReset(
+        error instanceof AccountError &&
+          (error.kind === 'forbidden' || error.kind === 'rate_limited'),
+      )
       setDeleting(false)
       if (error instanceof AccountError && error.kind === 'forbidden') passwordRef.current?.focus()
       return
@@ -245,6 +257,7 @@ export default function AccountSection({
               {problem}
             </p>
           )}
+          {offerReset && <ResetOfferLink email={account.user.email} />}
           <div className="account-delete-actions">
             <button type="button" ref={cancelRef} onClick={cancel}>
               Cancel
