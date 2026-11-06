@@ -165,6 +165,39 @@ export async function serverSessionCount(request: APIRequestContext): Promise<nu
   return body.session_count
 }
 
+/**
+ * The reset token in the email Mailpit holds for `address` (password reset, #350). Reads
+ * Mailpit's HTTP API through Playwright's `request`; `make test-e2e` sets `MAILPIT_URL` from
+ * `scripts/stack-urls.sh mailpit`. Waits for the message, which is sent after the 202.
+ */
+export async function resetTokenFor(request: APIRequestContext, address: string): Promise<string> {
+  const base = process.env.MAILPIT_URL
+  if (!base) throw new Error('MAILPIT_URL is not set: run the e2e tests with `make test-e2e`.')
+  let id = ''
+  await expect
+    .poll(
+      async () => {
+        const response = await request.get(
+          `${base}/api/v1/search?query=${encodeURIComponent(`to:${address}`)}`,
+        )
+        // `total` counts the whole mailbox, not the matches: count the matches.
+        const body = (await response.json()) as { messages: { ID: string }[] }
+        id = body.messages[0]?.ID ?? ''
+        return body.messages.length
+      },
+      { message: `an email for ${address} in Mailpit` },
+    )
+    .toBe(1)
+  const message = (await (await request.get(`${base}/api/v1/message/${id}`)).json()) as {
+    Subject: string
+    Text: string
+  }
+  expect(message.Subject).toBe('Reset your I Need To Focus password')
+  const token = /\/reset-password#token=(\S+)/.exec(message.Text)?.[1]
+  if (!token) throw new Error('no reset link in the email')
+  return token
+}
+
 /** No horizontal scroll: the page is no wider than the window. */
 export async function expectNoSidewaysScroll(page: Page): Promise<void> {
   const { scrollWidth, innerWidth } = await page.evaluate(() => ({

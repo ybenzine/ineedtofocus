@@ -2,6 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { AccountContext, type Account } from './AccountContext.tsx'
 import { AuthError, httpAuthApi, type AuthApi, type User } from './api.ts'
 import AuthScreen from './AuthScreen.tsx'
+import ResetPage, { PASSWORD_CHANGED_MESSAGE, type ResetView } from './ResetPage.tsx'
+import { ResetContext, type ResetOffer } from './resetOffer.ts'
+import { httpResetApi, type ResetApi } from './resetApi.ts'
+import {
+  discardResetToken,
+  FORGOT_PASSWORD_PATH,
+  isForgotPasswordPath,
+  isResetPasswordPath,
+  peekResetToken,
+} from './resetToken.ts'
 import {
   accountSlotHasSession,
   cacheUser,
@@ -35,6 +45,8 @@ import { applyTheme } from '../theme.ts'
 interface Props {
   children: ReactNode
   api?: AuthApi
+  /** Password reset by email (AC1.9, #350). */
+  resetApi?: ResetApi
   /**
    * Hands the finished anonymous session saved from the summary's prompt to the account's timer
    * (device store first, then sync, #331). Without it that session cannot be saved.
@@ -57,6 +69,18 @@ function routeFromLocation(): FormRoute | null {
   const form = formFromPath(window.location.pathname)
   return form === null ? null : { form, fromPrompt: false, pushed: false, from: '/' }
 }
+
+function resetViewFromLocation(): ResetView | null {
+  const path = window.location.pathname
+  if (isResetPasswordPath(path)) return { kind: 'confirm', token: peekResetToken() }
+  if (isForgotPasswordPath(path)) return { kind: 'request', email: '', pushed: false, from: '/' }
+  return null
+}
+
+/** What the notice after a password reset says: just that it changed, or to sign in too. */
+type ChangedNotice = 'changed' | 'signin'
+
+export const PASSWORD_CHANGED_NOTICE = 'Password changed.'
 
 export const ACCOUNT_DELETED_NOTICE = 'Your account was deleted.'
 
@@ -82,7 +106,12 @@ export const SERVER_SIGN_OUT_MESSAGE =
  * owner's data. A sign-out that couldn't reach the server leaves a `pendingLogout` marker; while
  * it is set the device is never treated as signed in and `/me` is not called.
  */
-export default function AuthGate({ children, api = httpAuthApi, handOver }: Props) {
+export default function AuthGate({
+  children,
+  api = httpAuthApi,
+  resetApi = httpResetApi,
+  handOver,
+}: Props) {
   const [user, setUser] = useState<User | null>(null)
   const [checking, setChecking] = useState(() => !hasPendingLogout())
   const [logoutPending, setLogoutPending] = useState(hasPendingLogout)
@@ -99,6 +128,12 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
   )
   const [mustSignIn, setMustSignIn] = useState(() => hasOwner() || hasPendingLogout())
   const [handedOver, setHandedOver] = useState<TimerUpdate | null>(null)
+  // The password reset pages (#350) stand over whatever else the device would show.
+  const [resetView, setResetView] = useState<ResetView | null>(resetViewFromLocation)
+  const [resetAvailable, setResetAvailable] = useState(false)
+  const [changedNotice, setChangedNotice] = useState<ChangedNotice | null>(null)
+  const resetAskedRef = useRef(false)
+  const resetAvailableRef = useRef(false)
   // Re-render when another tab changes the stored session: anonymous use isn't offered while an
   // account's session is in it.
   const [, setSlotChanges] = useState(0)
@@ -268,7 +303,15 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
     }
     // The back and forward buttons open and close the forms.
     function onPopState() {
-      const form = formFromPath(window.location.pathname)
+      const path = window.location.pathname
+      setResetView((previous) => {
+        if (isResetPasswordPath(path)) return { kind: 'confirm', token: peekResetToken() }
+        if (!isForgotPasswordPath(path)) return null
+        return previous?.kind === 'request'
+          ? previous
+          : { kind: 'request', email: '', pushed: true, from: '/' }
+      })
+      const form = formFromPath(path)
       if (form === null) {
         setRoute(null)
         return
@@ -355,6 +398,97 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
   }, [])
   const anonymous = useMemo<AnonymousUse>(() => ({ held, openForm }), [held, openForm])
 
+  // Password reset (#350). The options are asked when a screen that offers the link appears; a
+  // failed call counts as "not available".
+  const ensureResetAvailable = useCallback(() => {
+    if (resetAskedRef.current || resetAvailableRef.current) return
+    resetAskedRef.current = true
+    void resetApi.available().then((available) => {
+      resetAskedRef.current = false
+      resetAvailableRef.current = available
+      setResetAvailable(available)
+    })
+  }, [resetApi])
+  const openReset = useCallback((email: string) => {
+    const from = window.location.pathname
+    window.history.pushState(null, '', FORGOT_PASSWORD_PATH)
+    setResetView({ kind: 'request', email, pushed: true, from })
+  }, [])
+  const resetOffer = useMemo<ResetOffer>(
+    () => ({ available: resetAvailable, ensure: ensureResetAvailable, open: openReset }),
+    [resetAvailable, ensureResetAvailable, openReset],
+  )
+
+  function leaveReset() {
+    if (resetView?.kind === 'request' && resetView.pushed) {
+      // `popstate` closes the page and restores what it was opened over.
+      window.history.back()
+      return
+    }
+    discardResetToken()
+    setResetView(null)
+    if (user) {
+      window.history.replaceState(null, '', '/')
+      return
+    }
+    window.history.replaceState(null, '', pathForForm('signin'))
+    setMode('signin')
+    setRoute({ form: 'signin', fromPrompt: false, pushed: false, from: '/' })
+  }
+
+  function requestNewLink() {
+    discardResetToken()
+    window.history.replaceState(null, '', FORGOT_PASSWORD_PATH)
+    setResetView({ kind: 'request', email: '', pushed: false, from: '/' })
+  }
+
+  /**
+   * The server changed the password (204) and says nothing about who is signed in here. A
+   * signed-in request tells: 401 means this device's sign-in was one of the revoked ones (the
+   * account just reset), a user means it belongs to another account, and an unreachable server
+   * leaves it to the next request to find out. Nothing is cleared on the device either way:
+   * unsynced sessions stay for their owner, as for any expired sign-in (F13).
+   */
+  async function passwordChanged() {
+    let current: User | null | 'unknown'
+    try {
+      current = await api.me()
+    } catch {
+      current = 'unknown'
+    }
+    setResetView(null)
+    if (current === null) {
+      const cached = loadCachedUser()
+      forgetCachedUser()
+      setChangedNotice('signin')
+      if (userRef.current && cached && hasActiveTimer()) {
+        // A timer is still running or paused: keep its screen until it ends; the app then shows
+        // the sign-in screen with the message.
+        expiredRef.current = true
+        setExpired(true)
+        setUser(cached)
+        window.history.replaceState(null, '', '/')
+        return
+      }
+      setUser(null)
+      setMustSignIn(true)
+      setMode('signin')
+      setRoute({ form: 'signin', fromPrompt: false, pushed: false, from: '/' })
+      window.history.replaceState(null, '', pathForForm('signin'))
+      return
+    }
+    if (current === 'unknown' && !userRef.current) {
+      setChangedNotice('signin')
+      setMode('signin')
+      setRoute({ form: 'signin', fromPrompt: false, pushed: false, from: '/' })
+      window.history.replaceState(null, '', pathForForm('signin'))
+      return
+    }
+    // Another account is signed in here (or it can't be told yet): it stays.
+    setChangedNotice('changed')
+    window.history.replaceState(null, '', '/')
+  }
+
   function continueWithoutAccount() {
     setMustSignIn(false)
     if (route?.pushed) {
@@ -383,63 +517,110 @@ export default function AuthGate({ children, api = httpAuthApi, handOver }: Prop
     return route.pushed ? route.from : '/'
   }
 
-  if (checking) {
-    return (
-      <main>
-        <p role="status">Loading…</p>
-      </main>
-    )
-  }
-  if (!user && !showForm) {
-    return (
-      <AnonymousContext.Provider key={anonymousEpoch} value={anonymous}>
-        {children}
-      </AnonymousContext.Provider>
-    )
-  }
-  if (!user) {
-    return (
-      <AuthScreen
-        api={api}
-        mode={mode}
-        onModeChange={changeMode}
-        onContinue={blocked ? undefined : continueWithoutAccount}
-        notice={[deleted && ACCOUNT_DELETED_NOTICE, logoutPending && OFFLINE_SIGN_OUT_NOTICE]
-          .filter(Boolean)
-          .join(' ')}
-        beforeSubmit={async () => {
-          const result = await flushLogout()
-          if (result === 'done') return null
-          return result === 'server' ? SERVER_SIGN_OUT_MESSAGE : OFFLINE_SIGN_OUT_MESSAGE
-        }}
-        onSignedIn={async (next, signedUp) => {
-          // The session held for the prompt is taken first, while its marker still names it;
-          // any other sign-in or sign-up discards what this page holds (#331).
-          const fromPrompt = route?.fromPrompt ?? false
-          const taken = fromPrompt ? held.take() : null
-          if (!fromPrompt) held.discard()
-          const landing = landingAfterSignIn(signedUp, taken !== null)
-          if (landing !== null && window.location.pathname !== landing) {
-            window.history.replaceState(null, '', landing)
+  const content = (() => {
+    if (checking) {
+      return (
+        <main>
+          <p role="status">Loading…</p>
+        </main>
+      )
+    }
+    if (resetView) {
+      // Reset by email works signed in or out, and clears nothing on the device.
+      return (
+        <ResetPage
+          view={
+            resetView.kind === 'request' && resetView.email === '' && user
+              ? { ...resetView, email: user.email }
+              : resetView
           }
-          await claimLocalData(next)
-          // Every anonymous key goes, so held sessions in other tabs are discarded through the
-          // marker. The one session being saved is in this page's memory only.
-          clearAnonymousData()
-          cacheUser(next)
-          let update: TimerUpdate | null = null
-          if (taken !== null && handOver) {
-            update = await handOver({ session: taken.session, pendingRecord: taken.record })
-          }
-          setHandedOver(update)
-          setDeleted(false)
-          setRoute(null)
-          setMustSignIn(false)
-          setUser(next)
-        }}
-      />
-    )
-  }
+          api={resetApi}
+          signedIn={user !== null}
+          onBack={leaveReset}
+          onRequestNew={requestNewLink}
+          onChanged={passwordChanged}
+          onUnavailable={() => {
+            resetAvailableRef.current = false
+            setResetAvailable(false)
+          }}
+        />
+      )
+    }
+    if (!user && !showForm) {
+      return (
+        <AnonymousContext.Provider key={anonymousEpoch} value={anonymous}>
+          {children}
+        </AnonymousContext.Provider>
+      )
+    }
+    if (!user) {
+      return (
+        <AuthScreen
+          api={api}
+          mode={mode}
+          onModeChange={changeMode}
+          onContinue={blocked ? undefined : continueWithoutAccount}
+          notice={[
+            deleted && ACCOUNT_DELETED_NOTICE,
+            logoutPending && OFFLINE_SIGN_OUT_NOTICE,
+            changedNotice === 'signin' && PASSWORD_CHANGED_MESSAGE,
+          ]
+            .filter(Boolean)
+            .join(' ')}
+          focusNotice={changedNotice === 'signin'}
+          beforeSubmit={async () => {
+            const result = await flushLogout()
+            if (result === 'done') return null
+            return result === 'server' ? SERVER_SIGN_OUT_MESSAGE : OFFLINE_SIGN_OUT_MESSAGE
+          }}
+          onSignedIn={async (next, signedUp) => {
+            // The session held for the prompt is taken first, while its marker still names it;
+            // any other sign-in or sign-up discards what this page holds (#331).
+            const fromPrompt = route?.fromPrompt ?? false
+            const taken = fromPrompt ? held.take() : null
+            if (!fromPrompt) held.discard()
+            const landing = landingAfterSignIn(signedUp, taken !== null)
+            if (landing !== null && window.location.pathname !== landing) {
+              window.history.replaceState(null, '', landing)
+            }
+            await claimLocalData(next)
+            // Every anonymous key goes, so held sessions in other tabs are discarded through the
+            // marker. The one session being saved is in this page's memory only.
+            clearAnonymousData()
+            cacheUser(next)
+            let update: TimerUpdate | null = null
+            if (taken !== null && handOver) {
+              update = await handOver({ session: taken.session, pendingRecord: taken.record })
+            }
+            setHandedOver(update)
+            setDeleted(false)
+            setChangedNotice(null)
+            setRoute(null)
+            setMustSignIn(false)
+            setUser(next)
+          }}
+        />
+      )
+    }
 
-  return <AccountContext.Provider value={account}>{children}</AccountContext.Provider>
+    return (
+      <AccountContext.Provider value={account}>
+        <div className="app-notice" aria-live="polite">
+          {changedNotice && (
+            <>
+              <span>
+                {changedNotice === 'signin' ? PASSWORD_CHANGED_MESSAGE : PASSWORD_CHANGED_NOTICE}
+              </span>
+              <button type="button" onClick={() => setChangedNotice(null)}>
+                Dismiss
+              </button>
+            </>
+          )}
+        </div>
+        {children}
+      </AccountContext.Provider>
+    )
+  })()
+
+  return <ResetContext.Provider value={resetOffer}>{content}</ResetContext.Provider>
 }

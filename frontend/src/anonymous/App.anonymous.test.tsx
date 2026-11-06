@@ -125,7 +125,10 @@ const isPrompt = (_content: string, element: Element | null) =>
   element?.tagName === 'P' && element.textContent === PROMPT
 
 function apiCalls(): string[] {
-  return fetchSpy.mock.calls.map((call) => String(call[0]))
+  // `GET /api/auth/options` carries no account data: the sign-in screen asks it (#350).
+  return fetchSpy.mock.calls
+    .map((call) => String(call[0]))
+    .filter((url) => url !== '/api/auth/options')
 }
 
 describe('first screen and account bar', () => {
