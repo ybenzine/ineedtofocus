@@ -9,6 +9,7 @@ import {
   discardResetToken,
   FORGOT_PASSWORD_PATH,
   isForgotPasswordPath,
+  captureResetToken,
   isResetPasswordPath,
   peekResetToken,
 } from './resetToken.ts'
@@ -302,6 +303,12 @@ export default function AuthGate({
       void flushLogout()
     }
     // The back and forward buttons open and close the forms.
+    // A reset link opened in a tab already on the reset page is a same-document navigation:
+    // read the new token and take it out of the address bar the same way. A fragment that
+    // carries no token, or any other page's, changes nothing.
+    function onHashChange() {
+      if (captureResetToken()) setResetView({ kind: 'confirm', token: peekResetToken() })
+    }
     function onPopState() {
       const path = window.location.pathname
       setResetView((previous) => {
@@ -343,11 +350,13 @@ export default function AuthGate({
     }
     window.addEventListener('storage', onStorage)
     window.addEventListener('popstate', onPopState)
+    window.addEventListener('hashchange', onHashChange)
     window.addEventListener('online', onOnline)
     window.addEventListener(SESSION_EXPIRED_EVENT, onExpired)
     return () => {
       window.removeEventListener('storage', onStorage)
       window.removeEventListener('popstate', onPopState)
+      window.removeEventListener('hashchange', onHashChange)
       window.removeEventListener('online', onOnline)
       window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired)
     }
@@ -449,6 +458,14 @@ export default function AuthGate({
    * leaves it to the next request to find out. Nothing is cleared on the device either way:
    * unsynced sessions stay for their owner, as for any expired sign-in (F13).
    */
+  function showSignIn() {
+    setUser(null)
+    setMustSignIn(true)
+    setMode('signin')
+    setRoute({ form: 'signin', fromPrompt: false, pushed: false, from: '/' })
+    window.history.replaceState(null, '', pathForForm('signin'))
+  }
+
   async function passwordChanged() {
     let current: User | null | 'unknown'
     try {
@@ -457,31 +474,32 @@ export default function AuthGate({
       current = 'unknown'
     }
     setResetView(null)
+    const holder = userRef.current
     if (current === null) {
-      const cached = loadCachedUser()
       forgetCachedUser()
       setChangedNotice('signin')
-      if (userRef.current && cached && hasActiveTimer()) {
+      if (holder && hasActiveTimer()) {
         // A timer is still running or paused: keep its screen until it ends; the app then shows
-        // the sign-in screen with the message.
+        // the sign-in screen with the message. (The sign-in may already have ended at start-up:
+        // the user is held in `expired` mode and stays so.)
         expiredRef.current = true
         setExpired(true)
-        setUser(cached)
+        setUser(holder)
         window.history.replaceState(null, '', '/')
         return
       }
-      setUser(null)
-      setMustSignIn(true)
-      setMode('signin')
-      setRoute({ form: 'signin', fromPrompt: false, pushed: false, from: '/' })
-      window.history.replaceState(null, '', pathForForm('signin'))
+      // No timer: this sign-in is over, and an `expired` state left from start-up with it.
+      expiredRef.current = false
+      setExpired(false)
+      showSignIn()
       return
     }
-    if (current === 'unknown' && !userRef.current) {
+    if (!holder) {
+      // The server knows a sign-in (or can't be asked) that this page doesn't hold: an offline
+      // sign-out still pending, or a start-up check that failed with no remembered user. Sign in
+      // here to settle it.
       setChangedNotice('signin')
-      setMode('signin')
-      setRoute({ form: 'signin', fromPrompt: false, pushed: false, from: '/' })
-      window.history.replaceState(null, '', pathForForm('signin'))
+      showSignIn()
       return
     }
     // Another account is signed in here (or it can't be told yet): it stays.

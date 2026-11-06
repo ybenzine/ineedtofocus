@@ -20,14 +20,16 @@ export const isForgotPasswordPath = (path: string): boolean => pathIs(path, FORG
  * Reads the token from the fragment of the reset page and removes the fragment with
  * `history.replaceState` (the path and query stay). Does nothing on any other page, so a fragment
  * elsewhere is left alone. Safe to call twice: the second call finds no fragment and keeps the
- * token already read.
+ * token already read. Returns whether a token was found in this call.
  */
-export function captureResetToken(): void {
+export function captureResetToken(): boolean {
   const { pathname, search, hash } = window.location
-  if (!isResetPasswordPath(pathname)) return
+  if (!isResetPasswordPath(pathname)) return false
   const found = new URLSearchParams(hash.replace(/^#/, '')).get('token')
   if (hash !== '') window.history.replaceState(window.history.state, '', pathname + search)
-  if (found) token = found
+  if (!found) return false
+  token = found
+  return true
 }
 
 /** The token read from the link, or null once used, discarded or if there never was one. */

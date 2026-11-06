@@ -12,6 +12,9 @@ export type ResetView =
 export const REQUEST_SENT_MESSAGE =
   "If an account exists for that email, we've sent a link to reset your password. Check your inbox."
 export const INVALID_LINK_MESSAGE = 'This link has expired or was already used. Ask for a new one.'
+/** No token in the address (a reload keeps none, by design): the link itself may still work. */
+export const MISSING_LINK_MESSAGE =
+  'This page needs the link from your email. Open it again, or ask for a new one.'
 export const PASSWORD_CHANGED_MESSAGE = 'Password changed. Sign in with your new password.'
 export const RESET_OFFLINE_MESSAGE = 'A connection is needed to reset your password.'
 export const RESET_UNAVAILABLE_MESSAGE =
@@ -92,9 +95,12 @@ export default function ResetPage({
         />
       ) : (
         <ConfirmForm
-          key="confirm"
+          // A newer link opened on this page starts the form over with its token.
+          key={`confirm-${view.token ?? ''}`}
           token={view.token}
           api={api}
+          signedIn={signedIn}
+          onBack={onBack}
           onRequestNew={onRequestNew}
           onChanged={onChanged}
           onUnavailable={onUnavailable}
@@ -214,12 +220,16 @@ function RequestForm({
 function ConfirmForm({
   token,
   api,
+  signedIn,
+  onBack,
   onRequestNew,
   onChanged,
   onUnavailable,
 }: {
   token: string | null
   api: ResetApi
+  signedIn: boolean
+  onBack: () => void
   onRequestNew: () => void
   onChanged: () => void | Promise<void>
   onUnavailable: () => void
@@ -230,20 +240,18 @@ function ConfirmForm({
   const [passwordError, setPasswordError] = useState('')
   const [repeatError, setRepeatError] = useState('')
   const [formError, setFormError] = useState('')
-  // No token in the address (a reload, or a link cut short) is the same as one that was refused.
+  // No token in the address (a reload, or a link cut short) has a message of its own.
   const [spent, setSpent] = useState(token === null)
   const [busy, setBusy] = useState(false)
   const headingRef = useRef<HTMLHeadingElement>(null)
   const passwordRef = useRef<HTMLInputElement>(null)
   const repeatRef = useRef<HTMLInputElement>(null)
   const spentRef = useRef<HTMLParagraphElement>(null)
-  const firstRender = useRef(true)
 
+  // The message is focused when it replaces the form, and when it is all there is.
   useEffect(() => {
-    if (firstRender.current) {
-      firstRender.current = false
-      headingRef.current?.focus()
-    } else if (spent) spentRef.current?.focus()
+    if (spent) spentRef.current?.focus()
+    else headingRef.current?.focus()
   }, [spent])
 
   async function submit(event: FormEvent) {
@@ -291,7 +299,7 @@ function ConfirmForm({
       {spent ? (
         <>
           <p ref={spentRef} role="alert" tabIndex={-1}>
-            {INVALID_LINK_MESSAGE}
+            {token === null ? MISSING_LINK_MESSAGE : INVALID_LINK_MESSAGE}
           </p>
           <p>
             <a
@@ -355,6 +363,19 @@ function ConfirmForm({
           </form>
         </>
       )}
+      <p>
+        <a
+          className="auth-link"
+          href={signedIn ? '/' : '/login'}
+          onClick={(event) => {
+            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey) return
+            event.preventDefault()
+            onBack()
+          }}
+        >
+          {signedIn ? 'Back to the app' : 'Back to sign in'}
+        </a>
+      </p>
     </>
   )
 }
