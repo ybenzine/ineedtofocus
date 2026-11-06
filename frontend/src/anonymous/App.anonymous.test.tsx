@@ -758,6 +758,7 @@ describe('a stale anonymous tab after a sign-in in another tab', () => {
     const api = makeApi()
     renderApp({ api })
     await screen.findByRole('button', { name: 'Start' })
+    await act(async () => undefined) // let AuthGate's effects run first, as in signInElsewhere()
     localStorage.setItem(OWNER_KEY, alice.id)
     localStorage.setItem(USER_KEY, JSON.stringify(alice))
     vi.mocked(api.me).mockResolvedValue(alice)
@@ -788,7 +789,10 @@ describe('a stale anonymous tab after a sign-in in another tab', () => {
 })
 
 describe('anonymous use never runs beside a signed-in device', () => {
-  function signInElsewhere() {
+  async function signInElsewhere() {
+    // AuthGate's `anonymousShownRef` is set in an effect that can run after the screen shows; a
+    // storage event before it is ignored (#459).
+    await act(async () => undefined)
     localStorage.setItem(OWNER_KEY, alice.id)
     localStorage.setItem(USER_KEY, JSON.stringify(alice))
     act(() => {
@@ -806,7 +810,7 @@ describe('anonymous use never runs beside a signed-in device', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Dark' }))
     localStorage.removeItem(ANON_SETTINGS_KEY)
     vi.mocked(api.me).mockRejectedValue(new AuthError('network', 'offline'))
-    signInElsewhere()
+    await signInElsewhere()
     expect(await findSignOutButton()).toBeInTheDocument()
     expect(localStorage.getItem(ANON_SETTINGS_KEY)).toBeNull()
   })
@@ -817,7 +821,7 @@ describe('anonymous use never runs beside a signed-in device', () => {
     renderApp({ api })
     await screen.findByRole('heading', { name: 'Sign in' })
     vi.mocked(api.me).mockResolvedValue(alice)
-    signInElsewhere()
+    await signInElsewhere()
     expect(await screen.findByRole('button', { name: 'Start' })).toBeInTheDocument()
     expect(screen.queryByRole('link', { name: 'Continue without an account' })).toBeNull()
     expect(window.location.pathname).toBe('/')

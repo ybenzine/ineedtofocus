@@ -263,7 +263,7 @@ describe('AuthGate', () => {
 
   it('signs out other tabs when the remembered user is removed', async () => {
     renderGate(makeApi({ me: vi.fn().mockResolvedValue(user) }))
-    await screen.findByText('the timer app')
+    await signedIn() // the storage handler reads a ref that an effect sets (#459)
     act(() => {
       window.dispatchEvent(new StorageEvent('storage', { key: USER_KEY, newValue: null }))
     })
