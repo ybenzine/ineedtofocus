@@ -13,7 +13,7 @@ export const PROBE_TIMEOUT_MS = 8_000
  * the user a calendar file (#458). A link that lands on a JSON error page strands the installed app,
  * which has no back button. Probes only while `enabled` (the menu is open); a reopened menu starts
  * over. The answer is kept for PROBE_VALID_MS, then asked again (the last answer stays meanwhile,
- * so nothing flickers), and again when the app comes back to the foreground. A 401 is reported,
+ * so nothing flickers), and when the app comes back to the foreground (visibilitychange, pageshow) the answer is dropped first, so it reads as checking. A 401 is reported,
  * never acted on: it signs nobody out. Answers that arrive after the menu closed or the path
  * changed are dropped.
  */
@@ -51,16 +51,22 @@ export function useIcsProbe(path: string, enabled: boolean): IcsProbe {
         () => settle('failed'),
       )
     }
-    const visible = () => {
-      if (document.visibilityState === 'visible') run()
+    // Back in the foreground the answer may be hours old (iOS suspends timers): drop it, so the
+    // choice reads "Checking…" until a new one arrives. The 20 s re-check keeps it instead.
+    const foreground = () => {
+      if (document.visibilityState !== 'visible') return
+      setAnswer(null)
+      run()
     }
     run()
-    document.addEventListener('visibilitychange', visible)
+    document.addEventListener('visibilitychange', foreground)
+    window.addEventListener('pageshow', foreground)
     return () => {
       alive = false
       controller?.abort()
       clearTimeout(refresh)
-      document.removeEventListener('visibilitychange', visible)
+      document.removeEventListener('visibilitychange', foreground)
+      window.removeEventListener('pageshow', foreground)
       setAnswer(null)
     }
   }, [path, enabled])

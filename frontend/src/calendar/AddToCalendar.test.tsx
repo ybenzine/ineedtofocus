@@ -374,25 +374,222 @@ describe('Apple Calendar / other (.ics)', () => {
       )
     })
 
-    it('asks again when the app returns to the foreground', async () => {
-      const fetchMock = stubProbe(200)
+    /** A fetch whose answers the test gives one by one; the signal is recorded, not obeyed. */
+    function manualProbe(obeyAbort = false) {
+      const calls: { resolve: (status: number) => void; signal: AbortSignal }[] = []
+      const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+        return new Promise<Response>((resolve, reject) => {
+          if (obeyAbort)
+            init?.signal?.addEventListener('abort', () =>
+              reject(new DOMException('', 'AbortError')),
+            )
+          calls.push({
+            signal: init?.signal as AbortSignal,
+            resolve: (status) => resolve(new Response(null, { status })),
+          })
+        })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      return { calls, fetchMock }
+    }
+
+    const answer = (call: { resolve: (s: number) => void }, status = 200) =>
+      act(async () => call.resolve(status))
+    const returnToForeground = (event: 'visibilitychange' | 'pageshow' = 'visibilitychange') =>
+      act(() => {
+        if (event === 'visibilitychange') document.dispatchEvent(new Event(event))
+        else window.dispatchEvent(new Event(event))
+      })
+    const checking = () => {
+      expect(screen.queryByRole('link', { name: ICS })).toBeNull()
+      expect(screen.getByRole('button', { name: ICS })).toHaveAccessibleDescription('Checking…')
+    }
+
+    it.each(['visibilitychange', 'pageshow'] as const)(
+      'goes back to "Checking…" when the app returns (%s), until a new answer arrives',
+      async (event) => {
+        const { calls, fetchMock } = manualProbe()
+        openIos()
+        await answer(calls[0])
+        expect(screen.getByRole('link', { name: ICS })).toBeInTheDocument()
+        await returnToForeground(event)
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+        checking()
+        await answer(calls[1])
+        expect(screen.getByRole('link', { name: ICS })).toBeInTheDocument()
+      },
+    )
+
+    it('holds "Checking…" after the foreground even when a held failure was showing, and when the re-check hangs', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const { calls } = manualProbe(true)
       openIos()
-      await screen.findByRole('link', { name: ICS })
-      act(() => void document.dispatchEvent(new Event('visibilitychange')))
-      expect(fetchMock).toHaveBeenCalledTimes(2)
+      await answer(calls[0], 404)
+      await returnToForeground()
+      checking()
+      await act(() => vi.advanceTimersByTimeAsync(7_900))
+      checking()
+      await act(() => vi.advanceTimersByTimeAsync(200))
+      expect(screen.getByRole('button', { name: ICS })).toHaveAccessibleDescription(
+        "Can't add this session right now",
+      )
     })
 
-    it('probes again on reopening, starting from disabled, and ignores an answer that arrives after closing', async () => {
-      let resolve: (r: Response) => void = () => undefined
-      const fetchMock = vi.fn(() => new Promise<Response>((r) => void (resolve = r)))
-      vi.stubGlobal('fetch', fetchMock)
+    it('ignores the first answer once a newer request is out', async () => {
+      const { calls } = manualProbe()
       openIos()
+      await returnToForeground()
+      await answer(calls[0]) // late answer of the superseded request
+      checking()
+      await answer(calls[1])
+      expect(screen.getByRole('link', { name: ICS })).toBeInTheDocument()
+    })
+
+    it('aborts the superseded request and the one in flight when the menu closes', async () => {
+      const { calls } = manualProbe()
+      openIos()
+      await returnToForeground()
+      expect(calls[0].signal.aborted).toBe(true)
+      expect(calls[1].signal.aborted).toBe(false)
+      fireEvent.click(screen.getByRole('button', { name: label }))
+      expect(calls[1].signal.aborted).toBe(true)
+    })
+
+    it('keeps the last answer through the 20 s re-check, silently, with exactly one request per 20 s', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const { calls, fetchMock } = manualProbe()
+      openIos()
+      await answer(calls[0])
+      const link = screen.getByRole('link', { name: ICS })
+      const mutations: MutationRecord[] = []
+      const observer = new MutationObserver((m) => mutations.push(...m))
+      observer.observe(screen.getByRole('list'), {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      })
+      await act(() => vi.advanceTimersByTimeAsync(19_900))
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      await act(() => vi.advanceTimersByTimeAsync(200))
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(screen.getByRole('link', { name: ICS })).toBe(link) // no flicker while it is out
+      await answer(calls[1])
+      observer.disconnect()
+      expect(mutations).toHaveLength(0)
+      expect(screen.getByRole('link', { name: ICS })).toBe(link)
+    })
+
+    it('runs one chain of re-checks after a foreground return, and none after the menu closes', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const { calls, fetchMock } = manualProbe()
+      openIos()
+      await answer(calls[0])
+      await returnToForeground()
+      await answer(calls[1])
+      await act(() => vi.advanceTimersByTimeAsync(20_100))
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      await answer(calls[2])
+      fireEvent.click(screen.getByRole('button', { name: label }))
+      await act(() => vi.advanceTimersByTimeAsync(120_000))
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+    })
+
+    it('offers the link only on a 200, not on another 2xx', async () => {
+      stubProbe(204)
+      openIos()
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: ICS })).toHaveAccessibleDescription(
+          "Can't add this session right now",
+        ),
+      )
+    })
+
+    it('waits exactly 8 s for an answer', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const { calls } = manualProbe()
+      openIos()
+      await act(() => vi.advanceTimersByTimeAsync(7_900))
+      expect(calls[0].signal.aborted).toBe(false)
+      await act(() => vi.advanceTimersByTimeAsync(200))
+      expect(calls[0].signal.aborted).toBe(true)
+    })
+
+    it('starts from "Checking…" on every open: an earlier 200 never shows on a reopened menu', async () => {
+      const { calls, fetchMock } = manualProbe()
+      openIos()
+      await answer(calls[0])
       const toggle = screen.getByRole('button', { name: label })
       fireEvent.click(toggle) // close
-      await act(async () => resolve(new Response(null, { status: 200 })))
       fireEvent.click(toggle) // reopen
       expect(fetchMock).toHaveBeenCalledTimes(2)
-      expect(screen.getByRole('button', { name: ICS })).toHaveAccessibleDescription('Checking…')
+      checking()
+    })
+
+    it('ignores an answer that arrives after the menu closed', async () => {
+      const { calls } = manualProbe()
+      openIos()
+      const toggle = screen.getByRole('button', { name: label })
+      fireEvent.click(toggle)
+      await answer(calls[0])
+      fireEvent.click(toggle)
+      checking()
+    })
+
+    it("does not show an earlier open's 200 after going offline and back", async () => {
+      const { calls } = manualProbe()
+      openIos()
+      await answer(calls[0])
+      setOnline(false)
+      act(() => void window.dispatchEvent(new Event('offline')))
+      setOnline(true)
+      act(() => void window.dispatchEvent(new Event('online')))
+      checking()
+    })
+
+    it('does not carry a 200 over to another session while the menu stays open', async () => {
+      const { calls } = manualProbe()
+      vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE)
+      signIn()
+      const ui = (id: string) =>
+        withProviders(<AddToCalendar session={{ ...session, id }} timeZone="UTC" synced />)
+      const { rerender } = render(ui(session.id))
+      fireEvent.click(screen.getByRole('button', { name: label }))
+      await answer(calls[0])
+      rerender(ui('0f6e2b9a-3c1d-4e5f-8a7b-0000000000bb'))
+      checking()
+      expect(calls[1].signal.aborted).toBe(false)
+      expect(calls[0].signal.aborted).toBe(true)
+    })
+
+    it('puts focus on the new element when the link and the disabled button swap', async () => {
+      const { calls } = manualProbe()
+      openIos()
+      await answer(calls[0])
+      const link = screen.getByRole('link', { name: ICS })
+      link.focus()
+      await returnToForeground()
+      expect(screen.getByRole('button', { name: ICS })).toHaveFocus()
+      await answer(calls[1])
+      expect(screen.getByRole('link', { name: ICS })).toHaveFocus()
+      // and offline: Escape still closes the menu afterwards
+      setOnline(false)
+      act(() => void window.dispatchEvent(new Event('offline')))
+      expect(screen.getByRole('button', { name: ICS })).toHaveFocus()
+      fireEvent.keyDown(screen.getByRole('button', { name: ICS }), { key: 'Escape' })
+      expect(screen.queryByRole('list')).toBeNull()
+    })
+
+    it('keeps one live region mounted through the swap, so hints are announced, and its line is kept', async () => {
+      const { calls } = manualProbe()
+      openIos()
+      const status = screen.getByRole('status')
+      expect(status).toHaveTextContent('Checking…')
+      await answer(calls[0])
+      expect(screen.getByRole('status')).toBe(status)
+      expect(status.textContent).toBe('\u00a0') // empty, but it keeps its line: nothing moves
+      await returnToForeground()
+      expect(screen.getByRole('status')).toBe(status)
+      expect(status).toHaveTextContent('Checking…')
     })
 
     it('sends no probe before the menu opens, nor when the local checks already refuse', async () => {

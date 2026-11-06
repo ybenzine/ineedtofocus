@@ -66,6 +66,7 @@ export default function AddToCalendar({
   const id = useId()
   const root = useRef<HTMLDivElement>(null)
   const toggle = useRef<HTMLButtonElement>(null)
+  const icsItem = useRef<HTMLLIElement>(null)
 
   const event: CalendarEvent = useMemo(
     () =>
@@ -151,10 +152,11 @@ export default function AddToCalendar({
     return () => document.removeEventListener('pointerdown', outside)
   }, [open])
 
-  // The disabled choice becomes the link when the probe passes; focus it if the swap dropped focus.
+  // The choice swaps between a disabled button and the link as the probe answers or the device goes
+  // offline; if the swap dropped focus to the page, put it on the new element (Escape needs it inside).
   useEffect(() => {
-    if (open && ios && iosHint === null && document.activeElement === document.body)
-      root.current?.querySelector<HTMLElement>('a[target="_self"]')?.focus()
+    if (open && ios && document.activeElement === document.body)
+      icsItem.current?.querySelector<HTMLElement>('a, button')?.focus()
   }, [open, ios, iosHint])
 
   useEffect(() => {
@@ -239,16 +241,11 @@ export default function AddToCalendar({
               </>
             )}
           </li>
-          <li>
+          <li ref={icsItem}>
             {ios && iosHint ? (
-              <>
-                <button type="button" aria-disabled="true" aria-describedby={`${id}-ics-hint`}>
-                  Apple Calendar / other (.ics)
-                </button>
-                <span id={`${id}-ics-hint`} className="field-hint" role="status">
-                  {iosHint}
-                </span>
-              </>
+              <button type="button" aria-disabled="true" aria-describedby={`${id}-ics-hint`}>
+                Apple Calendar / other (.ics)
+              </button>
             ) : (
               <a
                 className="link-button"
@@ -258,6 +255,13 @@ export default function AddToCalendar({
               >
                 Apple Calendar / other (.ics)
               </a>
+            )}
+            {/* On iOS the live region stays mounted, so a change of hint is announced, and keeps its
+                line when empty, so the choices don't move when the link appears (#458). */}
+            {ios && (
+              <span id={`${id}-ics-hint`} className="field-hint" role="status">
+                {iosHint ?? '\u00a0'}
+              </span>
             )}
           </li>
         </ul>
