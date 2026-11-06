@@ -13,12 +13,14 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import event, text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.util.concurrency import await_
 
 from app.mailer import EmailConfig, EmailError, Message
 from tests.integration.conftest import PASSWORD, MakeClient, run, signup
@@ -625,3 +627,54 @@ def test_ac5_a_confirm_waits_for_a_sign_in_that_passed_the_password_re_check(
         assert resetting.result(timeout=10).status_code == 204
         assert other.get("/api/auth/me").status_code == 401  # swept after it was created
     assert sql(test_db_url, "SELECT count(*) FROM auth_sessions") == [(0,)]
+
+
+def test_two_requests_for_different_accounts_cannot_deadlock(
+    make_client: MakeClient, monkeypatch: pytest.MonkeyPatch, test_db_url: str
+) -> None:
+    """Each account has an old, never-used link, and each request's cleanup locks one old row.
+    Both requests are held before their third statement (after the account lookup and the
+    `UPDATE` of their own links, before the cleanup) and then let go together. With the cleanup
+    before the `UPDATE`, each would lock the other's old row and the `UPDATE`s would wait on
+    each other: Postgres aborts one with a deadlock."""
+    import app.password_reset as module
+
+    with make_client() as c:
+        for email in ("a@example.com", "b@example.com"):
+            assert signup(c, email).status_code == 201
+    for email in ("b@example.com", "a@example.com"):  # scan order: b's old row first
+        sql(
+            test_db_url,
+            "INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) "
+            f"SELECT md5(email), id, now() - interval '2 days' FROM users WHERE email = '{email}'",
+        )
+    monkeypatch.setattr(module, "CLEANUP_BATCH", 1)  # each cleanup locks exactly one old row
+
+    async def scenario() -> list[str | None]:
+        engine = create_async_engine(test_db_url)
+        go = asyncio.Event()
+        paused = {"a": asyncio.Event(), "b": asyncio.Event()}
+        seen = {"a": 0, "b": 0}
+
+        @event.listens_for(engine.sync_engine, "before_cursor_execute")
+        def hold_before_the_third_statement(*_: Any) -> None:
+            task = asyncio.current_task()
+            assert task is not None
+            name = task.get_name()
+            seen[name] += 1
+            if seen[name] == 3:
+                paused[name].set()
+                await_(go.wait())
+
+        app = SimpleNamespace(state=SimpleNamespace(sessionmaker=async_sessionmaker(engine)))
+        try:
+            a = asyncio.create_task(module._issue_token(app, "a@example.com"), name="a")
+            await asyncio.wait_for(paused["a"].wait(), 5)
+            b = asyncio.create_task(module._issue_token(app, "b@example.com"), name="b")
+            await asyncio.wait_for(paused["b"].wait(), 5)
+            go.set()
+            return list(await asyncio.wait_for(asyncio.gather(a, b), 10))
+        finally:
+            await engine.dispose()
+
+    assert all(run(scenario()))  # both got a token

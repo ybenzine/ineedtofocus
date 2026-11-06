@@ -170,9 +170,12 @@ async def _issue_token(app: Any, email: str) -> str | None:
             .where(PasswordResetToken.user_id == user_id, PasswordResetToken.used_at.is_(None))
             .values(used_at=func.now())
         )
-        # After the UPDATE, so this request already holds its own rows: a cleanup that locked
-        # another account's old row first could make two requests wait on each other. The cleanup
-        # never waits (SKIP LOCKED) and nothing waits on it after it.
+        # After the UPDATE, so this request already holds its own rows when the cleanup locks
+        # others' old ones. Others can still wait on rows the cleanup locked, but this request
+        # never waits again: the cleanup skips locked rows, the insert has a random key, its
+        # foreign key check is covered by the user lock it holds, and then it commits. A request
+        # that waits for nothing can't be part of a cycle. (With the cleanup first, two requests
+        # could each lock the other's old row and then wait on it in their UPDATE.)
         old = (
             select(PasswordResetToken.token_hash)
             .where(
