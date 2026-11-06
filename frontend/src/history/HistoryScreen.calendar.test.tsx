@@ -178,7 +178,10 @@ describe('the per-row Add to calendar on iOS (#454)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /^Add to calendar: / }))
   }
 
-  afterEach(() => forgetCachedUser())
+  afterEach(() => {
+    forgetCachedUser()
+    vi.unstubAllGlobals()
+  })
 
   it('is disabled with "Not synced yet" for a session not on the server', async () => {
     await iosChoice([session({ unsaved: true, indicator: 'not-synced-yet' })])
@@ -188,10 +191,10 @@ describe('the per-row Add to calendar on iOS (#454)', () => {
   })
 
   it('is a link to the server copy for a synced session', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })))
     await iosChoice([session()])
-    expect(screen.getByRole('link', { name: 'Apple Calendar / other (.ics)' })).toHaveAttribute(
-      'href',
-      '/api/calendar/session/a.ics?tz=UTC',
-    )
+    expect(
+      await screen.findByRole('link', { name: 'Apple Calendar / other (.ics)' }),
+    ).toHaveAttribute('href', '/api/calendar/session/a.ics?tz=UTC')
   })
 })
