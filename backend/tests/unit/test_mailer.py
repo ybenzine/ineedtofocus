@@ -51,6 +51,32 @@ def test_sigv4_matches_the_aws_test_suite_vector() -> None:
     )
 
 
+def test_sigv4_matches_the_aws_form_post_vector() -> None:
+    """`post-x-www-form-urlencoded` from AWS's suite: a body and a signed content-type."""
+    got = sign_v4(
+        method="POST",
+        host="example.amazonaws.com",
+        path="/",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        body=b"Param1=value1",
+        region="us-east-1",
+        service="service",
+        access_key="AKIDEXAMPLE",
+        secret_key=SECRET,
+        now=datetime(2015, 8, 30, 12, 36, 0, tzinfo=UTC),
+    )
+    assert got["authorization"] == (
+        "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, "
+        "SignedHeaders=content-type;host;x-amz-date, "
+        "Signature=ff11897932ad3f4e8b18135d722051e5ac45fc38421b1da7b9d196a0fe09473a"
+    )
+
+
+def test_the_message_repr_hides_the_address_and_link() -> None:
+    shown = repr(message())
+    assert ADDRESS not in shown and "SECRETTOKEN" not in shown
+
+
 def message() -> Message:
     return reset_message(ADDRESS, "https://ineedtofoc.us/reset-password#token=SECRETTOKEN")
 
@@ -91,6 +117,22 @@ def test_the_ses_request_is_signed_and_goes_to_the_regions_endpoint() -> None:
     assert auth.startswith("AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/")
     assert "/us-east-1/ses/aws4_request" in auth
     assert "SignedHeaders=content-type;host;x-amz-date" in auth
+    # The signature covers the body actually sent: recompute it from the captured request.
+    stamp = datetime.strptime(request.headers["x-amz-date"], "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+    expected = sign_v4(
+        method="POST",
+        host="email.us-east-1.amazonaws.com",
+        path="/v2/email/outbound-emails",
+        headers={"content-type": "application/json"},
+        body=request.content,
+        region="us-east-1",
+        service="ses",
+        access_key="AKIDEXAMPLE",
+        secret_key=SECRET,
+        now=stamp,
+    )
+    assert auth == expected["authorization"]
+    assert request.headers["host"] == "email.us-east-1.amazonaws.com"
     sent = json.loads(request.content)
     assert sent["ConfigurationOverrides"]["Tracking"] == {
         "OpenTrackingEnabled": "DISABLED",
@@ -227,3 +269,11 @@ def test_the_problem_never_holds_a_value() -> None:
     config = configure_email(Settings.model_validate({**SES, "email_api_key": "leaky:"}))
     assert config.problem == "EMAIL_API_KEY"
     assert "leaky" not in repr(config)
+
+
+def test_the_send_timeout_is_10_seconds() -> None:
+    import app.mailer as mailer
+    import app.password_reset as reset
+
+    assert mailer.SEND_TIMEOUT_SECONDS == 10.0
+    assert reset.SEND_TIMEOUT_SECONDS == 10.0  # type: ignore[attr-defined]

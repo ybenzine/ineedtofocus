@@ -58,7 +58,7 @@ class FailureLimiter:
         for key in [k for k, q in self._failures.items() if not q or q[-1] <= cutoff]:
             del self._failures[key]
         for email, pairs in list(self._pairs_by_email.items()):
-            pairs &= self._failures.keys()
+            pairs.intersection_update(self._failures)
             if not pairs:
                 del self._pairs_by_email[email]
 

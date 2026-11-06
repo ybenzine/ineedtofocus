@@ -62,7 +62,7 @@ LAST_SLOT=17
 # name:default port. Vite has no .env variable but its port is checked and documented too.
 PORTS="APP_PORT:8000 VITE_PORT:5173 GRAFANA_PORT:3000 OTLP_GRPC_PORT:4317 OTLP_HTTP_PORT:4318 POSTGRES_PORT:5432 MAILPIT_PORT:8025"
 # Lines of the session's .env this script sets itself.
-OWN_KEYS="WORKTREE_SESSION|WORKTREE_SLOT|COMPOSE_PROJECT_NAME|APP_PORT|GRAFANA_PORT|OTLP_GRPC_PORT|OTLP_HTTP_PORT|POSTGRES_PORT|MAILPIT_PORT|DATABASE_URL"
+OWN_KEYS="WORKTREE_SESSION|WORKTREE_SLOT|COMPOSE_PROJECT_NAME|APP_PORT|GRAFANA_PORT|OTLP_GRPC_PORT|OTLP_HTTP_PORT|POSTGRES_PORT|MAILPIT_PORT|APP_BASE_URL|DATABASE_URL"
 # How long, in minutes, an owner-less slot or the lock may sit before it counts as left over.
 GRACE_MINUTES=1
 # compose.test.yaml's `!override` and `!reset` need this Compose version or later.
@@ -330,6 +330,7 @@ OTLP_GRPC_PORT=$((4317 + offset))
 OTLP_HTTP_PORT=$((4318 + offset))
 POSTGRES_PORT=$((5432 + offset))
 MAILPIT_PORT=$((8025 + offset))
+APP_BASE_URL=http://localhost:$((8000 + offset))
 DATABASE_URL=postgresql+asyncpg://${user:-focus}:${password:-focus}@localhost:$((5432 + offset))/${database:-focus}
 EOF
     } >"$tmp"
@@ -343,7 +344,7 @@ EOF
   printf 'Wrote %s from %s\n' "$env_file" "$source"
   printf '  project %s, slot %s: app http://localhost:%s, Vite %s, Grafana %s, Postgres %s, Mailpit %s\n' \
     "$project" "$slot" $((8000 + offset)) $((5173 + offset)) $((3000 + offset)) $((5432 + offset)) $((8025 + offset))
-  printf '  next: make up-test (app + Postgres), then make test; make down when done\n'
+  printf '  next: make up-test (app + Postgres + Mailpit), then make test; make down when done\n'
 }
 
 claim() {

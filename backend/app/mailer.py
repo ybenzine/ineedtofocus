@@ -24,7 +24,7 @@ import json
 import logging
 import re
 import smtplib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from email.utils import parseaddr
@@ -49,10 +49,12 @@ class EmailError(Exception):
 
 @dataclass(frozen=True)
 class Message:
-    to: str
+    # Address and body hold the recipient and the link: kept out of repr, in case a message
+    # is ever logged by accident.
+    to: str = field(repr=False)
     subject: str
-    text: str
-    html: str
+    text: str = field(repr=False)
+    html: str = field(repr=False)
 
 
 class EmailSender(Protocol):

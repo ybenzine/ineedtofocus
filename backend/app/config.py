@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # Email, for password reset (#350, AC1.9). `EMAIL_PROVIDER` is `ses` (deployed) or `smtp`
     # (the local Mailpit); unset or anything else means no provider, and reset is off. All are
     # strings so an unset Compose variable (`${NAME:-}`) reads as "missing" rather than failing
-    # validation; `app/email.py` decides what counts as configured.
+    # validation; `app/mailer.py` decides what counts as configured.
     email_provider: str = Field(default="")
     # ses only: `<access_key_id>:<secret_access_key>`, from the server's secrets file.
     email_api_key: SecretStr = Field(default=SecretStr(""))

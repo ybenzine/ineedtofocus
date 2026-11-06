@@ -57,6 +57,7 @@ OTLP_GRPC_PORT=4327
 OTLP_HTTP_PORT=4328
 POSTGRES_PORT=5442
 MAILPIT_PORT=8035
+APP_BASE_URL=http://localhost:8010
 DATABASE_URL=postgresql+asyncpg://focus:focus@localhost:5442/focus
 LOG_LEVEL=DEBUG
 """
@@ -176,6 +177,7 @@ def test_writes_its_own_project_and_slot_ports(lab: Lab) -> None:
     assert env["OTLP_GRPC_PORT"] == "4417"
     assert env["OTLP_HTTP_PORT"] == "4418"
     assert env["POSTGRES_PORT"] == "5532"
+    assert env["APP_BASE_URL"] == "http://localhost:8100"  # the reset link opens this app (#350)
     assert env["MAILPIT_PORT"] == "8125"  # Mailpit's API, for the password reset journey (#350)
     assert env["DATABASE_URL"] == "postgresql+asyncpg://focus:focus@localhost:5532/focus"
     # Everything else comes from the session's .env.

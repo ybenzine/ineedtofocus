@@ -13,6 +13,7 @@ contain the recipient's address.
 
 import asyncio
 import logging
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
@@ -194,15 +195,16 @@ def _invalid_token() -> CodedError:
     return CodedError(400, "invalid_token", INVALID_TOKEN_MESSAGE)
 
 
-async def _usable(db: AsyncSession, digest: str) -> bool:
+async def _usable(db: AsyncSession, digest: str) -> uuid.UUID | None:
+    """The account a usable token belongs to, or None."""
     found = await db.scalar(
-        select(PasswordResetToken.token_hash).where(
+        select(PasswordResetToken.user_id).where(
             PasswordResetToken.token_hash == digest,
             PasswordResetToken.used_at.is_(None),
             PasswordResetToken.expires_at > func.now(),
         )
     )
-    return found is not None
+    return found
 
 
 @router.post("/password-reset/confirm", status_code=204, responses=_CONFIRM_ERRORS)
@@ -211,9 +213,13 @@ async def confirm_password_reset(body: ResetConfirm, request: Request, db: DbSes
     of the account on every device and clears its sign-in lockout. Doesn't sign in."""
     digest = token_hash(body.token)
     # A cheap check first, so a made-up token doesn't cost an argon2 hash.
-    if not await _usable(db, digest):
+    account = await _usable(db, digest)
+    if account is None:
         raise _invalid_token()
     new_hash = await hash_password(body.password)
+    # Lock the account before the token, the order a new reset request takes them in
+    # (`_issue_token`); the opposite order could deadlock the two.
+    await db.execute(select(User.id).where(User.id == account).with_for_update())
     # The claim is one statement, so two requests with one token can't both succeed.
     user_id = await db.scalar(
         update(PasswordResetToken)

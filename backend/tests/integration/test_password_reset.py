@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -171,7 +172,7 @@ def test_ac2_the_rate_limit_is_3_per_email_per_hour(client: TestClient, sender: 
     limited = request(client)
     assert limited.status_code == 429
     assert limited.json()["error"]["code"] == "rate_limited"
-    assert 1 <= int(limited.headers["Retry-After"]) <= 3601
+    assert 3590 <= int(limited.headers["Retry-After"]) <= 3601  # the hour's window
     settle(client)
     assert len(sender.outbox) == 3  # a limited request sends nothing
     # Other emails are unaffected, and an unknown email is limited just the same.
@@ -524,3 +525,69 @@ def test_old_links_are_cleaned_up_on_the_next_request(
     sql(test_db_url, "UPDATE password_reset_tokens SET expires_at = now() - interval '2 days'")
     reset_email(client, sender)
     assert sql(test_db_url, "SELECT count(*) FROM password_reset_tokens") == [(1,)]
+
+
+def test_ac5_a_sign_in_that_checked_the_old_password_before_the_reset_gets_no_session(
+    client: TestClient,
+    sender: FakeSender,
+    make_client: MakeClient,
+    monkeypatch: pytest.MonkeyPatch,
+    test_db_url: str,
+) -> None:
+    """The password was verified, then the reset committed, then the session would be inserted:
+    the sign-in must fail, or the reset's sweep of sign-ins would have missed it."""
+    import app.auth as auth
+    from app import security
+
+    real = security.verify_password
+    checked, go = threading.Event(), threading.Event()
+
+    async def held(password: str, password_hash: str | None) -> bool:
+        ok = await real(password, password_hash)
+        checked.set()
+        await asyncio.to_thread(go.wait, 10)
+        return ok
+
+    token = reset_email(client, sender)
+    monkeypatch.setattr(auth, "verify_password", held)
+    with make_client(email=EmailConfig(sender, BASE, None)) as other, ThreadPoolExecutor(1) as pool:
+        late = pool.submit(signin, other, PASSWORD)
+        assert checked.wait(10)
+        assert confirm(client, token).status_code == 204
+        go.set()
+        result = late.result(timeout=10)
+        assert result.status_code == 401
+        assert other.get("/api/auth/me").status_code == 401
+    assert sql(test_db_url, "SELECT count(*) FROM auth_sessions") == [(0,)]
+
+
+def test_a_confirm_takes_the_account_lock_before_the_token_lock(
+    client: TestClient, sender: FakeSender, test_db_url: str
+) -> None:
+    """A new request locks the account, then its tokens; confirm must take them in the same
+    order or the two can deadlock. With the account locked elsewhere, a confirm must be waiting
+    on it while holding no lock on the token row."""
+    token = reset_email(client, sender)
+
+    async def scenario() -> int:
+        engine = create_async_engine(test_db_url)
+        try:
+            async with engine.connect() as holder:
+                await holder.execute(text("SELECT id FROM users FOR UPDATE"))
+                with ThreadPoolExecutor(1) as pool:
+                    pending = pool.submit(confirm, client, token)
+                    try:
+                        await asyncio.sleep(1)  # the confirm is now waiting for the account
+                        assert not pending.done()
+                        async with engine.connect() as probe:
+                            await probe.execute(
+                                text("SELECT 1 FROM password_reset_tokens FOR UPDATE NOWAIT")
+                            )
+                            await probe.rollback()
+                    finally:
+                        await holder.rollback()  # always let the confirm go on
+                    return int((await asyncio.to_thread(pending.result)).status_code)
+        finally:
+            await engine.dispose()
+
+    assert run(scenario()) == 204

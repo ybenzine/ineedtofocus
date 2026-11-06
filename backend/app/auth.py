@@ -156,6 +156,16 @@ async def sign_in(
     ok = await verify_password(body.password, user.password_hash if user else None)
     if user is None or not ok:
         raise HTTPException(401, "Incorrect email or password")
+    # A password reset (AC1.9) may have committed while the hash above was being checked, and
+    # its sweep of this account's sign-ins can't see a session not yet inserted. Re-read the
+    # hash under a shared row lock, held until the session is committed: a reset that has
+    # committed shows here, and one that hasn't waits for this sign-in and then removes it.
+    current = await db.scalar(
+        select(User.password_hash).where(User.id == user.id).with_for_update(read=True)
+    )
+    if current != user.password_hash:
+        await db.rollback()
+        raise HTTPException(401, "Incorrect email or password")
     limiter.succeeded(client, body.email)
     await _start_session(request, response, db, user)
     return UserOut(id=user.id, email=user.email, created_at=user.created_at)
