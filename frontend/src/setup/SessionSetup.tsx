@@ -523,7 +523,7 @@ export default function SessionSetup({
             </label>
             {longBreakOn && (
               <div className="setup-row stepper-row">
-                <span className="row-label">Length</span>
+                <span className="row-label">Duration</span>
                 <StepButton
                   label="Long break, 5 minutes less"
                   direction={-1}
