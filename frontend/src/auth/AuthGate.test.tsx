@@ -267,7 +267,11 @@ describe('AuthGate', () => {
     act(() => {
       window.dispatchEvent(new StorageEvent('storage', { key: USER_KEY, newValue: null }))
     })
-    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
+    // Not order: it passes on every shuffled seed. In CI it once took 1018 ms, just over the 1 s
+    // default, on a loaded runner (#459).
+    expect(
+      await screen.findByRole('heading', { name: 'Sign in' }, { timeout: 3000 }),
+    ).toBeInTheDocument()
   })
 
   // AC1.4 e2e moved to #23; this models two devices (separate storage) with one account.
