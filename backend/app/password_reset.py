@@ -164,6 +164,15 @@ async def _issue_token(app: Any, email: str) -> str | None:
         if user_id is None:
             return None
         token = new_token()
+        # A new request invalidates earlier links: mark unused ones used, so they stay on record.
+        await db.execute(
+            update(PasswordResetToken)
+            .where(PasswordResetToken.user_id == user_id, PasswordResetToken.used_at.is_(None))
+            .values(used_at=func.now())
+        )
+        # After the UPDATE, so this request already holds its own rows: a cleanup that locked
+        # another account's old row first could make two requests wait on each other. The cleanup
+        # never waits (SKIP LOCKED) and nothing waits on it after it.
         old = (
             select(PasswordResetToken.token_hash)
             .where(
@@ -174,12 +183,6 @@ async def _issue_token(app: Any, email: str) -> str | None:
             .with_for_update(skip_locked=True)
         )
         await db.execute(delete(PasswordResetToken).where(PasswordResetToken.token_hash.in_(old)))
-        # A new request invalidates earlier links: mark unused ones used, so they stay on record.
-        await db.execute(
-            update(PasswordResetToken)
-            .where(PasswordResetToken.user_id == user_id, PasswordResetToken.used_at.is_(None))
-            .values(used_at=func.now())
-        )
         db.add(
             PasswordResetToken(
                 token_hash=token_hash(token),

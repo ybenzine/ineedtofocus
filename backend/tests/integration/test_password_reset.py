@@ -591,3 +591,37 @@ def test_a_confirm_takes_the_account_lock_before_the_token_lock(
             await engine.dispose()
 
     assert run(scenario()) == 204
+
+
+def test_ac5_a_confirm_waits_for_a_sign_in_that_passed_the_password_re_check(
+    client: TestClient,
+    sender: FakeSender,
+    make_client: MakeClient,
+    monkeypatch: pytest.MonkeyPatch,
+    test_db_url: str,
+) -> None:
+    """The other ordering: the sign-in re-checked the hash and is about to insert its session.
+    The shared row lock must make a confirm wait, so its sweep of sign-ins sees that session."""
+    import app.auth as auth
+
+    real = auth._start_session
+    reached, go = threading.Event(), threading.Event()
+
+    async def held(*args: Any, **kwargs: Any) -> None:
+        reached.set()
+        await asyncio.to_thread(go.wait, 10)
+        await real(*args, **kwargs)
+
+    token = reset_email(client, sender)
+    monkeypatch.setattr(auth, "_start_session", held)
+    with make_client(email=EmailConfig(sender, BASE, None)) as other, ThreadPoolExecutor(2) as pool:
+        early = pool.submit(signin, other, PASSWORD)
+        assert reached.wait(10)
+        resetting = pool.submit(confirm, client, token)
+        time.sleep(1)
+        assert not resetting.done(), "the confirm did not wait for the sign-in"
+        go.set()
+        assert early.result(timeout=10).status_code == 200
+        assert resetting.result(timeout=10).status_code == 204
+        assert other.get("/api/auth/me").status_code == 401  # swept after it was created
+    assert sql(test_db_url, "SELECT count(*) FROM auth_sessions") == [(0,)]
