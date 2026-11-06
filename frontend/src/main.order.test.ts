@@ -5,9 +5,8 @@ import { describe, expect, it } from 'vitest'
 describe('main.tsx (AC1.9, #350)', () => {
   it('imports the module that takes the reset token out of the address bar before any other', () => {
     const source = readFileSync(join(process.cwd(), 'src', 'main.tsx'), 'utf8')
-    const imports = [...source.matchAll(/^import\s+(?:[^'\n]*from\s+)?'([^']+)'/gm)].map(
-      (m) => m[1],
-    )
-    expect(imports[0]).toBe('./auth/captureResetToken.ts')
+    // The first import statement of any shape (a multi-line one starts with `import {`).
+    const first = source.split('\n').find((line) => /^import\b/.test(line))
+    expect(first).toBe("import './auth/captureResetToken.ts'")
   })
 })

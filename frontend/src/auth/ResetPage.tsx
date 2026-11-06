@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { describeWait } from './api.ts'
 import { ResetError, type ResetApi } from './resetApi.ts'
-import { discardResetToken } from './resetToken.ts'
+import { discardResetToken, peekResetToken } from './resetToken.ts'
 import { useOnline } from '../sounds/useOnline.ts'
 
 /** The two pages of password reset (AC1.9, #350). */
@@ -272,7 +272,8 @@ function ConfirmForm({
       await api.confirm(token, password)
     } catch (error) {
       if (error instanceof ResetError && error.kind === 'invalid_token') {
-        discardResetToken()
+        // Only this form's own token: a newer link opened meanwhile keeps its place in memory.
+        if (peekResetToken() === token) discardResetToken()
         setSpent(true)
       } else if (error instanceof ResetError && error.kind === 'password') {
         // A refused password doesn't use up the link.
@@ -285,7 +286,7 @@ function ConfirmForm({
       setBusy(false)
       return
     }
-    discardResetToken()
+    if (peekResetToken() === token) discardResetToken()
     setPassword('')
     setRepeat('')
     await onChanged()

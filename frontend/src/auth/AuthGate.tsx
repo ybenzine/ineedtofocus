@@ -351,6 +351,8 @@ export default function AuthGate({
     window.addEventListener('storage', onStorage)
     window.addEventListener('popstate', onPopState)
     window.addEventListener('hashchange', onHashChange)
+    // A fragment that arrived before this listener was there is read now.
+    onHashChange()
     window.addEventListener('online', onOnline)
     window.addEventListener(SESSION_EXPIRED_EVENT, onExpired)
     return () => {

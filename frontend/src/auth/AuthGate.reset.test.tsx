@@ -454,6 +454,57 @@ describe('a newer link opened on the reset page (hashchange)', () => {
     expect(reset.confirm).toHaveBeenCalledWith(TOKEN_2, 'a brand new password')
   })
 
+  it('reads a fragment that arrived before the gate mounted', async () => {
+    const reset = makeReset()
+    goTo('/reset-password')
+    // Set after the page's own capture and before the listener exists: no event reaches it.
+    window.history.replaceState(null, '', `/reset-password#token=${TOKEN}`)
+    renderGate(makeApi(), reset)
+    await screen.findByLabelText('New password')
+    expect(window.location.href).not.toContain(TOKEN)
+    expect(peekResetToken()).toBe(TOKEN)
+  })
+
+  it('restarts the form with the newest token on the event itself, without a popstate', async () => {
+    const reset = makeReset()
+    goTo(`/reset-password#token=${TOKEN}`)
+    renderGate(makeApi(), reset)
+    await screen.findByLabelText('New password')
+    act(() => {
+      window.history.replaceState(null, '', `/reset-password#token=${TOKEN_2}`)
+      window.dispatchEvent(new HashChangeEvent('hashchange'))
+    })
+    fireEvent.change(await screen.findByLabelText('New password'), {
+      target: { value: 'a brand new password' },
+    })
+    fireEvent.change(screen.getByLabelText('Repeat new password'), {
+      target: { value: 'a brand new password' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Change password' }))
+    await screen.findByRole('heading', { name: 'Sign in' })
+    expect(reset.confirm).toHaveBeenCalledWith(TOKEN_2, 'a brand new password')
+  })
+
+  it("keeps a newer link in memory when the older form's confirm is refused afterwards", async () => {
+    let refuse: (error: Error) => void = () => undefined
+    const reset = makeReset({
+      confirm: vi.fn().mockReturnValue(new Promise<void>((_, reject) => (refuse = reject))),
+    })
+    goTo(`/reset-password#token=${TOKEN}`)
+    renderGate(makeApi(), reset)
+    fireEvent.change(await screen.findByLabelText('New password'), {
+      target: { value: 'a brand new password' },
+    })
+    fireEvent.change(screen.getByLabelText('Repeat new password'), {
+      target: { value: 'a brand new password' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Change password' }))
+    navigateToHash(`#token=${TOKEN_2}`)
+    await waitFor(() => expect(peekResetToken()).toBe(TOKEN_2))
+    await act(async () => refuse(new ResetError('invalid_token')))
+    expect(peekResetToken()).toBe(TOKEN_2)
+  })
+
   it('ignores a fragment without a token, and any fragment on another page', async () => {
     goTo(`/reset-password#token=${TOKEN}`)
     renderGate(makeApi(), makeReset())
@@ -586,6 +637,12 @@ describe('a reset when the server knows a sign-in this page does not hold', () =
   it('ends in the sign-in screen with the message after an offline sign-out still pending', async () => {
     localStorage.setItem(PENDING_LOGOUT_KEY, '1')
     localStorage.setItem(OWNER_KEY, alice.id)
+    const clear = vi.fn(async () => undefined)
+    const unregister = registerLocalDataHook({
+      trySync: vi.fn(async () => undefined),
+      countUnsynced: vi.fn(async () => ({ sessions: 1, edits: 0 })),
+      clear,
+    })
     goTo(`/reset-password#token=${TOKEN}`)
     const api = makeApi({
       me: vi.fn().mockResolvedValue(alice),
@@ -602,9 +659,15 @@ describe('a reset when the server knows a sign-in this page does not hold', () =
     fireEvent.click(screen.getByRole('button', { name: 'Change password' }))
     expect(await screen.findByText(new RegExp(CHANGED_SIGN_IN))).toBeVisible()
     expect(screen.getByRole('heading', { name: 'Sign in' })).toBeVisible()
+    // Nothing is cleared, and the sign-out that is still owed stays owed.
+    expect(clear).not.toHaveBeenCalled()
+    expect(localStorage.getItem(OWNER_KEY)).toBe(alice.id)
+    expect(localStorage.getItem(PENDING_LOGOUT_KEY)).not.toBeNull()
+    unregister()
   })
 
   it('ends in the sign-in screen with the message after a failed start-up check with no remembered user', async () => {
+    localStorage.setItem(OWNER_KEY, alice.id)
     goTo(`/reset-password#token=${TOKEN}`)
     const me = vi
       .fn()
@@ -620,5 +683,6 @@ describe('a reset when the server knows a sign-in this page does not hold', () =
     fireEvent.click(screen.getByRole('button', { name: 'Change password' }))
     expect(await screen.findByText(CHANGED_SIGN_IN)).toBeVisible()
     expect(screen.getByRole('heading', { name: 'Sign in' })).toBeVisible()
+    expect(localStorage.getItem(OWNER_KEY)).toBe(alice.id)
   })
 })
