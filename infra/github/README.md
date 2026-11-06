@@ -161,6 +161,53 @@ To limit exposure, the key stays on Yacine's machine, a token is minted per revi
 
 **Headless runs:** the on-call workflow (#35) reads a separate private key of the App from the `oncall` environment's `REVIEWER_APP_KEY` secret, in its `post-review` job's posting step only, never in a Claude session: the reviewer session writes the review, and that later step posts it. It writes the key to a mode-600 file under the runner's temp directory for `REVIEWER_APP_KEY_PATH`, and deletes it in an `always()` step. Without that secret the review falls back to a comment, and the merge waits for Yacine ([deployment.md → On-call workflow](../../_docs/deployment.md#on-call-workflow-35)). To revoke only that copy, delete that key in the App's settings.
 
+### Approval not counted on #416 (#417)
+
+On 2026-11-01 GitHub didn't count the bot's approval on #416. The bot approved head `61d68ca` twice (reviews 5727454255 at 09:46Z and 5728743735 at 15:06Z). With CI green and the branch up to date, GitHub still reported `reviewDecision: REVIEW_REQUIRED` and `mergeStateStatus: BLOCKED`. Yacine confirmed the App's permissions hadn't changed, then approved the PR himself so it could merge (squash `b5050d5`). #416 now reads `APPROVED` because of his approval, so the stuck state survives only in #417.
+
+**The cause wasn't found.** It wasn't reproduced, and by Yacine's decision of 2026-11-06 #417 closed as could not reproduce: no look at the admin side, and no change to branch protection, rulesets or the App. If it happens again, follow step 4 of [`/work-issue`](../../.claude/commands/work-issue.md) and add a data point to #417.
+
+Approvals by the same bot around that day, as recorded on #417:
+
+| PR | Review history | Approval counted? |
+|---|---|---|
+| #413 | request-changes, then approved twice | yes |
+| #415 | approved once | yes |
+| #418 | approved once | yes |
+| #416 | request-changes twice, then approved twice | no |
+
+A push dismissed #413's first approval before the second, so only #416 has two approvals on the same head. Its second came five hours after the first and didn't count either.
+
+Later PRs, checked on 2026-11-06 with `gh pr view <n> --json reviewDecision,reviews`:
+
+| PR | Review history (a push between each step) | `reviewDecision` |
+|---|---|---|
+| #436 | request-changes, approved (dismissed by the push), request-changes, approved | `APPROVED` |
+| #466 | approved once | `APPROVED` |
+| #467 | request-changes, approved | `APPROVED` |
+| #468 | approved (dismissed by the push), approved | `APPROVED` |
+| #469 | request-changes, approved (dismissed by the push), approved | `APPROVED` |
+| #471 | approved once | `APPROVED` |
+| #472 | approved once | `APPROVED` |
+
+**No repeat found since #416**, looking at all 38 PRs merged after it (#418 to #472) through REST (`pulls`, `pulls/<n>`, `pulls/<n>/reviews`). No PR since #416 was closed unmerged, and none was open when checked. On each of the 38:
+
+- the only standing approval is one from the bot, on the merged head: no second bot approval on that head and no approval from anyone else;
+- `merciful-poseidon`, which isn't an administrator, did the merge, so that approval must have counted by then.
+
+Approval to merge took under 7 minutes on all but #447 (63 minutes, waiting for Yacine's OK to merge, on #442).
+
+This has limits. GitHub keeps no history of `reviewDecision`, so the sweep shows each approval counted by merge time, not that it counted at once. It also says nothing about PRs before #413, which weren't checked.
+
+It doesn't settle the first candidate below either. Ten of the 38 had a request-changes round, and only #436 had two. #436's approval counted, and #417's note that only #416 had pushes after a second request-changes review no longer holds. But #436 isn't the same history: it had an approval between the two rounds, and no PR since has #416's exact history of two request-changes rounds followed by two approvals.
+
+Candidates #417 names, none ruled out:
+
+- the "latest push approved by someone other than the pusher" rule interacting with the bot's two earlier request-changes reviews (#413 and #436 count against it alone explaining this, without excluding it);
+- a ruleset or protection change (the admin side wasn't looked at);
+- an App installation change (Yacine confirmed the permissions were unchanged; nothing further was checked);
+- a GitHub-side issue.
+
 ## On-call GitHub App (#35)
 
 The on-call workflow pushes, opens and merges its fix PRs as a GitHub App of its own, `ineedtofocus-oncall`. Events made with a workflow's own `GITHUB_TOKEN` start no workflows (only `workflow_dispatch` and `repository_dispatch` do), so a fix pushed or merged with it would get no CI and no dev deploy. The App's events do. It's a third identity, next to the agent account and the reviewer App, so `require_last_push_approval` still holds: on-call's App pushes and the reviewer's App approves. The product manager's decision on [#35](https://github.com/ybenzine/ineedtofocus/issues/35#issuecomment-6401903338) chose it over a classic token of the agent account (`_docs/product_decisions.md`, decision log).
