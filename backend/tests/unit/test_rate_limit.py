@@ -2,7 +2,7 @@
 
 import asyncio
 
-from app.rate_limit import SWEEP_EVERY, FailureLimiter, client_key
+from app.rate_limit import SWEEP_EVERY, FailureLimiter, QuotaLimiter, client_key
 from app.security import hash_password, token_hash, verify_password
 
 
@@ -89,3 +89,62 @@ def test_stale_clients_are_forgotten_so_one_off_addresses_cannot_grow_the_table(
     lim.try_acquire("fresh", "")  # the SWEEP_EVERY-th call sweeps
     assert {k for k in lim._failures if k.startswith("c:")} == {"c:fresh"}
     assert len(lim._failures) == 2
+
+
+def test_clear_email_forgets_that_emails_failures_from_every_client() -> None:
+    """A completed password reset clears the lockout for the email (#350, AC1.9)."""
+    lim = make(Clock())
+    for client in ("c1", "c2"):
+        for _ in range(3):
+            assert lim.try_acquire(client, "a@x.io") is None
+        assert lim.try_acquire(client, "a@x.io") is not None
+    lim.clear_email("a@x.io")
+    assert lim.try_acquire("c1", "a@x.io") is None
+    assert lim.try_acquire("c2", "a@x.io") is None
+
+
+def test_clear_email_leaves_other_emails_and_the_client_count() -> None:
+    lim = FailureLimiter(2, 3, 60.0, Clock())
+    assert lim.try_acquire("c", "a@x.io") is None
+    assert lim.try_acquire("c", "b@x.io") is None
+    assert lim.try_acquire("c", "b@x.io") is None  # b is now at its limit of 2
+    assert lim.try_acquire("c", "b@x.io") is not None
+    lim.clear_email("a@x.io")
+    assert lim.try_acquire("c", "b@x.io") is not None  # b untouched, and the client is full
+    lim.clear_email("never-seen@x.io")  # no error
+
+
+def test_clear_email_index_is_swept_with_the_failures() -> None:
+    clock = Clock()
+    lim = make(clock)
+    lim.try_acquire("c", "a@x.io")
+    clock.now += 61
+    for n in range(SWEEP_EVERY):
+        lim.try_acquire("other", f"e{n}@x.io")
+        clock.now += 61
+    assert all(lim._pairs_by_email.values())
+    assert len(lim._pairs_by_email) < SWEEP_EVERY
+
+
+def test_quota_limiter_counts_all_keys_or_none() -> None:
+    clock = Clock()
+    lim = QuotaLimiter(60.0, clock)
+    quotas = [("email:a", 2), ("client:c", 3)]
+    assert lim.try_acquire(quotas) is None
+    assert lim.try_acquire(quotas) is None
+    wait = lim.try_acquire(quotas)  # the email is full
+    assert wait is not None and 1 <= wait <= 61
+    # The refused request counted against nothing: the client has used 2 of 3, not 3.
+    assert lim.try_acquire([("email:b", 2), ("client:c", 3)]) is None
+    assert lim.try_acquire([("email:d", 2), ("client:c", 3)]) is not None
+    clock.now += 61
+    assert lim.try_acquire(quotas) is None
+
+
+def test_quota_limiter_sweeps_stale_keys() -> None:
+    clock = Clock()
+    lim = QuotaLimiter(60.0, clock)
+    for n in range(SWEEP_EVERY):
+        lim.try_acquire([(f"email:{n}", 3)])
+        clock.now += 61
+    assert len(lim._hits) < SWEEP_EVERY

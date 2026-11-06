@@ -3,7 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_DB = "postgresql+asyncpg://focus:focus@localhost:5432/focus"
@@ -33,6 +33,20 @@ class Settings(BaseSettings):
     # sync requests, 0 to 100, that fail on purpose with a 500. Read from the environment
     # at startup; no endpoint can read or change it. 0 (off) unless the operator sets it.
     fault_save_error_percent: float = Field(default=0.0, ge=0, le=100)
+
+    # Email, for password reset (#350, AC1.9). `EMAIL_PROVIDER` is `ses` (deployed) or `smtp`
+    # (the local Mailpit); unset or anything else means no provider, and reset is off. All are
+    # strings so an unset Compose variable (`${NAME:-}`) reads as "missing" rather than failing
+    # validation; `app/mailer.py` decides what counts as configured.
+    email_provider: str = Field(default="")
+    # ses only: `<access_key_id>:<secret_access_key>`, from the server's secrets file.
+    email_api_key: SecretStr = Field(default=SecretStr(""))
+    email_aws_region: str = Field(default="")
+    email_smtp_host: str = Field(default="")
+    email_smtp_port: str = Field(default="")
+    email_from: str = Field(default="")
+    # The app's public address, for the link in the reset email.
+    app_base_url: str = Field(default="")
 
 
 @lru_cache

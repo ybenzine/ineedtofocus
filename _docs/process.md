@@ -71,6 +71,7 @@ claude-focus                                  # then accept the workspace trust 
 | `GRAFANA_PORT` | 3000 | 3010 |
 | `OTLP_HTTP_PORT` / `OTLP_GRPC_PORT` | 4318 / 4317 | 4328 / 4327 |
 | `POSTGRES_PORT` | 5432 | 5442 |
+| `MAILPIT_PORT` | 8025 | 8035 |
 | `DATABASE_URL` (backend run on the host) | `…@localhost:5432/focus` | `…@localhost:5442/focus` |
 | Vite dev server (no `.env` variable) | 5173 | 5183: `APP_PORT=8010 npm --prefix frontend run dev -- --port 5183` |
 
@@ -102,7 +103,7 @@ claude-focus                                  # then accept the workspace trust 
 
 ```sh
 make worktree-env SESSION=<session folder>   # own Compose project + a free slot of ports
-make up-test                                 # app + Postgres only (make up: full stack, Grafana too)
+make up-test                                 # app + Postgres + Mailpit (make up: full stack, Grafana too)
 make test                                    # e2e hits this worktree's own app
 make down                                    # removes its containers, network and app image; frees the slot
 ```
@@ -110,16 +111,18 @@ make down                                    # removes its containers, network a
 - `make worktree-env` (`scripts/worktree-env.sh write`) copies the session's `.env` (or `.env.example` if it has none) and sets `COMPOSE_PROJECT_NAME=focus-<session>-<worktree id>`, where `<session>` is the session's project name without `focus-` (`focus-m6-agent-a7f66…`, `focus-local-agent-…`), and every host port plus 10 × the slot, `DATABASE_URL` included. It records the slot (`WORKTREE_SLOT`) and the session folder (`WORKTREE_SESSION`) there too. It only runs in a subagent worktree; run it again and it keeps the slot it holds.
 - **Slots** are 10–17 (slots 10-17: 8100-8170, 5273-5343, 3100-3170, 4418-4488 for the app, Vite, Grafana and OTLP HTTP, in steps of 10): eight, enough for two parallel sessions of at most 4 subagents each (#172), and clear of the main checkout (+0), the second session worktree (+10) and a third (+20):
 
-  | Slot | `APP_PORT` | Vite | `GRAFANA_PORT` | `OTLP_GRPC_PORT` / `OTLP_HTTP_PORT` | `POSTGRES_PORT` |
-  |---|---|---|---|---|---|
-  | 10 | 8100 | 5273 | 3100 | 4417 / 4418 | 5532 |
-  | 11 | 8110 | 5283 | 3110 | 4427 / 4428 | 5542 |
-  | … | +10 | +10 | +10 | +10 | +10 |
-  | 17 | 8170 | 5343 | 3170 | 4487 / 4488 | 5602 |
+  | Slot | `APP_PORT` | Vite | `GRAFANA_PORT` | `OTLP_GRPC_PORT` / `OTLP_HTTP_PORT` | `POSTGRES_PORT` | `MAILPIT_PORT` |
+  |---|---|---|---|---|---|---|
+  | 10 | 8100 | 5273 | 3100 | 4417 / 4418 | 5532 | 8125 |
+  | 11 | 8110 | 5283 | 3110 | 4427 / 4428 | 5542 | 8135 |
+  | … | +10 | +10 | +10 | +10 | +10 | +10 |
+  | 17 | 8170 | 5343 | 3170 | 4487 / 4488 | 5602 | 8195 |
+
+  `MAILPIT_PORT` (default 8025, the main checkout's) is Mailpit's web UI and HTTP API, the way a Playwright test reads the password reset email (#350): `GET http://localhost:$MAILPIT_PORT/api/v1/messages`. `.claude/settings.json` has no `curl` rule for it, so reach it from Node (Playwright's `request`), not `curl`.
 
 - **Claiming.** A slot is a directory, `<git common dir>/focus-worktree-slots/<slot>`, holding the owner worktree's path. `mkdir` either creates it or fails, so two agents starting at once never get the same slot (`make test-scripts` starts nine at once and checks eight get distinct slots and the ninth is told none is free). A new slot is only taken if none of its ports answers on `127.0.0.1`. A slot is stale, and can be taken over, when its owner folder is gone or when it has had no owner for over a minute (an agent killed between `mkdir` and writing the owner). Stale slots are cleared only under a lock (`<slots>/.lock`, broken if a killed run left it over a minute ago) and after checking again that they're still stale, so a claim another agent has just made is never cleared. The slot also records its Compose project, written only by its owner and only with the name `make worktree-env` gives that worktree.
 - **Freeing.** `make down` frees the slot; `make up` and `make up-test` claim it again, and if another worktree took it meanwhile they rewrite `.env` on a free slot first, saying so. `make worktree-gc` (`scripts/worktree-env.sh gc`) stops the stacks it set up for subagent worktrees whose folder no longer exists (from their slot record and from `docker compose ls`), frees those slots and lists the ones in use. It only stops a project named `focus-<session>-<id of that gone worktree>`, so a session's shared stack (`focus-local`, `focus-m3`) is never stopped, even when a stale record or `docker compose ls` points it at a removed worktree; such a record is freed and reported as left running. It also lists `focus-…-agent-…_db-data` volumes a full `make up` left in removed worktrees (and no container uses), with the `docker volume rm …` line to remove them. It never removes them: deleting data is a [human gate](#human-gates), so Yacine runs that line if he wants to. The lead runs it after removing finished worktrees, or when `make worktree-env` reports no free slot.
-- **The lean stack** (`make up-test`, `compose.test.yaml` over `compose.yaml`) runs only the app and Postgres. It needs Docker Compose 2.24 or later, for the override file's `!override` and `!reset` tags; on an older one `make up-test` stops with a message saying so (`make up` still works). Grafana and the OTLP collector sit in the `observability` profile, so they start only with `make up`, which runs the full stack on the same slot (needed for `make check-stack`). The app's OTLP exporters are off and sign-ups are allowed 1000 an hour per client, as in CI's e2e job. The log-privacy e2e test reads `docker compose logs app`, which works the same.
+- **The lean stack** (`make up-test`, `compose.test.yaml` over `compose.yaml`) runs only the app, Postgres and Mailpit (the mail catcher for password reset, #350). It needs Docker Compose 2.24 or later, for the override file's `!override` and `!reset` tags; on an older one `make up-test` stops with a message saying so (`make up` still works). Grafana and the OTLP collector sit in the `observability` profile, so they start only with `make up`, which runs the full stack on the same slot (needed for `make check-stack`). The app's OTLP exporters are off and sign-ups are allowed 1000 an hour per client, as in CI's e2e job. The log-privacy e2e test reads `docker compose logs app`, which works the same.
 - **The database is throwaway: it lives on a tmpfs, not a volume.** `make down` (a plain `docker compose down`, plus `--rmi local` for the slot's app image) therefore leaves nothing behind, and no unattended run stalls on the volume-removal prompt (`docker compose down -v` and `docker volume rm` ask first). Stopping the db container empties it; the app's migrations rebuild the schema on the next start. A full `make up` in a subagent worktree uses a named volume (`<project>_db-data`) like any checkout, which stays after `make down` until removed by hand.
 - `make test` there tests its own stack: the e2e step takes the port its stack publishes, and two agents' runs share no container, network, volume or image. The backend integration tests still take `DATABASE_URL` from the shell (see above); to use the worktree's own Postgres, pass its port: `DATABASE_URL=postgresql+asyncpg://focus:focus@localhost:5532/focus make test` for slot 10 (`make worktree-env` prints the Postgres port).
 - `.claude/settings.json` pre-approves `curl` on every slot's app, Vite, Grafana and OTLP HTTP ports, on `localhost` and `127.0.0.1`, each named explicitly.

@@ -21,6 +21,18 @@ NOT_PASSED_THROUGH = {
     "FRONTEND_DIST",
     # Off locally (plain http); the app defaults it on (#79).
     "COOKIE_SECURE",
+    # The secret SES key (#350): deployed environments only, never passed to the local app.
+    "EMAIL_API_KEY",
+}
+# Settings whose local default differs from the app's on purpose (#350): the app has no email
+# provider unless told, but the local stack sends to its Mailpit container out of the box
+# (CI's end-to-end job has no .env).
+LOCAL_EMAIL_DEFAULTS = {
+    "EMAIL_PROVIDER": "smtp",
+    "EMAIL_SMTP_HOST": "mailpit",
+    "EMAIL_SMTP_PORT": "1025",
+    "EMAIL_FROM": "I Need To Focus <no-reply@ineedtofoc.us>",
+    "APP_BASE_URL": "http://localhost:${APP_PORT:-8000}",
 }
 ENTRY = re.compile(r"^ {6}([A-Z][A-Z0-9_]*): (.*)$")
 PASS_THROUGH = re.compile(r"^\$\{([A-Z][A-Z0-9_]*):-([^}]*)\}$")
@@ -56,6 +68,9 @@ def test_every_app_setting_is_passed_with_the_app_default() -> None:
         if name in NOT_PASSED_THROUGH:
             continue
         assert name in env, f"compose.yaml does not pass {name} to the app"
+        if name in LOCAL_EMAIL_DEFAULTS:
+            assert env[name] == "${" + name + ":-" + LOCAL_EMAIL_DEFAULTS[name] + "}", name
+            continue
         match = PASS_THROUGH.match(env[name])
         assert match and match[1] == name, f"{name}: expected ${{{name}:-<default>}}"
         assert parsed(name, match[2]) == info.default, (
@@ -94,7 +109,14 @@ def test_env_example_lists_only_settings_the_local_stack_uses() -> None:
 
 # --- One stack per checkout (#83) ---------------------------------------------------------
 
-PORT_VARIABLES = ("APP_PORT", "POSTGRES_PORT", "GRAFANA_PORT", "OTLP_GRPC_PORT", "OTLP_HTTP_PORT")
+PORT_VARIABLES = (
+    "APP_PORT",
+    "POSTGRES_PORT",
+    "GRAFANA_PORT",
+    "OTLP_GRPC_PORT",
+    "OTLP_HTTP_PORT",
+    "MAILPIT_PORT",
+)
 
 
 def env_example(commented: bool) -> dict[str, str]:
@@ -130,3 +152,13 @@ def test_second_worktree_example_moves_every_port_by_ten() -> None:
     assert second["DATABASE_URL"] == defaults["DATABASE_URL"].replace(
         f":{defaults['POSTGRES_PORT']}/", f":{second['POSTGRES_PORT']}/"
     )
+
+
+def test_the_local_stack_has_a_mail_catcher_the_app_depends_on() -> None:
+    """Password reset (#350): SMTP to the `mailpit` service, kept in the lean test stack too."""
+    compose = (REPO / "compose.yaml").read_text()
+    assert "\n  mailpit:\n    image: axllent/mailpit:v" in compose
+    assert "      mailpit:\n        condition: service_started" in compose
+    test_stack = (REPO / "compose.test.yaml").read_text()
+    assert "mailpit:\n        condition: service_started" in test_stack
+    assert "mailpit:\n    profiles" not in test_stack  # not moved out of the lean stack

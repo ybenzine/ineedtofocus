@@ -1,6 +1,20 @@
 {
   "components": {
     "schemas": {
+      "AuthOptions": {
+        "properties": {
+          "password_reset": {
+            "description": "True when the server can email a reset link; hide the offer when false",
+            "title": "Password Reset",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "password_reset"
+        ],
+        "title": "AuthOptions",
+        "type": "object"
+      },
       "Bucket": {
         "properties": {
           "date": {
@@ -383,6 +397,56 @@
         ],
         "title": "Mode",
         "type": "string"
+      },
+      "ResetAccepted": {
+        "description": "The same for every email, so the response can't reveal who has an account.",
+        "properties": {
+          "status": {
+            "const": "accepted",
+            "default": "accepted",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "ResetAccepted",
+        "type": "object"
+      },
+      "ResetConfirm": {
+        "additionalProperties": false,
+        "properties": {
+          "password": {
+            "maxLength": 128,
+            "minLength": 8,
+            "title": "Password",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "password"
+        ],
+        "title": "ResetConfirm",
+        "type": "object"
+      },
+      "ResetRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "title": "Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "email"
+        ],
+        "title": "ResetRequest",
+        "type": "object"
       },
       "SessionEdit": {
         "additionalProperties": false,
@@ -1619,6 +1683,135 @@
           }
         },
         "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/options": {
+      "get": {
+        "description": "What sign-in can offer on this server. Unauthenticated.",
+        "operationId": "auth_options_api_auth_options_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthOptions"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Auth Options",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/password-reset": {
+      "post": {
+        "description": "Email a reset link if an account exists for this address (AC1.9). Always 202.\n\nLimited to 3 requests per email and 10 per client per hour; a limited request sends\nnothing. 503 when email isn't configured.",
+        "operationId": "request_password_reset_api_auth_password_reset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many attempts; see the Retry-After header"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Password reset by email is not configured"
+          }
+        },
+        "summary": "Request Password Reset",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/password-reset/confirm": {
+      "post": {
+        "description": "Set a new password with a valid link's token (AC1.9). Single use. Revokes every sign-in\nof the account on every device and clears its sign-in lockout. Doesn't sign in.",
+        "operationId": "confirm_password_reset_api_auth_password_reset_confirm_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetConfirm"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Code `invalid_token`: the link is unknown, expired or already used"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Confirm Password Reset",
         "tags": [
           "auth"
         ]

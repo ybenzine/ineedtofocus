@@ -23,6 +23,7 @@ No credential is stored at repo level. Each one lives where only the job that ne
 | | `REVIEWER_APP_KEY`: a separate private key of the reviewer App (#70) | `oncall.yml`'s `post-review` step only, never a session | | Push, or approve its own push ([infra/github/README.md](../infra/github/README.md#reviewer-github-app-70)) |
 | | `ONCALL_APP_KEY`: the private key of the on-call App, `ineedtofocus-oncall` (#35) | `oncall.yml`'s push, PR and merge steps only, never a session | | Start, re-run or approve a workflow, or change `.github/workflows/` ([infra/github/README.md](../infra/github/README.md#on-call-github-app-35)) |
 | Server, `/opt/focus/<env>/.env` (mode 600) | Grafana Cloud OTLP write token (`GRAFANA_CLOUD_OTLP_TOKEN`) | That environment's collector (#32) | n/a | Read telemetry ([observability.md → Credentials](observability.md#credentials)) |
+| Server, `/opt/focus/<env>/.env` (mode 600) | `EMAIL_API_KEY`: `<access_key_id>:<secret_access_key>` of this environment's send-only Amazon SES IAM user (`focus-dev-ses`, `focus-prod-ses`; policy in [#350](https://github.com/ybenzine/ineedtofocus/issues/350)) | That environment's app, at runtime, to send password reset email (#350). `infra/compose.prod.yml` passes it through; `infra/env/<env>.env` sets `EMAIL_PROVIDER=ses`, `EMAIL_AWS_REGION`, `EMAIL_FROM` and `APP_BASE_URL` and must never hold the key | n/a | Send anything but `ses:SendEmail` from `no-reply@ineedtofoc.us` with tracking off. While the key is absent or doesn't split into two parts at its first colon, the app reports password reset as not configured (503 on the request, `GET /api/auth/options` says `false`) and logs one startup warning naming `EMAIL_API_KEY`, never its value |
 | Grafana Cloud contact point `focus-oncall-github` | Fine-grained GitHub token, this repo, Contents write | Grafana's webhook, to send the alert dispatch (#34) | n/a | Approve or start a deploy ([observability.md → The token](observability.md#the-token)) |
 
 The workflow token (`GITHUB_TOKEN`) is set per job with `permissions:`. Every workflow starts from `permissions: {}` or `contents: read`, and only `ci.yml`'s `publish` job can write packages or sign attestations.
@@ -744,6 +745,7 @@ Deleted:
   auth_sessions: 5
   calendar_feeds: 1
   custom_tags: 4
+  password_reset_tokens: 2
   youtube_recent_links: 8
   focus_sessions: 43
   user_settings: 3

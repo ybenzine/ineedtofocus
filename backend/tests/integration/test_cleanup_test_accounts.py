@@ -82,6 +82,14 @@ def cleanup(url: str, *argv: str, answer: str | None = None) -> tuple[int, str]:
 def populated(make_client: MakeClient, app_url: str) -> str:
     for email in ["e2e-1@example.com", "QA-2@EXAMPLE.COM", "pm40-probe@example.com", *REAL]:
         seed(make_client, email.lower())
+    # A password reset link each (#350), written directly: the app has no email set up.
+    run(
+        _exec(
+            app_url,
+            "INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) "
+            "SELECT md5(id::text) || md5(email), id, now() + interval '1 hour' FROM users",
+        )
+    )
     age_all(app_url)
     run(_exec(app_url, "UPDATE users SET email = upper(email) WHERE email LIKE 'qa-2@%'"))
     return app_url
@@ -95,6 +103,7 @@ def test_every_user_fk_table_is_covered_by_the_report() -> None:
         "custom_tags",
         "youtube_recent_links",
         "calendar_feeds",
+        "password_reset_tokens",
     }
     assert Base.metadata.tables["calendar_feeds"] is not None
 

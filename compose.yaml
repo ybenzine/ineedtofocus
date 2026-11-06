@@ -3,6 +3,9 @@
 #   app   http://localhost:8000   FastAPI + built frontend (image from ./Dockerfile)
 #   db    localhost:5432          Postgres, data in the named volume `db-data`
 #   lgtm  http://localhost:3000   Grafana + OTLP ingest (grafana/otel-lgtm)
+#   mailpit http://localhost:8025 Mail catcher: the app sends password reset email to it over
+#                                 SMTP (mailpit:1025), and its web UI and API (/api/v1/...)
+#                                 show what arrived. Nothing leaves the machine (#350).
 #
 # The app starts once the database is healthy, applies the migrations
 # (`alembic upgrade head`, image entrypoint), then serves and sends traces, metrics
@@ -48,6 +51,17 @@ services:
       # The alert trigger (#33): the share of session saves that fail on purpose, 0 (off)
       # to 100. Read at startup, e.g. `FAULT_SAVE_ERROR_PERCENT=30 docker compose up -d app`.
       FAULT_SAVE_ERROR_PERCENT: ${FAULT_SAVE_ERROR_PERCENT:-0}
+      # Password reset email (#350): locally SMTP to the Mailpit container below. The defaults
+      # differ from the app's own (no provider) on purpose, so a stack with no .env, such as
+      # CI's end-to-end job, can send. The link in the email points at the app's own address.
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-smtp}
+      EMAIL_SMTP_HOST: ${EMAIL_SMTP_HOST:-mailpit}
+      EMAIL_SMTP_PORT: ${EMAIL_SMTP_PORT:-1025}
+      EMAIL_FROM: ${EMAIL_FROM:-I Need To Focus <no-reply@ineedtofoc.us>}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:${APP_PORT:-8000}}
+      # ses only (deployed environments): not used locally. EMAIL_API_KEY, the secret, is
+      # never passed to the local app.
+      EMAIL_AWS_REGION: ${EMAIL_AWS_REGION:-}
       # Run `alembic upgrade head` before the server starts (image entrypoint).
       MIGRATE_ON_START: ${MIGRATE_ON_START:-1}
       # OpenTelemetry: traces, metrics and logs over OTLP/HTTP to the lgtm container.
@@ -64,6 +78,8 @@ services:
       db:
         condition: service_healthy
       lgtm:
+        condition: service_started
+      mailpit:
         condition: service_started
     healthcheck:
       # GET, not HEAD: the API answers HEAD on /healthz with 405.
@@ -96,6 +112,17 @@ services:
       retries: 10
       start_period: 10s
     mem_limit: 512m
+    restart: unless-stopped
+
+  mailpit:
+    image: axllent/mailpit:v1.29.0
+    ports:
+      # Web UI and HTTP API. The SMTP port 1025 is reached by service name, not published.
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
+    environment:
+      # Throwaway mail: keep only the latest, none on disk.
+      MP_MAX_MESSAGES: "500"
+    mem_limit: 128m
     restart: unless-stopped
 
   lgtm:

@@ -67,6 +67,7 @@ def test_prints_the_project_and_the_published_ports(checkout: Path) -> None:
         FAKE_PORT_lgtm_3000="3010",
         FAKE_PORT_lgtm_4318="4328",
         FAKE_PORT_db_5432="5442",
+        FAKE_PORT_mailpit_8025="8035",
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [
@@ -75,6 +76,7 @@ def test_prints_the_project_and_the_published_ports(checkout: Path) -> None:
         "Grafana:  http://localhost:3010",
         "OTLP:     http://localhost:4328",
         "Postgres: localhost:5442",
+        "Mailpit:  http://localhost:8035",
     ]
 
 
@@ -145,3 +147,17 @@ def test_e2e_targets_default_to_this_checkouts_app(target: str) -> None:
     body = recipe(target)
     assert '"$${PLAYWRIGHT_BASE_URL:-$$(scripts/stack-urls.sh app)}"' in body
     assert "localhost:8000" not in body
+
+
+def test_mailpit_url_is_the_published_port_else_the_configured_one(checkout: Path) -> None:
+    """Playwright reads the password reset email from Mailpit's API (#350)."""
+    assert run(checkout, "mailpit").stdout == "http://localhost:8025\n"
+    (checkout / ".env").write_text("MAILPIT_PORT=8125\nAPP_PORT=8100\n")
+    assert run(checkout, "mailpit").stdout == "http://localhost:8125\n"
+    assert run(checkout, "mailpit", MAILPIT_PORT="8135").stdout == "http://localhost:8135\n"
+    published = run(checkout, "mailpit", FAKE_PORT_mailpit_8025="8145")
+    assert published.stdout == "http://localhost:8145\n"
+
+
+def test_e2e_passes_playwright_the_mailpit_url() -> None:
+    assert '"$${MAILPIT_URL:-$$(scripts/stack-urls.sh mailpit)}"' in recipe("test-e2e")

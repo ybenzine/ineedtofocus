@@ -12,7 +12,8 @@ Production: https://ineedtofoc.us · Dev: https://dev.ineedtofoc.us
 | Database | PostgreSQL |
 | Frontend | React + TypeScript (Vite), installable web app (vite-plugin-pwa service worker) |
 | Offline storage | IndexedDB via Dexie; sessions get a client-generated UUID so sync is idempotent |
-| Auth | Email + password, argon2 hashing, secure HTTP-only session cookie (frontend and API on the same origin) |
+| Auth | Email + password, argon2 hashing, secure HTTP-only session cookie (frontend and API on the same origin). Password reset by email (#350, AC1.9): single-use 60-minute link, sent through Amazon SES |
+| Email | Amazon SES API v2 over HTTPS (Region `us-east-1`; DigitalOcean blocks outbound SMTP), behind a small `EmailSender` interface (`backend/app/mailer.py`). Requests are signed with AWS Signature Version 4 written out in about 40 lines of `hmac`/`hashlib` instead of boto3, checked against AWS's published test vector: no large dependency and no import cost in the 256 MiB dev container. Locally, SMTP to a Mailpit container, whose API the end-to-end tests read |
 | Audio | Web Audio API for the gapless rain loop and chimes; YouTube IFrame Player API for YouTube |
 | Tests | pytest (unit + integration against a real Postgres), Vitest + Testing Library (frontend), Playwright (end-to-end); all run with `make test` |
 | Containers | Docker + Docker Compose; one command (`make up` / `docker compose up`) starts app, database and local observability stack |

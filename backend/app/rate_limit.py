@@ -41,6 +41,9 @@ class FailureLimiter:
         self._window = window_seconds
         self._clock = clock
         self._failures: dict[str, deque[float]] = {}
+        # email hash -> the (client, email) pair keys counted for it, so a password reset can
+        # clear that email's count whichever client the failures came from (#350).
+        self._pairs_by_email: dict[str, set[str]] = {}
         self._calls = 0
 
     @staticmethod
@@ -54,6 +57,10 @@ class FailureLimiter:
         cutoff = self._clock() - self._window
         for key in [k for k, q in self._failures.items() if not q or q[-1] <= cutoff]:
             del self._failures[key]
+        for email, pairs in list(self._pairs_by_email.items()):
+            pairs.intersection_update(self._failures)
+            if not pairs:
+                del self._pairs_by_email[email]
 
     def _recent(self, key: str) -> deque[float]:
         q = self._failures.setdefault(key, deque())
@@ -84,7 +91,19 @@ class FailureLimiter:
         now = self._clock()
         for key in keys:
             self._failures.setdefault(key, deque()).append(now)
+        self._pairs_by_email.setdefault(self._email_key(email), set()).add(keys[0])
         return None
+
+    @staticmethod
+    def _email_key(email: str) -> str:
+        return hashlib.sha256(email.encode()).hexdigest()
+
+    def clear_email(self, email: str) -> None:
+        """Forget every failed sign-in counted for this email, from any client (a completed
+        password reset clears the lockout, AC1.9). Per-client counts stay: they guard against
+        one client trying many accounts, which a reset of one account doesn't change."""
+        for key in self._pairs_by_email.pop(self._email_key(email), set()):
+            self._failures.pop(key, None)
 
     def succeeded(self, client: str, email: str) -> None:
         """Refund a successful attempt: clear the pair's count and this attempt's client count."""
@@ -99,3 +118,48 @@ class FailureLimiter:
             q.pop()
             if not q:
                 self._failures.pop(client_key, None)
+
+
+class QuotaLimiter:
+    """Sliding-window quotas over several keys at once, all or nothing: a request is counted
+    against every key or, if any key is full, against none. Keys are hashed. Per process, like
+    `FailureLimiter` (used for password reset requests, #350)."""
+
+    def __init__(self, window_seconds: float, clock: Callable[[], float] = time.monotonic) -> None:
+        self._window = window_seconds
+        self._clock = clock
+        self._hits: dict[str, deque[float]] = {}
+        self._calls = 0
+
+    def _recent(self, key: str) -> deque[float]:
+        q = self._hits.get(key)
+        if q is None:
+            return deque()
+        cutoff = self._clock() - self._window
+        while q and q[0] <= cutoff:
+            q.popleft()
+        if not q:
+            del self._hits[key]
+        return q
+
+    def _sweep(self) -> None:
+        for key in list(self._hits):
+            self._recent(key)
+
+    def try_acquire(self, quotas: list[tuple[str, int]]) -> int | None:
+        """Count one request against each `(key, limit)`. Returns None when it may proceed, or
+        the seconds to wait when any key is full (then nothing is counted)."""
+        self._calls += 1
+        if self._calls % SWEEP_EVERY == 0:
+            self._sweep()
+        waits = []
+        for name, limit in quotas:
+            q = self._recent(hashlib.sha256(name.encode()).hexdigest())
+            if len(q) >= limit:
+                waits.append(q[0] + self._window - self._clock())
+        if waits:
+            return max(1, int(max(waits)) + 1)
+        now = self._clock()
+        for name, _ in quotas:
+            self._hits.setdefault(hashlib.sha256(name.encode()).hexdigest(), deque()).append(now)
+        return None

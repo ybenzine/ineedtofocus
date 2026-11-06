@@ -57,10 +57,13 @@ def test_zero_journey_series_creates_every_counter_series(monkeypatch: pytest.Mo
     """#33: every series exists from startup at 0, so the first errors are an increase."""
     import app.metrics as m
 
-    saves, loads = Recorder(), Recorder()
+    saves, loads, resets = Recorder(), Recorder(), Recorder()
     monkeypatch.setattr(m, "SESSION_SAVES", saves)
     monkeypatch.setattr(m, "HISTORY_LOADS", loads)
+    monkeypatch.setattr(m, "PASSWORD_RESET_REQUESTS", resets)
     m.zero_journey_series()
+    assert sorted(a["outcome"] for _, a in resets.calls) == sorted(m.RESET_OUTCOMES)
+    assert {amount for amount, _ in resets.calls} == {0}
     assert {amount for amount, _ in saves.calls + loads.calls} == {0}
     assert sorted((a["kind"], a["outcome"]) for _, a in saves.calls) == sorted(
         (k, o) for k in ("single", "sync") for o in ("created", "existing", "rejected", "error")
