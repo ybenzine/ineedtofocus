@@ -263,15 +263,11 @@ describe('AuthGate', () => {
 
   it('signs out other tabs when the remembered user is removed', async () => {
     renderGate(makeApi({ me: vi.fn().mockResolvedValue(user) }))
-    await screen.findByText('the timer app')
+    await signedIn() // the storage handler reads a ref that an effect sets (#459)
     act(() => {
       window.dispatchEvent(new StorageEvent('storage', { key: USER_KEY, newValue: null }))
     })
-    // Not order: it passes on every shuffled seed. In CI it once took 1018 ms, just over the 1 s
-    // default, on a loaded runner (#459).
-    expect(
-      await screen.findByRole('heading', { name: 'Sign in' }, { timeout: 3000 }),
-    ).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument()
   })
 
   // AC1.4 e2e moved to #23; this models two devices (separate storage) with one account.

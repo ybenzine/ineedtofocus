@@ -89,7 +89,8 @@ describe('the sign-in screen (AC8, AC9)', () => {
     renderGate(makeApi(), reset)
     fireEvent.change(await screen.findByLabelText('Email'), { target: { value: ' a@b.co ' } })
     fireEvent.click(await screen.findByRole('link', { name: 'Forgot password?' }))
-    expect(await screen.findByRole('heading', { name: 'Reset your password' })).toHaveFocus()
+    const heading = await screen.findByRole('heading', { name: 'Reset your password' })
+    await waitFor(() => expect(heading).toHaveFocus())
     expect(screen.getByLabelText('Email')).toHaveValue('a@b.co')
     expect(window.location.pathname).toBe('/forgot-password')
     // The email travels in memory, never in the address.
@@ -157,7 +158,7 @@ describe('the request form', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send reset link' }))
     const status = await screen.findByRole('status')
     expect(status).toHaveTextContent(SENT)
-    expect(status).toHaveFocus()
+    await waitFor(() => expect(status).toHaveFocus())
     expect(reset.request).toHaveBeenCalledWith('who@example.com')
   })
 
@@ -167,7 +168,7 @@ describe('the request form', () => {
     fireEvent.change(email, { target: { value: 'nope' } })
     fireEvent.click(screen.getByRole('button', { name: 'Send reset link' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Enter a valid email address.')
-    expect(email).toHaveFocus()
+    await waitFor(() => expect(email).toHaveFocus())
     expect(reset.request).not.toHaveBeenCalled()
   })
 
@@ -237,7 +238,8 @@ describe('the reset page (AC8)', () => {
   it('removes the token from the address and sends it with the new password', async () => {
     const reset = makeReset()
     openConfirm(reset)
-    expect(await screen.findByRole('heading', { name: 'Choose a new password' })).toHaveFocus()
+    const heading = await screen.findByRole('heading', { name: 'Choose a new password' })
+    await waitFor(() => expect(heading).toHaveFocus())
     expect(window.location.href).not.toContain(TOKEN)
     expect(screen.getByLabelText('New password')).toHaveAttribute('autocomplete', 'new-password')
     expect(screen.getByLabelText('Repeat new password')).toHaveAttribute(
@@ -256,12 +258,12 @@ describe('the reset page (AC8)', () => {
     await screen.findByLabelText('New password')
     fillPasswords('a brand new password', 'another one entirely')
     expect(await screen.findByRole('alert')).toHaveTextContent("The passwords don't match.")
-    expect(screen.getByLabelText('Repeat new password')).toHaveFocus()
+    await waitFor(() => expect(screen.getByLabelText('Repeat new password')).toHaveFocus())
     fillPasswords('short')
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent('Use a password of 8 to 128 characters.'),
     )
-    expect(screen.getByLabelText('New password')).toHaveFocus()
+    await waitFor(() => expect(screen.getByLabelText('New password')).toHaveFocus())
     expect(reset.confirm).not.toHaveBeenCalled()
   })
 
@@ -284,7 +286,7 @@ describe('the reset page (AC8)', () => {
     fillPasswords('a brand new password')
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('This link has expired or was already used. Ask for a new one.')
-    expect(alert).toHaveFocus()
+    await waitFor(() => expect(alert).toHaveFocus())
     expect(peekResetToken()).toBeNull()
     expect(screen.queryByLabelText('New password')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('link', { name: 'Ask for a new link' }))
@@ -295,7 +297,7 @@ describe('the reset page (AC8)', () => {
     goTo('/reset-password')
     renderGate(makeApi(), makeReset())
     const message = await screen.findByText(NEEDS_LINK)
-    expect(message).toHaveFocus()
+    await waitFor(() => expect(message).toHaveFocus())
     expect(screen.queryByText(EXPIRED)).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Ask for a new link' })).toBeVisible()
   })
@@ -364,7 +366,7 @@ describe('after the password changed on a signed-in device (AC8)', () => {
     const me = vi.fn().mockResolvedValueOnce(alice).mockResolvedValue(null)
     const { clear, unregister } = await reset(signedIn(me))
     const notice = await screen.findByText(CHANGED_SIGN_IN)
-    expect(notice).toHaveFocus()
+    await waitFor(() => expect(notice).toHaveFocus())
     expect(screen.getByRole('heading', { name: 'Sign in' })).toBeVisible()
     expect(screen.queryByText('the timer app')).not.toBeInTheDocument()
     // Nothing on the device was cleared: unsynced sessions stay for their owner (F13).
