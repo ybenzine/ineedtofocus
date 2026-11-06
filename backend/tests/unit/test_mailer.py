@@ -123,7 +123,7 @@ def test_the_ses_request_is_signed_and_goes_to_the_regions_endpoint() -> None:
         method="POST",
         host="email.us-east-1.amazonaws.com",
         path="/v2/email/outbound-emails",
-        headers={"content-type": "application/json"},
+        headers={"content-type": request.headers["content-type"]},  # as posted
         body=request.content,
         region="us-east-1",
         service="ses",
