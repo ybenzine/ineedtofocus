@@ -369,6 +369,7 @@ dependencies = [
     { name = "argon2-cffi" },
     { name = "asyncpg" },
     { name = "fastapi" },
+    { name = "httpx" },
     { name = "opentelemetry-distro" },
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-instrumentation-logging" },
@@ -381,7 +382,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "httpx" },
     { name = "icalendar" },
     { name = "mypy" },
     { name = "pytest" },
@@ -394,6 +394,7 @@ requires-dist = [
     { name = "argon2-cffi", specifier = ">=25.1.0" },
     { name = "asyncpg", specifier = ">=0.32.0" },
     { name = "fastapi", specifier = ">=0.159.1" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "opentelemetry-distro", specifier = ">=0.66b1" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.45.1" },
     { name = "opentelemetry-instrumentation-logging", specifier = ">=0.66b1" },
@@ -406,7 +407,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx", specifier = ">=0.28.1" },
     { name = "icalendar", specifier = ">=7.3.0" },
     { name = "mypy", specifier = ">=1.13" },
     { name = "pytest", specifier = ">=8.3" },

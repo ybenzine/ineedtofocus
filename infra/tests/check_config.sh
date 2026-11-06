@@ -84,6 +84,19 @@ for env_name in prod dev; do
 done
 ok "fault injection is off by default and only the server .env turns it on"
 
+# Password reset by email (#350): the app's environment is an explicit list, so the SES key from
+# the server's .env must reach it, while infra/env/<env>.env sets only the non-secret settings
+# (check_prod_compose.py checks those render, and that the key renders empty from the
+# committed files, so it was never committed).
+printf 'POSTGRES_PASSWORD=not-a-real-password\nEMAIL_API_KEY=AKIDEXAMPLE:not-a-real-secret\n' > "$work/email.env"
+for env_name in prod dev; do
+  email=$(render "$env_name" "$work/email.env" --format json |
+    python3 -c 'import json,sys; e=json.load(sys.stdin)["services"]["app"]["environment"]; print(e["EMAIL_PROVIDER"], e["EMAIL_API_KEY"])')
+  [[ $email == "ses AKIDEXAMPLE:not-a-real-secret" ]] ||
+    fail "$env_name: EMAIL_PROVIDER and EMAIL_API_KEY reached the app as '$email' (dummy values)"
+done
+ok "the SES key from the server .env reaches the app, with the committed provider settings"
+
 # --- 2. Collector ------------------------------------------------------------
 otelcol_image=$(render prod "$work/plain.env" --images | grep opentelemetry-collector)
 collector_config() { # <secrets file> -> the second --config file the collector gets

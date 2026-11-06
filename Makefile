@@ -158,6 +158,7 @@ test-e2e: frontend/node_modules ## Playwright end-to-end tests against this chec
 		exit 1; \
 	fi
 	PLAYWRIGHT_BASE_URL="$${PLAYWRIGHT_BASE_URL:-$$(scripts/stack-urls.sh app)}" \
+	MAILPIT_URL="$${MAILPIT_URL:-$$(scripts/stack-urls.sh mailpit)}" \
 		$(NPM) exec --no -- playwright test --config frontend/playwright.config.ts
 
 # --- Lint and format ----------------------------------------------------------

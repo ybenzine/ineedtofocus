@@ -56,6 +56,7 @@ GRAFANA_PORT=3010
 OTLP_GRPC_PORT=4327
 OTLP_HTTP_PORT=4328
 POSTGRES_PORT=5442
+MAILPIT_PORT=8035
 DATABASE_URL=postgresql+asyncpg://focus:focus@localhost:5442/focus
 LOG_LEVEL=DEBUG
 """
@@ -175,6 +176,7 @@ def test_writes_its_own_project_and_slot_ports(lab: Lab) -> None:
     assert env["OTLP_GRPC_PORT"] == "4417"
     assert env["OTLP_HTTP_PORT"] == "4418"
     assert env["POSTGRES_PORT"] == "5532"
+    assert env["MAILPIT_PORT"] == "8125"  # Mailpit's API, for the password reset journey (#350)
     assert env["DATABASE_URL"] == "postgresql+asyncpg://focus:focus@localhost:5532/focus"
     # Everything else comes from the session's .env.
     assert env["LOG_LEVEL"] == "DEBUG"
@@ -446,15 +448,15 @@ def lean_config(tmp_path: Path, *extra: str) -> dict[str, Any]:
     return config
 
 
-def test_the_lean_stack_is_app_and_postgres_on_a_tmpfs(tmp_path: Path) -> None:
+def test_the_lean_stack_is_app_postgres_and_the_mail_catcher_on_a_tmpfs(tmp_path: Path) -> None:
     config = lean_config(tmp_path)
     services = config["services"]
-    assert sorted(services) == ["app", "db"]
+    assert sorted(services) == ["app", "db", "mailpit"]  # mailpit: password reset email (#350)
     # Throwaway database: no volume for `make down` to leave behind or `down -v` to remove.
     assert "volumes" not in services["db"]
     assert services["db"]["tmpfs"] == ["/var/lib/postgresql/data"]
     assert not config.get("volumes")
-    assert list(services["app"]["depends_on"]) == ["db"]
+    assert sorted(services["app"]["depends_on"]) == ["db", "mailpit"]
     env = services["app"]["environment"]
     for signal in ("TRACES", "METRICS", "LOGS"):
         assert env[f"OTEL_{signal}_EXPORTER"] == "none"

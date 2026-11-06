@@ -57,6 +57,18 @@ services:
       # which would win over the server file (checked by scripts/check_prod_compose.py
       # and infra/tests/check_config.sh). _docs/observability.md, Alert trigger.
       FAULT_SAVE_ERROR_PERCENT: ${FAULT_SAVE_ERROR_PERCENT:-0}
+      # Password reset by email (#350): Amazon SES over HTTPS. This list is the app's whole
+      # environment, so a variable not named here never reaches it. The non-secret settings
+      # (EMAIL_PROVIDER, EMAIL_AWS_REGION, EMAIL_FROM, APP_BASE_URL) are in infra/env/<env>.env.
+      # EMAIL_API_KEY (`<access_key_id>:<secret_access_key>`) is read from the server's
+      # /opt/focus/<env>/.env only and is never committed; while it is absent or malformed
+      # the app reports password reset as not configured (503, and /api/auth/options says
+      # false). Checked by scripts/check_prod_compose.py and infra/tests/check_config.sh.
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-}
+      EMAIL_API_KEY: ${EMAIL_API_KEY:-}
+      EMAIL_AWS_REGION: ${EMAIL_AWS_REGION:-}
+      EMAIL_FROM: ${EMAIL_FROM:-}
+      APP_BASE_URL: ${APP_BASE_URL:-}
       # Telemetry goes to this project's collector, which forwards to Grafana Cloud.
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf

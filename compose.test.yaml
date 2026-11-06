@@ -1,7 +1,8 @@
 # Lean test stack (#442): `make up-test`, i.e.
 #   docker compose -f compose.yaml -f compose.test.yaml up -d --build --wait
 #
-# Only what `make test` and `make test-e2e` use: the app and Postgres. Grafana and the OTLP
+# Only what `make test` and `make test-e2e` use: the app, Postgres and Mailpit (the mail
+# catcher the password reset journey reads, #350). Grafana and the OTLP
 # collector (`lgtm`) sit in the `observability` profile, so they don't start; `make up`
 # starts the full stack, Grafana included, on the same ports.
 #
@@ -27,6 +28,10 @@ services:
     depends_on: !override
       db:
         condition: service_healthy
+      # Stays in the lean stack: the password reset journey reads its email from Mailpit's
+      # API on MAILPIT_PORT (default 8025; a subagent worktree's slot moves it, #350).
+      mailpit:
+        condition: service_started
 
   db:
     volumes: !reset []

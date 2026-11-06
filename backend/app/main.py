@@ -1,5 +1,6 @@
 """FastAPI application factory."""
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -19,8 +20,11 @@ from app.errors import fix_openapi, register_error_handlers
 from app.health import router as health_router
 from app.history_api import router as history_router
 from app.logging_config import configure_logging
+from app.mailer import EmailConfig, SesSender, configure_email
 from app.metrics import zero_journey_series
-from app.rate_limit import FailureLimiter
+from app.password_reset import WINDOW_SECONDS
+from app.password_reset import router as password_reset_router
+from app.rate_limit import FailureLimiter, QuotaLimiter
 from app.sessions import router as sessions_router
 from app.settings_api import router as settings_router
 from app.tags_api import router as tags_router
@@ -34,8 +38,10 @@ def create_app(
     settings: Settings | None = None,
     readiness_check: ReadinessCheck | None = None,
     tracer_provider: TracerProvider | None = None,
+    email: EmailConfig | None = None,
 ) -> FastAPI:
-    """Build the app. `tracer_provider` overrides the global one (tests)."""
+    """Build the app. `tracer_provider` and `email` override the global tracer and the email
+    configuration read from the settings (tests)."""
     settings = settings or get_settings()
     configure_logging(settings.log_level)
     engine = create_engine(settings.database_url)
@@ -52,7 +58,17 @@ def create_app(
                 "fault injection on: session saves fail on purpose",
                 extra={"fault_save_error_percent": settings.fault_save_error_percent},
             )
+        if app.state.email.problem is not None:
+            # The name of the variable, never its value (it may be a secret).
+            logger.warning(
+                "password reset by email is off: %s is missing or invalid", app.state.email.problem
+            )
         yield
+        # Let reset emails already accepted finish (each is bounded by its own timeout).
+        if app.state.background_tasks:
+            await asyncio.wait(set(app.state.background_tasks), timeout=15)
+        if isinstance(app.state.email.sender, SesSender):
+            await app.state.email.sender.aclose()
         await engine.dispose()
 
     app = FastAPI(
@@ -76,11 +92,15 @@ def create_app(
         settings.signup_max_per_client,
         settings.signup_window_seconds,
     )
+    app.state.reset_limiter = QuotaLimiter(WINDOW_SECONDS)
+    app.state.email = email or configure_email(settings)
+    app.state.background_tasks = set()
     app.state.calendar_limiter, app.state.calendar_bad_limiter = new_limiters()
     register_error_handlers(app)
     fix_openapi(app)
     app.include_router(health_router)
     app.include_router(auth_router)
+    app.include_router(password_reset_router)
     app.include_router(account_router)
     app.include_router(sessions_router)
     app.include_router(settings_router)

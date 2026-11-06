@@ -21,6 +21,10 @@ them. Exits non-zero, listing every broken rule:
     from Caddy's fixed address on its own edge network (never `*`);
   - fault injection (#33) renders off, FAULT_SAVE_ERROR_PERCENT=0, from the committed files
     alone: only the operator's server .env may turn it on;
+  - password reset by email (#350) is wired for Amazon SES from the committed files: the app
+    gets EMAIL_PROVIDER=ses, a Region, a sender and an APP_BASE_URL of its own https address,
+    and EMAIL_API_KEY is passed through from the server's .env but renders empty here, so
+    the secret key can never have been committed;
   - each environment has its own edge network, Postgres keeps its data in a named volume,
     and only the app joins the edge network;
   - Caddy routes ineedtofoc.us to the prod app and dev.ineedtofoc.us to the dev app;
@@ -273,6 +277,7 @@ def check(
                 f"{env}/app: FAULT_SAVE_ERROR_PERCENT must default to 0 (off); only the"
                 " operator's server .env may turn fault injection on (#33)"
             )
+        errors.extend(email_errors(env, environment))
         if tag is not None and app.get("image") != f"{IMAGE_REPO}:{tag}":
             errors.append(f"{env}/app: image is {app.get('image')!r}, expected {IMAGE_REPO}:{tag}")
 
@@ -315,6 +320,28 @@ def check(
         if not any(v.get("type") == "volume" and v.get("target") == PG_DATA for v in volumes):
             errors.append(f"{env}/db: {PG_DATA} must be a named volume")
 
+    return errors
+
+
+def email_errors(env: str, environment: Config) -> list[str]:
+    """Password reset by email (#350): the app's environment is an explicit list, so every
+    variable it needs is named, with the non-secret values set by infra/env/<env>.env."""
+    errors: list[str] = []
+    if environment.get("EMAIL_PROVIDER") != "ses":
+        errors.append(f"{env}/app: EMAIL_PROVIDER must be ses (infra/env/{env}.env)")
+    if not re.fullmatch(r"[a-z]{2}(-[a-z]+)+-\d", str(environment.get("EMAIL_AWS_REGION", ""))):
+        errors.append(f"{env}/app: EMAIL_AWS_REGION must be an AWS Region (infra/env/{env}.env)")
+    if "@" not in str(environment.get("EMAIL_FROM", "")):
+        errors.append(f"{env}/app: EMAIL_FROM must hold the sender address (infra/env/{env}.env)")
+    if environment.get("APP_BASE_URL") != f"https://{HOSTS[env]}":
+        errors.append(f"{env}/app: APP_BASE_URL must be https://{HOSTS[env]} (infra/env/{env}.env)")
+    if "EMAIL_API_KEY" not in environment:
+        errors.append(f"{env}/app: EMAIL_API_KEY is not passed to the app (compose.prod.yml)")
+    elif environment["EMAIL_API_KEY"]:
+        errors.append(
+            f"{env}/app: EMAIL_API_KEY renders non-empty from the committed files; the secret key"
+            " belongs only in the server's /opt/focus/<env>/.env"
+        )
     return errors
 
 

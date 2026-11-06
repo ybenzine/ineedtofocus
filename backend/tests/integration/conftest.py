@@ -113,7 +113,8 @@ def make_client(alembic_config: Config, test_db_url: str) -> MakeClient:
     @contextmanager
     def make(**overrides: Any) -> Iterator[TestClient]:
         overrides.setdefault("cookie_secure", False)  # tests talk plain http
-        app = create_app(Settings(database_url=test_db_url, **overrides))
+        email = overrides.pop("email", None)  # an EmailConfig, for the password reset tests
+        app = create_app(Settings(database_url=test_db_url, **overrides), email=email)
 
         # A stand-in for the data endpoints that later issues add (AC1.2, AC1.3).
         router = APIRouter()

@@ -29,6 +29,7 @@ TABLES = {
     "focus_sessions",
     "youtube_recent_links",
     "auth_sessions",
+    "password_reset_tokens",
     "custom_tags",
     "calendar_feeds",
 }

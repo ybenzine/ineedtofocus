@@ -476,3 +476,79 @@ def test_injected_faults_fail_saves_as_errors_and_store_nothing(
         signin = again.post("/api/auth/signin", json={"email": EMAIL, "password": PASSWORD})
         assert signin.status_code == 200
         assert again.post("/api/sessions", json=body).status_code == 201
+
+
+def test_password_reset_telemetry_carries_no_address_token_link_or_password(
+    capsys: pytest.CaptureFixture[str], traced: tuple[TestClient, InMemorySpanExporter]
+) -> None:
+    """AC1.9 (#350): both reset routes leave outcome counts and nothing about the person, in
+    spans, metric labels and logs, including when the sender's error text holds the address."""
+    from app.mailer import EmailConfig
+    from tests.integration.test_password_reset import TOKEN, FakeSender, settle
+
+    c, exporter = traced
+    configure_logging("INFO")  # bind the JSON handler to the captured stdout
+    sender = FakeSender()
+    c.app.state.email = EmailConfig(sender, "https://ineedtofoc.us", None)  # type: ignore[attr-defined]
+    ghost, failing, new_password = (
+        "ghost-person@example.com",
+        "failing-person@example.com",
+        "Q" * 12,
+    )
+    _signed_in(c)
+    assert c.post("/api/auth/signout").status_code == 204
+    signup = c.post("/api/auth/signup", json={"email": failing, "password": PASSWORD})
+    assert signup.status_code == 201
+    assert c.post("/api/auth/signout").status_code == 204
+    names = ("sent", "no_account", "rate_limited", "send_failed")
+    before = {n: _value("auth.password_reset.requests", outcome=n) for n in names}
+    capsys.readouterr()
+    exporter.clear()
+
+    def reset(email: str) -> int:
+        return int(c.post("/api/auth/password-reset", json={"email": email}).status_code)
+
+    assert [reset(EMAIL) for _ in range(4)] == [202, 202, 202, 429]
+    assert reset(ghost) == 202
+    sender.fail = RuntimeError(f"Email address is not verified: {failing}")
+    assert reset(failing) == 202
+    settle(c)
+    token = TOKEN.search(sender.outbox[-1].text)  # the newest link; earlier ones were replaced
+    assert token
+    body = {"token": token[1], "password": new_password}
+    assert c.post("/api/auth/password-reset/confirm", json=body).status_code == 204
+    assert c.post("/api/auth/password-reset/confirm", json=body).status_code == 400
+    assert c.get("/api/auth/options").status_code == 200
+
+    after = {n: _value("auth.password_reset.requests", outcome=n) for n in names}
+    assert {n: after[n] - before[n] for n in names} == {
+        "sent": 3,
+        "no_account": 1,
+        "rate_limited": 1,
+        "send_failed": 1,
+    }
+    for key in _points("auth.password_reset.requests"):
+        assert {k for k, _ in key} == {"outcome"}
+
+    secrets: tuple[str, ...] = (EMAIL, "leaky-person", ghost, "ghost-person", failing)
+    secrets += ("failing-person", token[1], new_password, PASSWORD, "not verified")
+    secrets += ("reset-password#token",)
+    spans = exporter.get_finished_spans()
+    dumped = repr(
+        [
+            (
+                s.name,
+                dict(s.attributes or {}),
+                [(e.name, dict(e.attributes or {})) for e in s.events],
+                (s.status.status_code.name, s.status.description),
+            )
+            for s in spans
+        ]
+    )
+    routes = {(s.attributes or {}).get("http.route") for s in spans if s.kind.name == "SERVER"}
+    assert {"/api/auth/password-reset", "/api/auth/password-reset/confirm"} <= routes
+    out = capsys.readouterr().out
+    assert "password reset email failed" in out  # the failure was logged...
+    for secret in secrets:
+        assert secret not in dumped, secret
+        assert secret not in out, secret  # ...without anything about the person

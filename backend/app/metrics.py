@@ -18,6 +18,10 @@ a time zone or anything else a client sends (_docs/observability.md).
 - `focus.history.loads`: counter, one per request. `outcome` is ok, invalid (bad parameters,
   including FastAPI's own 422) or error.
 - `focus.history.load.duration`: histogram in seconds, like the save duration.
+- `auth.password_reset.requests`: counter, one per password reset request that passed
+  validation and found reset configured (#350). `outcome` is sent, no_account (a metric only;
+  the response is the same), rate_limited or send_failed (the email, or the lookup and token
+  write before it, failed). No user attribute of any kind.
 
 Not counted: requests answered 401 (not signed in) or 429, which never reach a save or a
 load. A failure before the handler (the sign-in lookup failing, a 422) is counted by
@@ -67,12 +71,18 @@ HISTORY_LOAD_DURATION = _meter.create_histogram(
     description="Time to handle a history request",
     explicit_bucket_boundaries_advisory=LATENCY_BUCKETS_S,
 )
+PASSWORD_RESET_REQUESTS = _meter.create_counter(
+    "auth.password_reset.requests",
+    unit="{request}",
+    description="Password reset requests, by outcome",
+)
 
 
 # Every label value the journey counters can carry (the table in _docs/observability.md).
 SAVE_KINDS = ("single", "sync")
 SAVE_OUTCOMES = ("created", "existing", "rejected", "error")
 HISTORY_OUTCOMES = ("ok", "invalid", "error")
+RESET_OUTCOMES = ("sent", "no_account", "rate_limited", "send_failed")
 
 
 def zero_journey_series() -> None:
@@ -90,6 +100,8 @@ def zero_journey_series() -> None:
             SESSION_SAVES.add(0, {"kind": kind, "outcome": outcome})
     for outcome in HISTORY_OUTCOMES:
         HISTORY_LOADS.add(0, {"outcome": outcome})
+    for outcome in RESET_OUTCOMES:
+        PASSWORD_RESET_REQUESTS.add(0, {"outcome": outcome})
 
 
 # Set once `observe` has counted a failure, so the error handlers don't count it again.

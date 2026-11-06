@@ -58,6 +58,15 @@ class ApiError(StarletteHTTPException):
         self.details = details
 
 
+class CodedError(StarletteHTTPException):
+    """An HTTP error with its own machine-readable `code`, where the status alone is too vague
+    (400 `invalid_token`)."""
+
+    def __init__(self, status_code: int, code: str, message: str) -> None:
+        super().__init__(status_code, message)
+        self.code = code
+
+
 def error_body(code: str, message: str, details: Any = None) -> dict[str, Any]:
     body: dict[str, Any] = {"code": code, "message": message}
     if details is not None:
@@ -108,9 +117,10 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(StarletteHTTPException)
     async def http(_: Request, exc: StarletteHTTPException) -> Response:
         details = [d.model_dump() for d in exc.details] if isinstance(exc, ApiError) else None
+        code = exc.code if isinstance(exc, CodedError) else _CODES.get(exc.status_code, "error")
         return JSONResponse(
             status_code=exc.status_code,
-            content=error_body(_CODES.get(exc.status_code, "error"), str(exc.detail), details),
+            content=error_body(code, str(exc.detail), details),
             headers=exc.headers,
         )
 

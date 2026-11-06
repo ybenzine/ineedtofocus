@@ -52,6 +52,13 @@ def env_config(env: str, app: int, db: int, otel: int, oom: int, cpu: int) -> Co
                     "MIGRATE_ON_START": "0",
                     "FAULT_SAVE_ERROR_PERCENT": "0",
                     "FORWARDED_ALLOW_IPS": ip,
+                    "EMAIL_PROVIDER": "ses",
+                    "EMAIL_API_KEY": "",
+                    "EMAIL_AWS_REGION": "us-east-1",
+                    "EMAIL_FROM": "I Need To Focus <no-reply@ineedtofoc.us>",
+                    "APP_BASE_URL": "https://ineedtofoc.us"
+                    if env == "prod"
+                    else "https://dev.ineedtofoc.us",
                 },
                 "networks": {"default": None, "edge": {"aliases": [f"focus-{env}-app"]}},
             },
@@ -179,6 +186,10 @@ def set_env(env: str, key: str, value: str) -> Callable[[dict[str, Config]], Non
     return mutate
 
 
+def drop_email_key(c: dict[str, Config]) -> None:
+    del app(c, "dev")["environment"]["EMAIL_API_KEY"]
+
+
 def drop_limit(c: dict[str, Config]) -> None:
     del c["prod"]["services"]["otel-collector"]["mem_limit"]
 
@@ -298,6 +309,14 @@ def set_key(env: str, name: str, key: str, value: Any) -> Callable[[dict[str, Co
         (set_env("prod", "FAULT_SAVE_ERROR_PERCENT", "25"), "prod/app: FAULT_SAVE_ERROR_PERCENT"),
         (set_env("prod", "FORWARDED_ALLOW_IPS", "*"), "must never be '*'"),
         (set_env("dev", "FORWARDED_ALLOW_IPS", "172.16.20.0/24"), "Caddy's address is 172.16.20.2"),
+        # Password reset by email (#350).
+        (set_env("prod", "EMAIL_PROVIDER", ""), "prod/app: EMAIL_PROVIDER must be ses"),
+        (set_env("dev", "EMAIL_AWS_REGION", ""), "dev/app: EMAIL_AWS_REGION"),
+        (set_env("dev", "EMAIL_FROM", "nobody"), "dev/app: EMAIL_FROM"),
+        (set_env("prod", "APP_BASE_URL", "https://dev.ineedtofoc.us"), "prod/app: APP_BASE_URL"),
+        (set_env("dev", "APP_BASE_URL", "http://dev.ineedtofoc.us"), "dev/app: APP_BASE_URL"),
+        (set_env("prod", "EMAIL_API_KEY", "AKIA:secret"), "prod/app: EMAIL_API_KEY renders non"),
+        (drop_email_key, "dev/app: EMAIL_API_KEY is not passed"),
         (wrong_image, "expected ghcr.io/ybenzine/ineedtofocus:"),
         (shared_edge, "shares edge network"),
         (db_on_edge, "prod/db: only the app may join the edge network"),
