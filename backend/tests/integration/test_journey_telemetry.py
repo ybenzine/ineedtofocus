@@ -508,7 +508,11 @@ def test_password_reset_telemetry_carries_no_address_token_link_or_password(
     def reset(email: str) -> int:
         return int(c.post("/api/auth/password-reset", json={"email": email}).status_code)
 
-    assert [reset(EMAIL) for _ in range(4)] == [202, 202, 202, 429]
+    accepted = []
+    for _ in range(3):
+        accepted.append(reset(EMAIL))
+        settle(c)  # one at a time, so the last email is the newest link
+    assert [*accepted, reset(EMAIL)] == [202, 202, 202, 429]
     assert reset(ghost) == 202
     sender.fail = RuntimeError(f"Email address is not verified: {failing}")
     assert reset(failing) == 202
