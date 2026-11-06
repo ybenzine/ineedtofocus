@@ -13,6 +13,7 @@ import { formatDuration } from '../timerscreen/format.ts'
 import { deviceTimeZone } from '../history/api.ts'
 import { signedInUserId } from '../auth/localData.ts'
 import { icsBlobUrl, isIos, sessionIcsPath } from './download.ts'
+import { useIcsProbe } from './useIcsProbe.ts'
 import {
   buildEvent,
   eventsToIcs,
@@ -108,13 +109,26 @@ export default function AddToCalendar({
     // `now` only stamps the file; a new function each render must not rebuild it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, event, ios])
-  const iosHint = !signedIn
+  const localHint = !signedIn
     ? 'Sign in first'
     : !online
       ? 'Needs a connection'
       : !synced
         ? 'Not synced yet'
         : null
+  // The server must agree before the link is offered (#458): a refusal would leave the installed
+  // app on a JSON page with no way back. The link itself stays a plain tap.
+  const icsPath = sessionIcsPath(session.id, zone)
+  const probe = useIcsProbe(icsPath, open && ios && localHint === null)
+  const iosHint =
+    localHint ??
+    (probe === 'ok'
+      ? null
+      : probe === 'checking'
+        ? 'Checking…'
+        : probe === 'unauthorized'
+          ? 'Sign in again to add this session'
+          : "Can't add this session right now")
   useEffect(() => {
     if (!icsUrl?.startsWith('blob:')) return
     // Freed a while late: the browser may still be reading it after the tap.
@@ -136,6 +150,12 @@ export default function AddToCalendar({
     document.addEventListener('pointerdown', outside)
     return () => document.removeEventListener('pointerdown', outside)
   }, [open])
+
+  // The disabled choice becomes the link when the probe passes; focus it if the swap dropped focus.
+  useEffect(() => {
+    if (open && ios && iosHint === null && document.activeElement === document.body)
+      root.current?.querySelector<HTMLElement>('a[target="_self"]')?.focus()
+  }, [open, ios, iosHint])
 
   useEffect(() => {
     if (open)
@@ -225,14 +245,14 @@ export default function AddToCalendar({
                 <button type="button" aria-disabled="true" aria-describedby={`${id}-ics-hint`}>
                   Apple Calendar / other (.ics)
                 </button>
-                <span id={`${id}-ics-hint`} className="field-hint">
+                <span id={`${id}-ics-hint`} className="field-hint" role="status">
                   {iosHint}
                 </span>
               </>
             ) : (
               <a
                 className="link-button"
-                href={ios ? sessionIcsPath(session.id, zone) : (icsUrl ?? undefined)}
+                href={ios ? icsPath : (icsUrl ?? undefined)}
                 {...(ios ? { target: '_self' } : { download: icsName })}
                 onClick={() => closeAfterNavigation(true)}
               >

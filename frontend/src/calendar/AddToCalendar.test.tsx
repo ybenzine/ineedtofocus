@@ -1,9 +1,9 @@
 // The Add to calendar control (F14, AC14.7): choices, settings applied, offline, keyboard.
 
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cacheUser, forgetCachedUser } from '../auth/localData.ts'
+import { cacheUser, forgetCachedUser, signedInUserId } from '../auth/localData.ts'
 import { SettingsContext } from '../settings/SettingsContext.ts'
 import { SettingsStore } from '../settings/store.ts'
 import { TagsContext } from '../tags/context.ts'
@@ -12,6 +12,7 @@ import { FakeTagsApi } from '../test/fakeTagsApi.ts'
 import SessionSummary from '../timerscreen/SessionSummary.tsx'
 import type { SessionRecord } from '../timer/index.ts'
 import AddToCalendar, { type CalendarSession } from './AddToCalendar.tsx'
+import { PROBE_TIMEOUT_MS, PROBE_VALID_MS } from './useIcsProbe.ts'
 
 const session: CalendarSession = {
   id: '0f6e2b9a-3c1d-4e5f-8a7b-0000000000aa',
@@ -265,6 +266,156 @@ describe('Apple Calendar / other (.ics)', () => {
 
   const ICS = 'Apple Calendar / other (.ics)'
 
+  function stubProbe(status: number | 'network' | 'hang') {
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      if (status === 'network') return Promise.reject(new TypeError('Failed to fetch'))
+      if (status === 'hang')
+        return new Promise<Response>((_resolve, reject) =>
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('', 'AbortError'))),
+        )
+      return Promise.resolve(new Response(null, { status }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    return fetchMock
+  }
+
+  function openIos() {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE)
+    signIn()
+    render(withProviders(<AddToCalendar session={session} timeZone="UTC" synced />))
+    fireEvent.click(screen.getByRole('button', { name: label }))
+  }
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  describe('the server probe (#458)', () => {
+    const PATH = `/api/calendar/session/${session.id}.ics?tz=UTC`
+
+    it('sends a HEAD with credentials and no cache, and disables the choice while it is in flight', async () => {
+      const fetchMock = stubProbe('hang')
+      openIos()
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const [url, init] = fetchMock.mock.calls[0]
+      expect(url).toBe(PATH)
+      expect(init).toMatchObject({ method: 'HEAD', credentials: 'include', cache: 'no-store' })
+      const button = screen.getByRole('button', { name: ICS })
+      expect(button).toHaveAttribute('aria-disabled', 'true')
+      expect(button).toHaveAccessibleDescription('Checking…')
+    })
+
+    it('offers the link on a 200', async () => {
+      stubProbe(200)
+      openIos()
+      expect(await screen.findByRole('link', { name: ICS })).toHaveAttribute('href', PATH)
+    })
+
+    it.each([
+      ['404 (archived or gone)', 404, "Can't add this session right now"],
+      ['5xx', 503, "Can't add this session right now"],
+      ['a network failure', 'network', "Can't add this session right now"],
+      ['401 (sign-in expired)', 401, 'Sign in again to add this session'],
+    ] as const)('keeps the choice disabled on %s, with a hint', async (_n, status, hint) => {
+      stubProbe(status)
+      openIos()
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: ICS })).toHaveAccessibleDescription(hint),
+      )
+      expect(screen.getByRole('button', { name: ICS })).toHaveAttribute('aria-disabled', 'true')
+      expect(screen.queryByRole('link', { name: ICS })).toBeNull()
+    })
+
+    it('does not sign anyone out on a 401', async () => {
+      stubProbe(401)
+      openIos()
+      await screen.findByText('Sign in again to add this session')
+      expect(signedInUserId()).toBe('u1')
+    })
+
+    it('gives up on a hung probe after the timeout', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      stubProbe('hang')
+      openIos()
+      await act(() => vi.advanceTimersByTimeAsync(PROBE_TIMEOUT_MS + 100))
+      expect(screen.getByRole('button', { name: ICS })).toHaveAccessibleDescription(
+        "Can't add this session right now",
+      )
+    })
+
+    it('disables the link when the device goes offline after it opened, and probes again when back', async () => {
+      const fetchMock = stubProbe(200)
+      openIos()
+      await screen.findByRole('link', { name: ICS })
+      setOnline(false)
+      act(() => void window.dispatchEvent(new Event('offline')))
+      expect(screen.queryByRole('link', { name: ICS })).toBeNull()
+      expect(screen.getByRole('button', { name: ICS })).toHaveAccessibleDescription(
+        'Needs a connection',
+      )
+      setOnline(true)
+      act(() => void window.dispatchEvent(new Event('online')))
+      await screen.findByRole('link', { name: ICS })
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('asks again after the answer expires, and the link goes away if the session was archived', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const fetchMock = stubProbe(200)
+      openIos()
+      await screen.findByRole('link', { name: ICS })
+      fetchMock.mockResolvedValue(new Response(null, { status: 404 }))
+      await act(() => vi.advanceTimersByTimeAsync(PROBE_VALID_MS + 100))
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(screen.queryByRole('link', { name: ICS })).toBeNull()
+      expect(screen.getByRole('button', { name: ICS })).toHaveAccessibleDescription(
+        "Can't add this session right now",
+      )
+    })
+
+    it('asks again when the app returns to the foreground', async () => {
+      const fetchMock = stubProbe(200)
+      openIos()
+      await screen.findByRole('link', { name: ICS })
+      act(() => void document.dispatchEvent(new Event('visibilitychange')))
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('probes again on reopening, starting from disabled, and ignores an answer that arrives after closing', async () => {
+      let resolve: (r: Response) => void = () => undefined
+      const fetchMock = vi.fn(() => new Promise<Response>((r) => void (resolve = r)))
+      vi.stubGlobal('fetch', fetchMock)
+      openIos()
+      const toggle = screen.getByRole('button', { name: label })
+      fireEvent.click(toggle) // close
+      await act(async () => resolve(new Response(null, { status: 200 })))
+      fireEvent.click(toggle) // reopen
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      expect(screen.getByRole('button', { name: ICS })).toHaveAccessibleDescription('Checking…')
+    })
+
+    it('sends no probe before the menu opens, nor when the local checks already refuse', async () => {
+      const fetchMock = stubProbe(200)
+      vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE)
+      signIn()
+      render(withProviders(<AddToCalendar session={session} timeZone="UTC" />))
+      expect(fetchMock).not.toHaveBeenCalled()
+      fireEvent.click(screen.getByRole('button', { name: label }))
+      expect(fetchMock).not.toHaveBeenCalled() // not synced
+    })
+
+    it('sends no probe off iOS', () => {
+      const fetchMock = stubProbe(200)
+      vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (X11; Linux x86_64)')
+      capture()
+      signIn()
+      render(withProviders(<AddToCalendar session={session} synced />))
+      fireEvent.click(screen.getByRole('button', { name: label }))
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+  })
+
   function signIn() {
     cacheUser({ id: 'u1', email: 'a@b.co' } as never)
   }
@@ -274,15 +425,17 @@ describe('Apple Calendar / other (.ics)', () => {
     ['the installed Home Screen app', true],
   ])(
     'on iOS in %s is a same-tab link to the server copy, with no download and no blob',
-    (_name, standalone) => {
+    async (_name, standalone) => {
       vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE)
       if (standalone)
         Object.defineProperty(navigator, 'standalone', { value: true, configurable: true })
       signIn()
       const { blobs } = capture()
       const open = vi.spyOn(window, 'open')
+      stubProbe(200)
       render(withProviders(<AddToCalendar session={session} timeZone="Europe/Paris" synced />))
       fireEvent.click(screen.getByRole('button', { name: label }))
+      await screen.findByRole('link', { name: ICS })
       expect(choice()).toHaveAttribute(
         'href',
         `/api/calendar/session/${session.id}.ics?tz=Europe%2FParis`,
@@ -296,11 +449,13 @@ describe('Apple Calendar / other (.ics)', () => {
     },
   )
 
-  it('on iOS uses the device time zone when none is given', () => {
+  it('on iOS uses the device time zone when none is given', async () => {
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(IPHONE)
     signIn()
+    stubProbe(200)
     render(withProviders(<AddToCalendar session={session} synced />))
     fireEvent.click(screen.getByRole('button', { name: label }))
+    await screen.findByRole('link', { name: ICS })
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
     expect(choice().getAttribute('href')).toContain(`?tz=${encodeURIComponent(zone)}`)
   })
