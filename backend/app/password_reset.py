@@ -164,6 +164,18 @@ async def _issue_token(app: Any, email: str) -> str | None:
         if user_id is None:
             return None
         token = new_token()
+        # A new request invalidates earlier links: mark unused ones used, so they stay on record.
+        await db.execute(
+            update(PasswordResetToken)
+            .where(PasswordResetToken.user_id == user_id, PasswordResetToken.used_at.is_(None))
+            .values(used_at=func.now())
+        )
+        # After the UPDATE, so this request already holds its own rows when the cleanup locks
+        # others' old ones. Others can still wait on rows the cleanup locked, but this request
+        # never waits again: the cleanup skips locked rows, the insert has a random key, its
+        # foreign key check is covered by the user lock it holds, and then it commits. A request
+        # that waits for nothing can't be part of a cycle. (With the cleanup first, two requests
+        # could each lock the other's old row and then wait on it in their UPDATE.)
         old = (
             select(PasswordResetToken.token_hash)
             .where(
@@ -174,12 +186,6 @@ async def _issue_token(app: Any, email: str) -> str | None:
             .with_for_update(skip_locked=True)
         )
         await db.execute(delete(PasswordResetToken).where(PasswordResetToken.token_hash.in_(old)))
-        # A new request invalidates earlier links: mark unused ones used, so they stay on record.
-        await db.execute(
-            update(PasswordResetToken)
-            .where(PasswordResetToken.user_id == user_id, PasswordResetToken.used_at.is_(None))
-            .values(used_at=func.now())
-        )
         db.add(
             PasswordResetToken(
                 token_hash=token_hash(token),
