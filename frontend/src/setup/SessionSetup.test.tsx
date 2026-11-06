@@ -375,6 +375,15 @@ describe('SessionSetup Pomodoro', () => {
     })
   })
 
+  it('labels the long break row Duration while the switch is on', () => {
+    setup()
+    chooseMode('Pomodoro')
+    expect(screen.queryByText('Duration')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('switch', { name: /long break/i }))
+    expect(screen.getByText('Duration')).toBeInTheDocument()
+    expect(screen.queryByText('Length')).not.toBeInTheDocument()
+  })
+
   it('shows the long break length row only while the switch is on, typeable and snapping', async () => {
     const { onStart } = setup()
     chooseMode('Pomodoro')
