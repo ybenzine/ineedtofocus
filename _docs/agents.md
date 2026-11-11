@@ -140,14 +140,14 @@ On 2026-11-07 GitHub suspended the agent account `merciful-poseidon` for review 
 
 1. **One GitHub-active session at a time.** Every session shares `merciful-poseidon`, so parallel milestone sessions don't do tracker work at the same time. The cap of 4 agents per session stays.
 2. **Writes run one at a time, at least 1 s apart.** Writes are comments, PRs, labels, edits, merges and pushes. This follows GitHub's own guidance for content-creating requests. Never run writes in parallel. Each step keeps its single comment (start, PR open, done, acceptance), with no extra progress comments.
-3. **No tight polling.** CI takes about 6 to 17 minutes. Wait about 5 minutes before the first check, then check every 2 minutes, at most 10 times. Never use `gh run watch` or `gh pr checks --watch`: their defaults check every 3 s and 10 s.
+3. **No tight polling.** CI takes about 6 to 17 minutes. Wait about 5 minutes before the first check, then check every 2 minutes, at most 10 times. If CI is still running after the 10th check, stop checking and report it as pending: the lead decides what happens next, the loop isn't extended. Never use `gh run watch` or `gh pr checks --watch`: their defaults check every 3 s and 10 s.
 4. **Read once, pass it on.** The lead fetches a PR's or issue's state once and gives the facts (head SHA, CI result) to the subagent in its prompt, so subagents don't fetch them again.
-5. **REST over GraphQL**, except board moves, which only work through GraphQL (one call per step).
+5. **REST over GraphQL**, except board moves, which only work through GraphQL, and the few `gh` commands that only exist over GraphQL, chiefly `gh pr view <pr> --json reviewDecision` (the merge gate). Keep those to one call per step; use REST for everything else.
 6. **On a rate-limit or abuse error, stop.** Honour `Retry-After`, or wait at least 1 minute if there isn't one. Retry once, then report it instead of looping. Skip a board move that keeps failing.
 7. **On a 403 that mentions suspension, stop all GitHub work** and tell Yacine. Never switch to his login or to another account.
 8. **Unattended runs pause between issues.** `/work-backlog` waits about a minute after each merge before starting the next issue.
 
-In practice: put `sleep 1` between two `gh` writes, and make each CI check one REST call, such as `gh api repos/ybenzine/ineedtofocus/commits/<head sha>/check-runs --jq '.check_runs[] | [.name, .status, .conclusion] | @tsv'` for a PR or `gh run view <id> --json status,conclusion` for a workflow run (`gh pr checks` without `--watch` works too, but goes through GraphQL).
+In practice: put `sleep 1` between two `gh` writes, and make each CI check one REST call, such as `gh api repos/ybenzine/ineedtofocus/commits/<head sha>/check-runs --jq '.check_runs[] | [.name, .status, .conclusion] | @tsv'` for a PR or `gh run view <id> --json status,conclusion` for a workflow run (`gh pr checks` without `--watch` works too, but goes through GraphQL). In Claude Code a foreground `sleep` of minutes is blocked, so run the CI wait as one background Bash command (`run_in_background`) or a Monitor, a single loop, and wait for its completion notice rather than reading its output early.
 
 ## Tracker trail
 
