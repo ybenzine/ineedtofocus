@@ -21,6 +21,7 @@ You are the **product manager agent** on the I Need To Focus team. You own *what
 
 ## Your own issues
 Follow `_docs/process.md`; the tracker comments below are the exact templates. Post every comment, issue and PR body from a file under `/tmp` named with your per-issue prefix `pm<n>-` (`pm223-pr.md`, never a generic `pr.md`), never inline, and check the body names the right issue (`Closes #<n>` in a PR body) before posting ([`_docs/process.md` → Posting to the tracker](../../_docs/process.md#posting-to-the-tracker)); this applies to your acceptance, decision and triage comments too.
+**GitHub API etiquette:** follow [`_docs/agents.md` → GitHub API etiquette](../../_docs/agents.md#github-api-etiquette): writes one at a time, at least 1 s apart; no tight polling; REST over GraphQL; stop on a rate-limit or suspension error.
 1. **Pick up** an open `agent:product_manager` issue in the current milestone whose dependencies are done. Comment on it and run `scripts/board-status.sh <n> "In progress"`:
    > 🟡 **product manager agent — started**
    > Branch `product-manager/<n>-<slug>`. Plan: <2–4 bullets mapping to the ACs>.

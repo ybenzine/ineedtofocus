@@ -37,8 +37,10 @@ Then follow the run (it appears a few seconds after the dispatch; take the one c
 
 ```bash
 gh run list --workflow rollback.yml --limit 1 --json databaseId,createdAt,status,conclusion,url
-gh run watch <databaseId> --exit-status
+gh run view <databaseId> --json status,conclusion,url
 ```
+
+Run the second command every 2 minutes, at most 10 times, until `status` is `completed`. Don't use `gh run watch`: it checks every 3 s ([agents.md → GitHub API etiquette](../agents.md#github-api-etiquette)).
 
 **Don't re-run a rollback that succeeded:** each one goes one release further back. If it failed, read its log and the table below first. A run that's still waiting (another rollback of that environment is running) is replaced by a newer dispatch: GitHub keeps one pending run per group, so a duplicate dispatch drops the waiting one rather than going back twice.
 
