@@ -119,12 +119,12 @@ A main Claude Code session acts as the **lead**. The `/work-issue <n>` command (
 
 Independent issues (e.g. a backend API and an unrelated DevOps task) can run in parallel; dependent ones run in order.
 
-**At most 4 agents run at once per session** (#172). On 2026-10-23 eight or more agents running in parallel kept tripping GitHub's secondary GraphQL rate limit and blocked board moves. The `env` block in [`.claude/settings.json`](../.claude/settings.json) enforces the cap in Claude Code itself. The cap of 4 is exact for subagents spawned with the Agent tool. The workflow cap is per workflow run, so subagents plus a running workflow can add up to more than 4.
+**At most 4 agents run at once per session** (#172). On 2026-10-23 eight or more agents running in parallel kept tripping GitHub's secondary GraphQL rate limit and blocked board moves. The cap limits agents, not GitHub calls: how those calls are paced is in [GitHub API etiquette](#github-api-etiquette) below, which wins where the two overlap. The `env` block in [`.claude/settings.json`](../.claude/settings.json) enforces the cap in Claude Code itself. The cap of 4 is exact for subagents spawned with the Agent tool. The workflow cap is per workflow run, so subagents plus a running workflow can add up to more than 4.
 
 - `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=4` (Claude Code v2.1.217 or later): with 4 subagents running, spawning another with the Agent tool fails with `Concurrent subagent limit reached`. The spawn is refused, not queued. When that happens the lead **waits for a running agent to finish** and spawns then; it doesn't retry in a loop.
 - `CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS=4` (Claude Code v2.1.269 or later): a [workflow](https://code.claude.com/docs/en/workflows) run executes at most 4 agents at once and queues the rest. This cap is per workflow run, not per session, and the Claude Code docs say workflow agents follow their own limit rather than the subagent one.
 - Older Claude Code versions don't support these variables, so they don't apply the cap. Check `claude --version`.
-- The cap is per session: two sessions in parallel (one per milestone worktree, [process.md → Parallel sessions](process.md#parallel-sessions-one-worktree-each)) mean at most 8 subagents in total.
+- The cap is per session: two sessions in parallel (one per milestone worktree, [process.md → Parallel sessions](process.md#parallel-sessions-one-worktree-each)) mean at most 8 subagents in total. Only one of them does tracker work at a time ([GitHub API etiquette](#github-api-etiquette), rule 1).
 - Restart a session that started before the change. The docs don't guarantee that a running session picks up the new value.
 
 Documented exceptions ([Claude Code docs → Concurrent subagent limit](https://code.claude.com/docs/en/sub-agents#concurrent-subagent-limit)):
@@ -133,6 +133,21 @@ Documented exceptions ([Claude Code docs → Concurrent subagent limit](https://
 - A `/subtask` fork takes a slot and is never blocked by the limit.
 
 Both can push the count past 4. Sessions with ultracode on don't enforce the subagent limit, though the per-run workflow cap still applies. So don't turn ultracode on (`/effort ultracode`, `claude --effort ultracode` or the `ultracode` setting).
+
+### GitHub API etiquette
+
+On 2026-11-07 GitHub suspended the agent account `merciful-poseidon` for review by its abuse-detection systems, and lifted the suspension on 2026-11-09 without saying what was flagged. In the four minutes before, two agents had made about 20 calls in total (a push, a PR, a comment, some reads and a script checking CI every 30 s), well under GitHub's documented limits. The likely cause is the overall pattern: a young account active almost nonstop for weeks, sometimes from two sessions at once. Yacine approved these rules (#477), trading speed for a lower risk of another flag. Every agent and the lead follow them:
+
+1. **One GitHub-active session at a time.** Every session shares `merciful-poseidon`, so parallel milestone sessions don't do tracker work at the same time. The cap of 4 agents per session stays.
+2. **Writes run one at a time, at least 1 s apart.** Writes are comments, PRs, labels, edits, merges and pushes. This follows GitHub's own guidance for content-creating requests. Never run writes in parallel. Each step keeps its single comment (start, PR open, done, acceptance), with no extra progress comments.
+3. **No tight polling.** CI takes about 6 to 17 minutes. Wait about 5 minutes before the first check, then check every 2 minutes, at most 10 times. If CI is still running after the 10th check, stop checking and report it as pending: the lead decides what happens next, the loop isn't extended. Never use `gh run watch` or `gh pr checks --watch`: their defaults check every 3 s and 10 s.
+4. **Read once, pass it on.** The lead fetches a PR's or issue's state once and gives the facts (head SHA, CI result) to the subagent in its prompt, so subagents don't fetch them again.
+5. **REST over GraphQL**, except board moves, which only work through GraphQL, and the few `gh` commands that only exist over GraphQL, chiefly `gh pr view <pr> --json reviewDecision` (the merge gate). Keep those to one call per step; use REST for everything else.
+6. **On a rate-limit or abuse error, stop.** Honour `Retry-After`, or wait at least 1 minute if there isn't one. Retry once, then report it instead of looping. Skip a board move that keeps failing.
+7. **On a 403 that mentions suspension, stop all GitHub work** and tell Yacine. Never switch to his login or to another account.
+8. **Unattended runs pause between issues.** `/work-backlog` waits about a minute after each merge before starting the next issue.
+
+In practice: put `sleep 1` between two `gh` writes, and make each CI check one REST call, such as `gh api repos/ybenzine/ineedtofocus/commits/<head sha>/check-runs --jq '.check_runs[] | [.name, .status, .conclusion] | @tsv'` for a PR or `gh run view <id> --json status,conclusion` for a workflow run (`gh pr checks` without `--watch` works too, but goes through GraphQL). In Claude Code a foreground `sleep` of minutes is blocked, so run the CI wait as one background Bash command (`run_in_background`) or a Monitor, a single loop, and wait for its completion notice rather than reading its output early.
 
 ## Tracker trail
 

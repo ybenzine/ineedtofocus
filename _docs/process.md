@@ -46,7 +46,7 @@ Never pass a body inline (`--body "…"`, `-b "…"`, `-f body=…`). The permis
 
 ## Parallel sessions: one worktree each
 
-**One git worktree per parallel Claude Code session** (#83). Two sessions never share a folder. A checkout has one current branch and one `.env`, so on 2026-10-23, when M2 and M3 ran in the same folder, the M3 session's `git switch` moved the M2 session's branch too, and both sessions' `make up` drove the same Compose project and ports. Running milestones in parallel (`/work-backlog M2` in one session, `/work-backlog M3` in another) therefore takes one worktree per session, each with its own local stack.
+**One git worktree per parallel Claude Code session** (#83). Two sessions never share a folder. A checkout has one current branch and one `.env`, so on 2026-10-23, when M2 and M3 ran in the same folder, the M3 session's `git switch` moved the M2 session's branch too, and both sessions' `make up` drove the same Compose project and ports. Running milestones in parallel (`/work-backlog M2` in one session, `/work-backlog M3` in another) therefore takes one worktree per session, each with its own local stack. Only one of those sessions does tracker work at a time, since they all share the agent account ([agents.md → GitHub API etiquette](agents.md#github-api-etiquette), rule 1).
 
 **Create it** from the main checkout, in your own terminal (`<name>` names the session, e.g. `m3`):
 
