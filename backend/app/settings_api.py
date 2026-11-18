@@ -498,5 +498,6 @@ async def remove_youtube_link(
                 YoutubeRecentLink.user_id == user.id, YoutubeRecentLink.id.in_(gone)
             )
         )
+    # The commit also releases the advisory lock: keep it even when nothing was deleted.
     await db.commit()
     return await _recent(db, user)
