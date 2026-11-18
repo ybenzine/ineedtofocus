@@ -87,6 +87,7 @@ def test_signed_out_requests_get_401(make_client: MakeClient) -> None:
             ("PATCH", "/api/settings"),
             ("GET", "/api/youtube-links"),
             ("POST", "/api/youtube-links"),
+            ("DELETE", "/api/youtube-links"),
         ]:
             r = c.request(method, path, json={})
             assert r.status_code == 401, (method, path)
@@ -755,3 +756,70 @@ def test_ac12_6_is_per_user_and_in_the_export(make_client: MakeClient) -> None:
         assert b.get("/api/settings").json()["pause_audio_on_breaks"] is True
         assert a.get("/api/account/export").json()["settings"]["pause_audio_on_breaks"] is False
         assert b.get("/api/account/export").json()["settings"]["pause_audio_on_breaks"] is True
+
+
+# --- remove a recent YouTube link (AC8.9) ---
+
+
+def remove(c: TestClient, url: str) -> Any:
+    return c.request("DELETE", "/api/youtube-links", json={"url": url})
+
+
+def test_ac8_9_removes_the_link_and_keeps_the_order_of_the_rest(client: TestClient) -> None:
+    for n in range(4):
+        use(client, link(n))
+    r = remove(client, link(2))
+    assert r.status_code == 200
+    assert [x["url"] for x in r.json()["links"]] == [link(3), link(1), link(0)]
+    assert urls(client) == [link(3), link(1), link(0)]
+    assert use(client, link(2)).json()["links"][0]["url"] == link(2)  # it comes back normally
+
+
+def test_ac8_9_removes_every_row_for_the_id_whatever_the_url(
+    client: TestClient, test_db_url: str
+) -> None:
+    run(
+        _exec(
+            test_db_url,
+            "INSERT INTO youtube_recent_links (user_id, url, last_used_at) "
+            f"SELECT id, u, now() - n * interval '1 minute' FROM users, "
+            f"(VALUES ('https://www.youtube.com/watch?v={ID}', 1), "
+            f"('https://youtu.be/{ID}', 2), "
+            f"('https://m.youtube.com/watch?v={ID}&t=1', 3)) AS v(u, n)",
+        )
+    )
+    use(client, link(1))
+    r = remove(client, f"https://www.youtube.com/shorts/{ID}")
+    assert [x["url"] for x in r.json()["links"]] == [link(1)]
+    assert run(_scalar(test_db_url, "SELECT count(*) FROM youtube_recent_links"))[0][0] == 1
+
+
+def test_ac8_9_only_the_signed_in_users_rows_go(ada: TestClient, bob: TestClient) -> None:
+    use(ada, link(0))
+    use(bob, link(0))
+    use(bob, link(1))
+    assert remove(ada, link(0)).json() == {"links": []}
+    assert urls(bob) == [link(1), link(0)]
+
+
+def test_ac8_9_removing_an_absent_id_is_a_no_op(client: TestClient) -> None:
+    use(client, link(0))
+    before = client.get("/api/youtube-links").json()
+    r = remove(client, link(9))
+    assert r.status_code == 200
+    assert r.json() == before
+    assert remove(client, link(0)).json() == {"links": []}
+    assert remove(client, link(0)).json() == {"links": []}  # again: still 200
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"url": "ftp://youtube.com/x"}, {"url": "https://evil.example/watch?v=x"}, {"url": 5}],
+)
+def test_ac8_9_invalid_input_gets_the_same_422_as_post(client: TestClient, payload: Any) -> None:
+    use(client, link(0))
+    posted = client.post("/api/youtube-links", json=payload)
+    deleted = client.request("DELETE", "/api/youtube-links", json=payload)
+    assert deleted.status_code == posted.status_code == 422
+    assert deleted.json()["error"]["code"] == posted.json()["error"]["code"]
+    assert urls(client) == [link(0)]

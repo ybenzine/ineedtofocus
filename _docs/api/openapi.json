@@ -1423,6 +1423,22 @@
         "title": "YoutubeLinkOut",
         "type": "object"
       },
+      "YoutubeLinkRemoveIn": {
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "description": "Any link to the video or playlist to forget (usually the listed one). Every saved row for the same video or playlist id goes, whatever URL it was saved under.",
+            "maxLength": 2048,
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "title": "YoutubeLinkRemoveIn",
+        "type": "object"
+      },
       "YoutubeLinksOut": {
         "properties": {
           "links": {
@@ -3340,6 +3356,56 @@
       }
     },
     "/api/youtube-links": {
+      "delete": {
+        "description": "Forget a recent link (AC8.9): delete all of the user's rows for the link's video or\nplaylist id, older rows under other URLs included (#249). Idempotent: an id that isn't\nlisted changes nothing. The link travels in the body, not the query string, so it never\nlands in access logs or traces. Returns the updated list.",
+        "operationId": "remove_youtube_link_api_youtube_links_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/YoutubeLinkRemoveIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/YoutubeLinksOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not signed in"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation error"
+          }
+        },
+        "summary": "Remove Youtube Link",
+        "tags": [
+          "settings"
+        ]
+      },
       "get": {
         "description": "The user's 5 most recently used YouTube links, newest first, one per video or\nplaylist id (AC8.6).",
         "operationId": "list_youtube_links_api_youtube_links_get",

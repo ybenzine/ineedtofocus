@@ -164,6 +164,9 @@ def test_no_customer_data_in_any_exported_attribute_event_or_name(
     assert c.post(f"/api/tags/{tag_id}/remove").status_code == 200
     assert c.post("/api/tags", json={"name": TAG_NAME + " 2", "color": "red"}).status_code == 200
     assert c.get("/api/tags").status_code == 200
+    # Recent YouTube links (AC8.6, AC8.9): the link travels in the body, never the URL.
+    assert c.post("/api/youtube-links", json={"url": YOUTUBE, "title": GOAL}).status_code == 200
+    assert c.request("DELETE", "/api/youtube-links", json={"url": YOUTUBE}).status_code == 200
     assert c.get("/api/account/export").status_code == 200
     duplicate = APIRouter()
 
