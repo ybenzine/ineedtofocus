@@ -320,6 +320,17 @@ class YoutubeLinkIn(BaseModel):
     )
 
 
+class YoutubeLinkRemoveIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: YoutubeUrl = Field(
+        description=(
+            "Any link to the video or playlist to forget (usually the listed one). Every saved "
+            "row for the same video or playlist id goes, whatever URL it was saved under."
+        ),
+    )
+
+
 class YoutubeLinkOut(BaseModel):
     url: str
     title: str | None = Field(description="Null until the player has reported one")
@@ -465,5 +476,27 @@ async def use_youtube_link(
             YoutubeRecentLink.user_id == user.id, YoutubeRecentLink.id.not_in(keep)
         )
     )
+    await db.commit()
+    return await _recent(db, user)
+
+
+@router.delete("/youtube-links", responses=_ERRORS)
+async def remove_youtube_link(
+    body: YoutubeLinkRemoveIn, user: CurrentUser, db: DbSession
+) -> YoutubeLinksOut:
+    """Forget a recent link (AC8.9): delete all of the user's rows for the link's video or
+    playlist id, older rows under other URLs included (#249). Idempotent: an id that isn't
+    listed changes nothing. The link travels in the body, not the query string, so it never
+    lands in access logs or traces. Returns the updated list."""
+    # Same per-user lock as POST, so a remove can't interleave with a paste of the same id.
+    await db.execute(select(func.pg_advisory_xact_lock(func.hashtextextended(str(user.id), 0))))
+    key = youtube_key(body.url)
+    gone = [row[0] for row in await _user_rows(db, user) if youtube_key(row[1]) == key]
+    if gone:
+        await db.execute(
+            delete(YoutubeRecentLink).where(
+                YoutubeRecentLink.user_id == user.id, YoutubeRecentLink.id.in_(gone)
+            )
+        )
     await db.commit()
     return await _recent(db, user)
