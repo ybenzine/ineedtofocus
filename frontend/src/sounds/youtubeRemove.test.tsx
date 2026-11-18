@@ -136,6 +136,37 @@ describe('removing a recent YouTube link', () => {
   })
 })
 
+describe('removing the last recent link and the request in flight', () => {
+  it('still announces the removal when the list becomes empty', async () => {
+    setup(async () => [])
+    fireEvent.click(await removeControl(T1))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('list', { name: 'Recent YouTube links' })).not.toBeInTheDocument(),
+    )
+    // The list had two links: the server answered with none.
+    expect(screen.getByText('Removed from your recent links.')).toBeInTheDocument()
+    expect(screen.getByText('Removed from your recent links.')).toHaveAttribute('role', 'status')
+  })
+
+  it('keeps focus on Remove while the request runs and ignores repeat clicks', async () => {
+    let finish: (links: RecentLink[]) => void = () => undefined
+    const api = setup(() => new Promise<RecentLink[]>((resolve) => (finish = resolve)))
+    fireEvent.click(await removeControl(T1))
+    const confirmButton = screen.getByRole('button', { name: 'Remove' })
+    confirmButton.focus()
+    fireEvent.click(confirmButton)
+    fireEvent.click(confirmButton)
+    expect(api.remove).toHaveBeenCalledTimes(1)
+    expect(confirmButton).toHaveAttribute('aria-disabled', 'true')
+    expect(confirmButton).toHaveFocus()
+    fireEvent.keyDown(confirmButton, { key: 'Escape' })
+    expect(screen.getByText(`Remove ${T1} from your recent links?`)).toBeInTheDocument()
+    await act(async () => finish(LINKS.slice(1)))
+    await waitFor(() => expect(screen.queryByRole('button', { name: T1 })).not.toBeInTheDocument())
+  })
+})
+
 describe('httpYoutubeLinksApi.remove', () => {
   it('sends DELETE with the url and reads the updated list', async () => {
     const fetchMock = vi.fn(

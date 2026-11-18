@@ -64,7 +64,8 @@ export default function RecentLinkList({
     }
   })
 
-  if (recent.length === 0) return null
+  // The status and error stay mounted when the last link goes, so they are still announced.
+  if (recent.length === 0 && !onRemove) return null
 
   function cancel(url: string) {
     refocus.current = url
@@ -89,95 +90,104 @@ export default function RecentLinkList({
 
   return (
     <div className="youtube-recent-wrap">
-      <ul className="youtube-recent" aria-label="Recent YouTube links">
-        {recent.map((item) => {
-          const name = item.title ?? item.link.url
-          return (
-            <li key={item.link.url}>
-              {onRemove && removing === item.link.url ? (
-                <div
-                  role="group"
-                  aria-label={`Remove ${name}`}
-                  className="youtube-recent-confirm"
-                  onKeyDown={(event) => {
-                    if (event.key === 'Escape' && !busy) {
-                      event.stopPropagation()
-                      cancel(item.link.url)
-                    }
-                  }}
-                >
-                  <p>Remove {name} from your recent links?</p>
-                  <div className="tag-actions">
-                    <button
-                      type="button"
-                      autoFocus
-                      disabled={busy}
-                      onClick={() => cancel(item.link.url)}
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      className="primary"
-                      disabled={busy}
-                      onClick={() => void confirm(item)}
-                    >
-                      Remove
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="youtube-recent-row">
-                  <button
-                    type="button"
-                    className="secondary"
-                    aria-pressed={
-                      selectedUrl === undefined ? undefined : selectedUrl === item.link.url
-                    }
-                    onClick={() => onChoose(item.link)}
+      {recent.length > 0 && (
+        <ul className="youtube-recent" aria-label="Recent YouTube links">
+          {recent.map((item) => {
+            const name = item.title ?? item.link.url
+            return (
+              <li key={item.link.url}>
+                {onRemove && removing === item.link.url ? (
+                  <div
+                    role="group"
+                    aria-label={`Remove ${name}`}
+                    className="youtube-recent-confirm"
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        // Escape never reaches the sheet from here; while the request runs it waits.
+                        event.stopPropagation()
+                        if (!busy) cancel(item.link.url)
+                      }
+                    }}
                   >
-                    <YoutubeLabel
-                      kind={item.link.target.kind}
-                      title={item.title}
-                      showIcon={showIcon}
-                    />
-                  </button>
-                  {onRemove && (
+                    <p>Remove {name} from your recent links?</p>
+                    <div className="tag-actions">
+                      <button
+                        type="button"
+                        autoFocus
+                        aria-disabled={busy || undefined}
+                        onClick={() => {
+                          if (!busy) cancel(item.link.url)
+                        }}
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        className="primary"
+                        aria-disabled={busy || undefined}
+                        onClick={() => {
+                          if (!busy) void confirm(item)
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="youtube-recent-row">
                     <button
                       type="button"
-                      className="youtube-recent-remove"
-                      aria-label={`Remove ${name} from recent links`}
-                      aria-describedby={online ? undefined : `${id}-offline`}
-                      disabled={!online}
-                      ref={(node) => {
-                        if (node) removeButtons.current.set(item.link.url, node)
-                        else removeButtons.current.delete(item.link.url)
-                      }}
-                      onClick={() => {
-                        setMessage(null)
-                        setRemoving(item.link.url)
-                      }}
+                      className="secondary"
+                      aria-pressed={
+                        selectedUrl === undefined ? undefined : selectedUrl === item.link.url
+                      }
+                      onClick={() => onChoose(item.link)}
                     >
-                      <X />
+                      <YoutubeLabel
+                        kind={item.link.target.kind}
+                        title={item.title}
+                        showIcon={showIcon}
+                      />
                     </button>
-                  )}
-                </div>
-              )}
-            </li>
-          )
-        })}
-      </ul>
+                    {onRemove && (
+                      <button
+                        type="button"
+                        className="youtube-recent-remove"
+                        aria-label={`Remove ${name} from recent links`}
+                        aria-describedby={online ? undefined : `${id}-offline`}
+                        disabled={!online}
+                        ref={(node) => {
+                          if (node) removeButtons.current.set(item.link.url, node)
+                          else removeButtons.current.delete(item.link.url)
+                        }}
+                        onClick={() => {
+                          setMessage(null)
+                          setRemoving(item.link.url)
+                        }}
+                      >
+                        <X />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
       {onRemove && !online && (
         <p id={`${id}-offline`} className="field-hint">
           {REMOVE_OFFLINE_HINT}
         </p>
       )}
-      <p
-        role={message?.kind === 'error' ? 'alert' : 'status'}
-        className={message?.kind === 'error' ? 'field-hint field-error' : 'field-hint'}
-      >
-        {message?.text ?? ''}
+      <p role="status" className="field-hint">
+        {message?.kind === 'status' ? message.text : ''}
       </p>
+      {message?.kind === 'error' && (
+        <p role="alert" className="field-hint field-error">
+          {message.text}
+        </p>
+      )}
     </div>
   )
 }

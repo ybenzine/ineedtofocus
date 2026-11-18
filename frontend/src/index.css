@@ -2364,11 +2364,20 @@ main.setup-screen:has(~ .tab-bar) {
    target beside the link, never part of it. */
 .youtube-recent-wrap {
   display: grid;
-  gap: 0.5rem;
 }
 
 .youtube-recent-wrap p {
   margin: 0;
+}
+
+/* A message only takes room once it has text, so the status region can stay mounted. */
+.youtube-recent-wrap > p:not(:empty) {
+  margin-top: 0.5rem;
+}
+
+.youtube-recent-confirm button[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .youtube-recent-row {
