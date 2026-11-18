@@ -41,6 +41,9 @@ export default defineConfig({
         scope: '/',
         display: 'standalone',
         orientation: 'any',
+        // Kept at the app's dark --bg after the logo change (#491): it is the splash backdrop behind
+        // the indigo icon (white mark on #8188ff..#3b3fc4, strong contrast) and the title bar, which
+        // stays seamless with the dark header. The page's own <meta theme-color> follows the theme.
         background_color: '#11112a',
         theme_color: '#11112a',
         icons: [

@@ -566,16 +566,31 @@ main > p {
 
 .wordmark svg {
   flex: none;
+}
+
+/* The mark (#491): an accent tile with the arc, track and dot in the page background, so it
+   follows the theme (the tile is 6.5:1 or better against the mark in both themes). */
+.wordmark-tile {
+  fill: var(--accent);
+}
+
+.wordmark-track,
+.wordmark-arc {
+  fill: none;
+  stroke: var(--bg);
   stroke-width: 2.5;
-  stroke-linecap: round;
 }
 
 .wordmark-track {
-  stroke: var(--border);
+  stroke-opacity: 0.35;
 }
 
 .wordmark-arc {
-  stroke: var(--accent);
+  stroke-linecap: round;
+}
+
+.wordmark-dot {
+  fill: var(--bg);
 }
 
 /* The Log in link or the account button, at the header's right end. */

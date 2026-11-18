@@ -32,9 +32,12 @@ export default function AppShell({
       <header className="app-header">
         <div className="app-header-inner">
           <div className="wordmark">
-            <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none">
-              <circle className="wordmark-track" cx="12" cy="12" r="9" />
-              <path className="wordmark-arc" d="M12 3a9 9 0 0 1 9 9" />
+            {/* The mark (#491): built from scripts/brand-mark.mjs header(); the test keeps them equal. */}
+            <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24">
+              <rect className="wordmark-tile" width="24" height="24" rx="6" />
+              <circle className="wordmark-track" cx="12" cy="12" r="6.6" />
+              <path className="wordmark-arc" d="M12 5.4A6.6 6.6 0 1 1 5.4 12" />
+              <circle className="wordmark-dot" cx="12" cy="12" r="1.9" />
             </svg>
             <span>I Need To Focus</span>
           </div>

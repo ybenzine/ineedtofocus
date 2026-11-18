@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AnonymousContext, type AnonymousUse } from '../anonymous/AnonymousContext.ts'
 import { AccountContext } from '../auth/AccountContext.tsx'
 import { LocalActiveSessionStore, TimerController } from '../timer/index.ts'
+import { header } from '../../scripts/brand-mark.mjs'
 import AppShell from './AppShell.tsx'
 import { WIDE_QUERY } from './useWideScreen.ts'
 
@@ -75,6 +76,21 @@ describe('header (#406)', () => {
     fireEvent.click(within(header).getByRole('link', { name: 'Log in' }))
     expect(anonymous.openForm).toHaveBeenCalledWith('signin', 'screen')
     expect(screen.queryByRole('heading', { name: 'I Need To Focus' })).not.toBeInTheDocument()
+  })
+
+  it('draws the mark from the one source in scripts/brand-mark.mjs, hidden from screen readers (#491)', () => {
+    renderShell({ anonymous: true })
+    const svg = screen.getByRole('banner').querySelector('.wordmark svg')
+    expect(svg?.getAttribute('aria-hidden')).toBe('true')
+    const source = new DOMParser()
+      .parseFromString(header({ tile: 'var(--accent)', fg: 'var(--bg)' }), 'image/svg+xml')
+      .querySelector('svg')
+    const geometry = (root: Element | null | undefined) =>
+      Array.from(root?.children ?? []).map((el) =>
+        ['width', 'height', 'rx', 'cx', 'cy', 'r', 'd'].map((a) => el.getAttribute(a)).join('|'),
+      )
+    expect(svg?.getAttribute('viewBox')).toBe(source?.getAttribute('viewBox'))
+    expect(geometry(svg)).toEqual(geometry(source))
   })
 
   it('shows an account button labelled with the email and its first letter', () => {
