@@ -20,6 +20,7 @@ function fakeApi(links: RecentLink[] = []) {
   return {
     list: vi.fn(async () => links),
     use: vi.fn(async (url: string, title?: string) => [{ url, title: title ?? null }]),
+    remove: vi.fn(async (): Promise<RecentLink[]> => []),
   }
 }
 

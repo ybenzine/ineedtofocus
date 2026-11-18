@@ -2359,3 +2359,51 @@ main.setup-screen:has(~ .tab-bar) {
 .app-notice:empty {
   display: none;
 }
+
+/* A recent YouTube link and its remove control (AC8.9, #490): the control is a separate 44 px
+   target beside the link, never part of it. */
+.youtube-recent-wrap {
+  display: grid;
+}
+
+.youtube-recent-wrap p {
+  margin: 0;
+}
+
+/* A message only takes room once it has text, so the status region can stay mounted. */
+.youtube-recent-wrap > p:not(:empty) {
+  margin-top: 0.5rem;
+}
+
+.youtube-recent-confirm button[aria-disabled='true'] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.youtube-recent-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.youtube-recent-row > .secondary {
+  flex: 1;
+  min-width: 0;
+}
+
+.youtube-recent-remove {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.youtube-recent-confirm {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--control-border);
+  border-radius: 0.5rem;
+  overflow-wrap: anywhere;
+}

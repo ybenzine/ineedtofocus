@@ -174,7 +174,7 @@ test('YouTube is chosen on New session: Start waits for a link, a recent link is
   await expect(page.locator('nav.tab-bar')).toBeVisible()
   await expectNoSidewaysScroll(page)
 
-  await page.getByRole('button', { name: 'A video that was played before' }).click()
+  await page.getByRole('button', { name: 'A video that was played before', exact: true }).click()
   await closeSheet(page)
   await expect(start).toBeEnabled()
   await start.click()
@@ -202,4 +202,42 @@ test('YouTube is chosen on New session: Start waits for a link, a recent link is
   expect(await page.evaluate(() => localStorage.getItem('ineedtofocus.youtubeLink'))).toBe(
     'https://youtu.be/aqz-KE-bpKQ',
   )
+})
+
+test('a recent YouTube link is removed after a confirm, on a phone, and stays gone after a reload', async ({
+  page,
+}) => {
+  await installClock(page)
+  await signUp(page, newEmail())
+  await seedRecentYoutubeLink(page, 'https://youtu.be/aqz-KE-bpKQ', 'First video')
+  await seedRecentYoutubeLink(page, 'https://youtu.be/dQw4w9WgXcQ', 'Second video')
+  await page.setViewportSize({ width: 360, height: 740 })
+
+  await pickSound(page, 'YouTube')
+  const remove = page.getByRole('button', { name: 'Remove First video from recent links' })
+  const first = page.getByRole('button', { name: 'First video', exact: true })
+  await expect(page.getByRole('button', { name: 'Second video', exact: true })).toBeVisible()
+  // The control is its own 44 px target and the row stays inside the phone's width.
+  const box = await remove.boundingBox()
+  expect(box?.width).toBeGreaterThanOrEqual(44)
+  expect(box?.height).toBeGreaterThanOrEqual(44)
+  await expectNoSidewaysScroll(page)
+
+  // Escape changes nothing and gives focus back to the control.
+  await remove.click()
+  await expect(page.getByText('Remove First video from your recent links?')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Cancel' })).toBeFocused()
+  await page.keyboard.press('Escape')
+  await expect(remove).toBeFocused()
+  await expect(first).toBeVisible()
+
+  // Remove drops it from the list; it stays gone after a reload.
+  await remove.click()
+  await page.getByRole('button', { name: 'Remove', exact: true }).click()
+  await expect(first).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Second video', exact: true })).toBeVisible()
+  await page.reload()
+  await pickSound(page, 'YouTube')
+  await expect(page.getByRole('button', { name: 'Second video', exact: true })).toBeVisible()
+  await expect(first).toHaveCount(0)
 })

@@ -572,7 +572,11 @@ describe('the YouTube audio card (#359)', () => {
     linkStore.save('https://youtu.be/dQw4w9WgXcQ')
     const playing = { url: 'https://youtu.be/dQw4w9WgXcQ', title: 'Quiet piano' }
     const other = { url: 'https://youtu.be/aqz-KE-bpKQ', title: 'Soft rain' }
-    const api = { list: async () => [playing, other], use: async () => [playing, other] }
+    const api = {
+      list: async () => [playing, other],
+      use: async () => [playing, other],
+      remove: async () => [],
+    }
     render(
       <SettingsContext.Provider value={settings}>
         <TimerScreen

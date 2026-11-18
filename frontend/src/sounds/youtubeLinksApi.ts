@@ -1,4 +1,4 @@
-// The recent YouTube links (AC8.6): GET and POST /api/youtube-links. Failures are quiet: the
+// The recent YouTube links (AC8.6): GET, POST and DELETE /api/youtube-links. Failures are quiet: the
 // session and the player never depend on the list. Links and titles are never logged.
 
 export interface RecentLink {
@@ -14,6 +14,8 @@ export interface YoutubeLinksApi {
    * the player knows it; without one the server keeps the title it has.
    */
   use(url: string, title?: string): Promise<RecentLink[]>
+  /** Removes a listed link (every row for its video or playlist) and returns the updated list. */
+  remove(url: string): Promise<RecentLink[]>
 }
 
 /** The server's cap on a title; the player's can be longer. */
@@ -31,7 +33,7 @@ function readLinks(body: unknown): RecentLink[] {
 }
 
 async function call(
-  method: 'GET' | 'POST',
+  method: 'GET' | 'POST' | 'DELETE',
   payload?: { url: string; title?: string },
   signal?: AbortSignal,
 ): Promise<RecentLink[]> {
@@ -54,4 +56,5 @@ export const httpYoutubeLinksApi: YoutubeLinksApi = {
       title === undefined ? undefined : Array.from(title).slice(0, TITLE_SEND_MAX).join('')
     return call('POST', sent ? { url, title: sent } : { url })
   },
+  remove: (url) => call('DELETE', { url }),
 }
