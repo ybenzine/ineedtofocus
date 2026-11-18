@@ -80,3 +80,20 @@ previews (AC5.3) play the same files.
 | `@fontsource-variable/inter` (npm), `inter-latin-wght-normal.woff2` | The app's text (Inter, 400-700, tabular figures for times) | [Inter](https://rsms.me/inter/) by Rasmus Andersson, packaged by Fontsource | SIL Open Font License 1.1 |
 
 `frontend/src/index.css` loads only the Latin subset through its own `@font-face`; the service worker precaches the `.woff2`. Other scripts fall back to `system-ui`.
+
+## Logo and app icons (#491)
+
+One mark everywhere: a three-quarter progress arc with a round cap over a dim track ring and a centre dot (the timer dial in miniature), white on an indigo gradient tile (`#8188ff` to `#3b3fc4`). "Variation D", picked by Yacine from four designs in #491.
+
+| File                                                                                                | Used for                                                                                     |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `frontend/public/favicon.svg`                                                                       | Browser tab (32 px viewBox, rounded tile)                                                    |
+| `frontend/public/icons/icon-192.png`, `icon-512.png`                                                | Manifest icons, purpose `any`                                                                |
+| `frontend/public/icons/maskable-512.png`                                                            | Manifest icon, purpose `maskable` (mark scaled to 90 %, inside the 80 % safe circle)         |
+| `frontend/public/icons/apple-touch-icon.png`                                                        | iOS home screen, 180 px, opaque (no alpha channel)                                           |
+| Header mark in `frontend/src/nav/AppShell.tsx` (`.wordmark-*` in `index.css`), 22 px, `aria-hidden` | Rounded tile in the theme's `--accent` with the mark in `--bg`, so it follows light and dark |
+
+- **Source:** `frontend/scripts/brand-mark.mjs` is the one source (geometry and colours). The favicon and the PNGs are generated from it; the header copy in `AppShell.tsx` is checked against it by a test (`src/nav/AppShell.test.tsx`), and `src/brand-assets.test.ts` checks the favicon, the PNG sizes and the opaque apple icon.
+- **Regenerate:** from `frontend/`, `npm run icons` (`scripts/make-icons.mjs`). It renders the SVGs with the Chromium that Playwright already installs (`npx playwright install chromium` once), so no extra system tool. Commit the changed files.
+- **Made by and license:** made for this project by Claude for Yacine in #491; owned by the project, no third-party material. The other three designs and the review sheets are not shipped.
+- **Manifest colours:** `background_color` and `theme_color` stay `#11112a`, the app's dark background. See the comment in `frontend/vite.config.ts`.
