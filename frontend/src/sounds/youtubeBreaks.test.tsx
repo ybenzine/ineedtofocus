@@ -53,7 +53,7 @@ async function setup(options: { pause?: boolean; ready?: boolean; initial?: Stat
   })
   const linkStore = new MemoryYoutubeLinkStore()
   linkStore.save(`https://youtu.be/${ID}`)
-  const api = { list: async () => [], use: async () => [] }
+  const api = { list: async () => [], use: async () => [], remove: async () => [] }
   const view = (state: State) => (
     <SettingsContext.Provider value={settings}>
       <AudioControls

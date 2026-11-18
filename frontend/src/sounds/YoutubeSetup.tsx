@@ -3,10 +3,11 @@
 // messages as the timer screen say what is wrong with one that won't (AC8.5). The video only
 // plays once the session is running, in the timer screen's visible player (F8.4).
 
-import { useId, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { checkYoutubeLink } from './youtubeLink.ts'
 import { httpYoutubeLinksApi, type YoutubeLinksApi } from './youtubeLinksApi.ts'
 import RecentLinkList from './RecentLinkList.tsx'
+import { useOnline } from './useOnline.ts'
 import { linkErrorMessage, useRecentLinks } from './youtubeRecent.ts'
 
 export const YOUTUBE_HINT = 'Paste a YouTube link, or pick a recent one, to start.'
@@ -26,7 +27,9 @@ export default function YoutubeSetup({
   api = httpYoutubeLinksApi,
 }: YoutubeSetupProps) {
   const inputId = useId()
-  const { recent } = useRecentLinks(api)
+  const { recent, remove } = useRecentLinks(api)
+  const online = useOnline()
+  const input = useRef<HTMLInputElement>(null)
   // A half-typed link isn't an error yet: the message waits until the field is left.
   const [touched, setTouched] = useState(false)
   const result = text.trim() === '' ? null : checkYoutubeLink(text)
@@ -39,6 +42,7 @@ export default function YoutubeSetup({
         <label htmlFor={inputId}>YouTube link</label>
         <input
           id={inputId}
+          ref={input}
           type="text"
           inputMode="url"
           autoComplete="off"
@@ -64,6 +68,9 @@ export default function YoutubeSetup({
       <RecentLinkList
         recent={recent}
         selectedUrl={chosenUrl ?? ''}
+        online={online}
+        onRemove={(link) => remove(link.url)}
+        onRemoved={() => input.current?.focus()}
         onChoose={(link) => {
           onTextChange(link.url)
           setTouched(false)

@@ -6,4 +6,5 @@ import type { YoutubeLinksApi } from '../sounds/youtubeLinksApi.ts'
 export const anonymousYoutubeApi: YoutubeLinksApi = {
   list: () => Promise.resolve([]),
   use: () => Promise.resolve([]),
+  remove: () => Promise.resolve([]),
 }

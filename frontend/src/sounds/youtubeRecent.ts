@@ -47,7 +47,7 @@ export function savedTitle(recent: RecentItem[], link: YoutubeLink): string | nu
   )
 }
 
-/** The recent links, loaded on mount. `remember` marks a link used and refreshes the list. */
+/** The recent links, loaded on mount. `remember` marks a link used and refreshes the list; `remove` drops one (AC8.9). */
 export function useRecentLinks(api: YoutubeLinksApi) {
   const [recent, setRecent] = useState<RecentItem[]>([])
   // Set once a link has been used: a slower first fetch must not overwrite that newer list.
@@ -78,5 +78,20 @@ export function useRecentLinks(api: YoutubeLinksApi) {
     [api],
   )
 
-  return { recent, remember }
+  // Removing needs the server's answer: the list changes only once it has come back (AC8.9).
+  const remove = useCallback(
+    async (url: string): Promise<boolean> => {
+      try {
+        const items = await api.remove(url)
+        usedSinceMount.current = true
+        setRecent(listRecent(items))
+        return true
+      } catch {
+        return false
+      }
+    },
+    [api],
+  )
+
+  return { recent, remember, remove }
 }

@@ -75,6 +75,7 @@ function setup(
   const api = {
     list: vi.fn(options.list ?? (async () => saved)),
     use: vi.fn(async (url: string, title?: string) => [{ url, title: title ?? null }, ...saved]),
+    remove: vi.fn(async () => []),
   }
   const settings = new SettingsStore()
   const levels = options.levels ?? new SoundLevelsStore()

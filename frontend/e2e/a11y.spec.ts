@@ -143,7 +143,7 @@ for (const scheme of SCHEMES) {
         await page.getByRole('radio', { name: source }).check()
         if (source === 'YouTube') {
           // The recent link carries a trimmed title; its full text is the accessible name.
-          await expect(page.getByRole('button', { name: LONG_TITLE })).toBeVisible()
+          await expect(page.getByRole('button', { name: LONG_TITLE, exact: true })).toBeVisible()
         }
         await expectNoSeriousViolations(page)
       }
@@ -279,7 +279,7 @@ async function visitEveryScreen(
   await page.getByRole('radio', { name: 'Pomodoro' }).check()
   await check('setup, Pomodoro')
   await pickSound(page, 'YouTube')
-  await expect(page.getByRole('button', { name: LONG_TITLE })).toBeVisible()
+  await expect(page.getByRole('button', { name: LONG_TITLE, exact: true })).toBeVisible()
   await check('setup, YouTube')
   await page.getByRole('radio', { name: 'None' }).check()
   await closeSheet(page)
