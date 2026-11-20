@@ -784,22 +784,79 @@ main:has(~ .tab-bar) {
   gap: 1rem;
 }
 
-.settings > section {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  padding: 1rem;
+.settings-section {
+  min-width: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 1rem;
 }
 
-.settings > section h2 {
-  flex-basis: 100%;
+.settings-section > h2 {
+  margin: 0;
   font-size: 1rem;
 }
 
-.settings > section label {
+.settings-section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 1rem;
+  background: none;
+  border: 0;
+  border-radius: 1rem;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-align: start;
+  cursor: pointer;
+}
+
+/* A chevron drawn with borders (not colour alone): points down when open, right when closed. */
+.settings-section-chevron {
+  flex: none;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+}
+
+.settings-section-toggle[aria-expanded='true'] .settings-section-chevron {
+  transform: rotate(45deg);
+}
+
+.settings-section-body {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  padding: 0 1rem 1rem;
+}
+
+.settings-section-body[hidden] {
+  display: none;
+}
+
+/* Inside a section the controls are not cards of their own. */
+.settings .settings-section .field,
+.settings .settings-section .tags-section,
+.settings .settings-section .account-section {
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.sound-preview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.sound-preview label {
   flex-basis: 100%;
   font-size: 0.9375rem;
   color: var(--muted);

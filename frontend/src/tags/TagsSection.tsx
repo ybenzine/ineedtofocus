@@ -77,7 +77,7 @@ interface Message {
   text: string
 }
 
-export default function TagsSection() {
+export default function TagsSection({ embedded = false }: { embedded?: boolean }) {
   const store = useTagsStore()
   const anonymous = useAnonymous() !== null
   const { tags } = useTagsState()
@@ -101,8 +101,11 @@ export default function TagsSection() {
 
   if (anonymous) {
     return (
-      <div role="region" className="tags-section" aria-labelledby={`${id}-title`}>
-        <h2 id={`${id}-title`}>Tags</h2>
+      <div
+        className="tags-section"
+        {...(embedded ? {} : { role: 'region', 'aria-labelledby': `${id}-title` })}
+      >
+        {!embedded && <h2 id={`${id}-title`}>Tags</h2>}
         <BuiltinTags tags={builtin} />
         <p className="field-hint">{BUILTIN_NOTE}</p>
         <p className="field-hint">
@@ -194,8 +197,11 @@ export default function TagsSection() {
   }
 
   return (
-    <div role="region" className="tags-section" aria-labelledby={`${id}-title`}>
-      <h2 id={`${id}-title`}>Tags</h2>
+    <div
+      className="tags-section"
+      {...(embedded ? {} : { role: 'region', 'aria-labelledby': `${id}-title` })}
+    >
+      {!embedded && <h2 id={`${id}-title`}>Tags</h2>}
       <BuiltinTags tags={builtin} />
       <p className="field-hint">{BUILTIN_NOTE}</p>
 

@@ -215,3 +215,9 @@ export async function seedRecentYoutubeLink(page: Page, url: string, title: stri
   const response = await page.request.post('/api/youtube-links', { data: { url, title } })
   expect(response.ok()).toBe(true)
 }
+
+/** Opens a Settings section (#495) if it is closed; Tags, Calendar and Account start closed. */
+export async function openSection(page: Page, name: string): Promise<void> {
+  const toggle = page.getByRole('heading', { level: 2, name, exact: true }).getByRole('button')
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+}

@@ -1,5 +1,5 @@
 // Preview buttons and the alert volume slider (AC5.2, AC5.3). Reusable: the Settings screen
-// (#22) places it. The volume is the alert volume only, separate from background audio.
+// (#22) places it inside its Audio section (no card or heading of its own). The volume is the alert volume only, separate from background audio.
 
 import { useId, useState } from 'react'
 import { onAppleMobile, SETTINGS_SILENT_HINT } from './appleMobile.ts'
@@ -26,8 +26,7 @@ export default function SoundPreview({ player, volume }: SoundPreviewProps) {
   }
 
   return (
-    <section aria-labelledby="alert-sounds-heading">
-      <h2 id="alert-sounds-heading">Alert sounds</h2>
+    <div className="sound-preview">
       <label>
         Alert volume
         <RangeInput
@@ -62,6 +61,6 @@ export default function SoundPreview({ player, volume }: SoundPreviewProps) {
           {SETTINGS_SILENT_HINT}
         </p>
       )}
-    </section>
+    </div>
   )
 }

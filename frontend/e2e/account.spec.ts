@@ -5,6 +5,7 @@ import {
   installClock,
   newEmail,
   openScreen,
+  openSection,
   PASSWORD,
   serverSessionCount,
   signUp,
@@ -24,7 +25,8 @@ test('export contains the session, deleting the account signs the device out, th
 
   await page.getByRole('button', { name: 'New session' }).click()
   await openScreen(page, 'Settings')
-  const account = page.getByRole('group', { name: 'Account' })
+  await openSection(page, 'Account')
+  const account = page.getByRole('region', { name: 'Account' })
 
   // Export: the downloaded JSON holds the session.
   const downloading = page.waitForEvent('download')

@@ -7,6 +7,7 @@ import {
   newEmail,
   openHistoryFromSummary,
   openScreen,
+  openSection,
   openSheet,
   pickTag,
   signUp,
@@ -36,6 +37,7 @@ test('create a tag, use it, rename it, remove it and bring it back by name', asy
 
   // Create "Deep work" in Teal.
   await openScreen(page, 'Settings')
+  await openSection(page, 'Tags')
   await addTag(page, 'Deep work', 'Teal')
   await expect(page.getByRole('list', { name: 'Your tags' })).toContainText('Deep work')
 
@@ -62,6 +64,7 @@ test('create a tag, use it, rename it, remove it and bring it back by name', asy
 
   // Rename to "Writing": the session shows the new name.
   await openScreen(page, 'Settings')
+  await openSection(page, 'Tags')
   await tagsSection(page).getByRole('button', { name: 'Rename Deep work' }).click()
   await tagsSection(page).getByLabel('New name for Deep work').fill('Writing')
   await tagsSection(page).getByRole('button', { name: 'Save' }).click()
@@ -71,6 +74,7 @@ test('create a tag, use it, rename it, remove it and bring it back by name', asy
 
   // Remove it: gone from the setup picker, still on the session and in the filter as "(removed)".
   await openScreen(page, 'Settings')
+  await openSection(page, 'Tags')
   await tagsSection(page).getByRole('button', { name: 'Remove Writing' }).click()
   await expect(tagsSection(page)).toContainText(
     'Remove Writing? It leaves the tag picker. Sessions that have it keep it.',
@@ -86,6 +90,7 @@ test('create a tag, use it, rename it, remove it and bring it back by name', asy
 
   // Add "writing" in Red: the removed tag is back with its stored name, in Red, on the session too.
   await openScreen(page, 'Settings')
+  await openSection(page, 'Tags')
   await addTag(page, 'writing', 'Red')
   await expect(tagsSection(page).getByRole('list', { name: 'Your tags' })).toContainText('Writing')
   await openScreen(page, 'History')
@@ -112,6 +117,7 @@ test('a tag made on one device shows on another after a reload, and offline hide
   const email = newEmail()
   await signUp(page, email)
   await openScreen(page, 'Settings')
+  await openSection(page, 'Tags')
   await addTag(page, 'Deep work', 'Teal')
 
   const other = await browser.newContext()
@@ -128,7 +134,7 @@ test('a tag made on one device shows on another after a reload, and offline hide
   // Offline: the list stays, the controls go.
   await page.context().setOffline(true)
   await expect(tagsSection(page).getByText('Changing tags needs a connection.')).toBeVisible()
-  await expect(tagsSection(page).getByRole('button')).toHaveCount(0)
+  await expect(tagsSection(page).locator('.tags-section').getByRole('button')).toHaveCount(0)
   await expect(tagsSection(page)).toContainText('Deep work')
   await page.context().setOffline(false)
   await expect(tagsSection(page).getByLabel('Tag name')).toBeVisible()
@@ -147,6 +153,7 @@ test('guest mode shows only the built-in tags and no /api/tags call', async ({ p
   await expect(page.getByRole('link', { name: 'Manage tags' })).toHaveCount(0)
   await closeSheet(page)
   await openScreen(page, 'Settings')
+  await openSection(page, 'Tags')
   await expect(tagsSection(page)).toContainText('Create an account or log in to add your own tags.')
   await expect(tagsSection(page).getByRole('link', { name: 'Create an account' })).toHaveAttribute(
     'href',
@@ -164,6 +171,7 @@ for (const scheme of ['dark', 'light'] as const) {
       await installClock(page)
       await signUp(page, newEmail())
       await openScreen(page, 'Settings')
+      await openSection(page, 'Tags')
       await addTag(page, name, 'Pink')
       await expectNoSidewaysScroll(page)
       const audit = async () => {

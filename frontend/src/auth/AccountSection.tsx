@@ -69,9 +69,12 @@ function download({ blob, filename }: { blob: Blob; filename: string }) {
 export default function AccountSection({
   api = httpAccountApi,
   controller,
+  embedded = false,
 }: {
   api?: AccountApi
   controller?: TimerController
+  /** Inside a Settings section, which supplies the heading and the group. */
+  embedded?: boolean
 }) {
   const account = useAccount()
   const id = useId()
@@ -191,8 +194,11 @@ export default function AccountSection({
   const fieldProblem = problem === 'Incorrect password'
 
   return (
-    <div className="field account-section" role="group" aria-labelledby={`${id}-title`}>
-      <h2 id={`${id}-title`}>Account</h2>
+    <div
+      className="field account-section"
+      {...(embedded ? {} : { role: 'group', 'aria-labelledby': `${id}-title` })}
+    >
+      {!embedded && <h2 id={`${id}-title`}>Account</h2>}
       <div className="field-row">
         <button type="button" onClick={() => void runExport()} disabled={exporting || open}>
           Export my data

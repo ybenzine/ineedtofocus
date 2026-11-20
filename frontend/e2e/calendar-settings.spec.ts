@@ -7,6 +7,7 @@ import {
   newEmail,
   openHistoryFromSummary,
   openScreen,
+  openSection,
   signUp,
 } from './helpers'
 
@@ -32,6 +33,8 @@ test('create a link, fetch it, see the session, reset it and the old link stops 
   await page.getByRole('button', { name: 'New session' }).click()
 
   await openScreen(page, 'Settings')
+
+  await openSection(page, 'Calendar')
   const section = page.getByRole('region', { name: 'Calendar' })
   await expect(section.getByRole('button', { name: 'Create link' })).toBeVisible()
   await expectNoSeriousViolations(page)
@@ -70,6 +73,7 @@ test('create a link, fetch it, see the session, reset it and the old link stops 
   // Later visits say it's subscribed and never show the link again.
   await page.reload()
   await openScreen(page, 'Settings')
+  await openSection(page, 'Calendar')
   await expect(page.getByText(/Subscribed · last checked by your calendar app/)).toBeVisible()
   await expect(page.getByLabel('Subscription link')).toHaveCount(0)
 
@@ -97,6 +101,7 @@ test('the settings shape the feed, and the History download follows the view', a
   await finishCountdown(page, { minutes: 1, tag: 'study', goal: 'Read chapter one' })
   await page.getByRole('button', { name: 'New session' }).click()
   await openScreen(page, 'Settings')
+  await openSection(page, 'Calendar')
   const section = page.getByRole('region', { name: 'Calendar' })
 
   await section.getByLabel('Event title').fill('{mode} · {tag}')
@@ -143,6 +148,7 @@ test.describe('at 360 px', () => {
     await expect(page.getByRole('button', { name: 'Add to calendar (.ics)' })).toBeVisible()
     await expectNoSidewaysScroll(page)
     await openScreen(page, 'Settings')
+    await openSection(page, 'Calendar')
     await page.getByLabel('Event title').fill('{tag}: {goal} · {mode} · {focus_time}'.repeat(3))
     await page.getByRole('button', { name: 'Create link' }).click()
     await expect(page.getByLabel('Subscription link')).toBeVisible()
@@ -158,13 +164,14 @@ test('without an account Settings → Calendar is only the nudge', async ({ page
     .getByRole('navigation', { name: 'Screens' })
     .getByRole('button', { name: 'Settings' })
     .click()
+  await openSection(page, 'Calendar')
   const section = page.getByRole('region', { name: 'Calendar' })
   await expect(
     section.getByText('Create an account or log in to add your sessions to your calendar.'),
   ).toBeVisible()
   await expect(section.getByRole('link', { name: 'Create an account' })).toBeVisible()
   await expect(section.getByRole('link', { name: 'log in' })).toBeVisible()
-  await expect(section.getByRole('button')).toHaveCount(0)
+  await expect(section.locator('.calendar-section').getByRole('button')).toHaveCount(0)
   await expect(section.getByRole('textbox')).toHaveCount(0)
   const stored = await page.evaluate(() => JSON.stringify({ ...localStorage }))
   expect(stored).not.toContain('calendar_')
