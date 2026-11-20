@@ -24,7 +24,7 @@ function renderScreen(store = new SettingsStore()) {
 describe('SettingsScreen appearance (theme)', () => {
   it('offers System (default), Dark and Light, with System selected for a new user', () => {
     renderScreen()
-    const group = screen.getByRole('group', { name: 'Appearance' })
+    const group = screen.getByRole('group', { name: 'Theme' })
     const radios = within(group).getAllByRole('radio')
     expect(radios.map((r) => r.parentElement?.textContent)).toEqual([
       'System (default)',

@@ -5,6 +5,7 @@ import {
   newEmail,
   openAccountMenu,
   openScreen,
+  openSection,
   PASSWORD,
   resetTokenFor,
   signUp,
@@ -98,8 +99,9 @@ test('from the delete-account confirmation, the reset ends this device’s sign-
   await page.setViewportSize({ width: 360, height: 740 })
   await signUp(page, email)
   await openScreen(page, 'Settings')
+  await openSection(page, 'Account')
   await page
-    .getByRole('group', { name: 'Account' })
+    .getByRole('region', { name: 'Account' })
     .getByRole('button', { name: 'Delete account' })
     .click()
   const dialog = page.getByRole('dialog', { name: 'Confirm delete account' })

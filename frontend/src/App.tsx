@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { AlertPlayer } from './sounds/alerts.ts'
 import AudioControls from './sounds/AudioControls.tsx'
 import {
@@ -393,10 +393,13 @@ function AppBody({
   // effect above (waited for only when the setup screen opens).
   useEffect(() => settings.start(), [settings])
 
+  const [openTags, setOpenTags] = useState(false)
+
   // The back and forward buttons move between the screens that have URLs (`/history`, `/archive`, `/settings`). They
   // never take over a running timer or a summary.
   useEffect(() => {
     function onPopState() {
+      setOpenTags(false)
       const screen = screenFromPath(window.location.pathname)
       setView((current) =>
         current.name === 'setup' ||
@@ -411,19 +414,15 @@ function AppBody({
     return () => window.removeEventListener('popstate', onPopState)
   }, [])
 
-  // "Manage tags" in the Tag & goal sheet opens Settings at the Tags section (AC7.10).
-  const scrollToTags = useRef(false)
-  useEffect(() => {
-    if (!scrollToTags.current || view.name !== 'settings') return
-    scrollToTags.current = false
-    document.querySelector('.tags-section')?.scrollIntoView?.()
-  }, [view.name])
+  // "Manage tags" in the Tag & goal sheet opens Settings with Tags open and in view (AC7.10).
+  // Any other way into Settings (nav, back, forward) opens it in its default state.
   function manageTags() {
-    scrollToTags.current = true
     goTo('settings')
+    setOpenTags(true)
   }
 
   function goTo(screen: ScreenId) {
+    setOpenTags(false)
     const path = pathForScreen(screen)
     if (window.location.pathname !== path) window.history.pushState(null, '', path)
     setView({ name: screen })
@@ -610,7 +609,12 @@ function AppBody({
   if (view.name === 'settings') {
     return (
       <AppShell current="settings" controller={timer} onNavigate={goTo} holdsUpdate={setup.changed}>
-        <SettingsScreen player={player} controller={timer} sessions={services.sessions} />
+        <SettingsScreen
+          player={player}
+          controller={timer}
+          sessions={services.sessions}
+          openTags={openTags}
+        />
       </AppShell>
     )
   }

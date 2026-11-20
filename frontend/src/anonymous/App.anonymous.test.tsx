@@ -348,7 +348,7 @@ describe('what an anonymous user can do', () => {
     expect(screen.queryByRole('link', { name: 'Manage tags' })).not.toBeInTheDocument()
     closeSheet()
     fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
-    await screen.findByRole('heading', { name: 'Tags' })
+    fireEvent.click(await screen.findByRole('button', { name: 'Tags' }))
     const tags = screen.getByRole('region', { name: 'Tags' })
     expect(tags).toHaveTextContent('Create an account or log in to add your own tags.')
     expect(within(tags).getByRole('link', { name: 'Create an account' })).toHaveAttribute(

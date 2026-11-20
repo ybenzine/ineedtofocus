@@ -58,15 +58,21 @@ export interface CalendarSectionProps {
   /** The device's sessions, for the preview's latest session; a sample is used without it. */
   sessions?: SessionStore | null
   now?: () => number
+  /** Inside a Settings section, which supplies the heading and the region. */
+  embedded?: boolean
 }
 
 export default function CalendarSection(props: CalendarSectionProps) {
+  const { embedded = false } = props
   const anonymous = useAnonymous() !== null
   const id = useId()
   if (anonymous) {
     return (
-      <div role="region" className="calendar-section" aria-labelledby={`${id}-title`}>
-        <h2 id={`${id}-title`}>Calendar</h2>
+      <div
+        className="calendar-section"
+        {...(embedded ? {} : { role: 'region', 'aria-labelledby': `${id}-title` })}
+      >
+        {!embedded && <h2 id={`${id}-title`}>Calendar</h2>}
         <p className="field-hint">
           <AuthLink form="signup" origin="screen">
             Create an account
@@ -87,6 +93,7 @@ function AccountCalendar({
   api = defaultApi,
   sessions = null,
   now = Date.now,
+  embedded = false,
 }: CalendarSectionProps) {
   const store = useSettingsStore()
   const { values } = useSettingsState()
@@ -182,8 +189,11 @@ function AccountCalendar({
   }
 
   return (
-    <div role="region" className="calendar-section" aria-labelledby={`${id}-title`}>
-      <h2 id={`${id}-title`}>Calendar</h2>
+    <div
+      className="calendar-section"
+      {...(embedded ? {} : { role: 'region', 'aria-labelledby': `${id}-title` })}
+    >
+      {!embedded && <h2 id={`${id}-title`}>Calendar</h2>}
 
       <div className="field">
         <label htmlFor={`${id}-template`}>Event title</label>
